@@ -1,4 +1,4 @@
-secret-sniffer
+/secret-sniffer
 *.jsonl
 *.findings.jsonl
 findings*.json

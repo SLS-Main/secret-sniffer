@@ -61,6 +61,20 @@ func WriteJSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
+func WriteFindingJSONL(w io.Writer, finding detectors.Finding, includeSecrets bool) error {
+	findings := prepareFindings([]detectors.Finding{finding}, includeSecrets)
+	return json.NewEncoder(w).Encode(findings[0])
+}
+
+func WriteFindingHuman(w io.Writer, finding detectors.Finding) error {
+	verified := ""
+	if finding.Verified {
+		verified = " verified"
+	}
+	_, err := fmt.Fprintf(w, "%s:%d:%d %s %s %s%s\n", finding.File, finding.Line, finding.Column, finding.Severity, finding.Name, finding.Secret, verified)
+	return err
+}
+
 func prepareFindings(findings []detectors.Finding, includeSecrets bool) []detectors.Finding {
 	if includeSecrets {
 		return findings

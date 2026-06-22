@@ -66,6 +66,8 @@ GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-histor
 --git-history         Scan every reachable git blob in addition to the worktree.
 --verify              Attempt live provider verification for supported detectors.
 --format              Output format: human, json, jsonl, sarif.
+--output              Stream findings to this JSONL file as they are discovered.
+--output-flush-findings  Fsync streamed output after this many findings. Default: 25.
 --include             Comma-separated glob patterns to include.
 --exclude             Comma-separated glob patterns to exclude.
 --custom-detectors    Path to custom detector JSON.
@@ -90,6 +92,20 @@ GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-histor
 ## Output Formats
 
 Progress logs are written to stderr by default. Findings are written to stdout, so redirects such as `> findings.jsonl` still produce clean JSONL output while the console shows what the scanner is doing. Use `--quiet` to suppress progress logs.
+
+Findings are also printed to stderr as they are discovered. For long scans, use `--output` so findings are streamed to disk incrementally instead of waiting for the full scan to finish:
+
+```bash
+./secret-sniffer \
+  --github-accessible \
+  --git-history \
+  --workers 32 \
+  --output findings.jsonl \
+  --output-flush-findings 25 \
+  --format jsonl
+```
+
+When `--output` is used with `--format jsonl`, findings are streamed to the output file and stdout receives only the final completion line. This prevents large multi-repository scans from retaining every finding in memory just to render final output.
 
 Human output:
 
