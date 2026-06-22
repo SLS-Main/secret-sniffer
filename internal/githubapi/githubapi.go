@@ -44,6 +44,11 @@ type Installation struct {
 	} `json:"account"`
 }
 
+type InstallationToken struct {
+	Token     string
+	ExpiresAt time.Time
+}
+
 func New(token string) *Client {
 	return &Client{baseURL: "https://api.github.com", token: token, http: &http.Client{Timeout: 30 * time.Second}}
 }
@@ -72,7 +77,7 @@ func NewGitHubAppClient(ctx context.Context, appID, privateKeyPath string, insta
 	if err != nil {
 		return nil, err
 	}
-	return New(token), nil
+	return New(token.Token), nil
 }
 
 func NewGitHubAppInstallationClients(ctx context.Context, appID, privateKeyPath string) ([]*Client, error) {
@@ -91,7 +96,7 @@ func NewGitHubAppInstallationClients(ctx context.Context, appID, privateKeyPath 
 		if err != nil {
 			return nil, fmt.Errorf("mint installation token for %s/%d: %w", installation.Account.Login, installation.ID, err)
 		}
-		out = append(out, New(token))
+		out = append(out, New(token.Token))
 	}
 	return out, nil
 }
@@ -111,33 +116,42 @@ func (c *Client) Installations(ctx context.Context) ([]Installation, error) {
 	return installations, nil
 }
 
-func (c *Client) InstallationToken(ctx context.Context, installationID int64) (string, error) {
+func (c *Client) InstallationToken(ctx context.Context, installationID int64) (InstallationToken, error) {
 	endpoint := c.baseURL + fmt.Sprintf("/app/installations/%d/access_tokens", installationID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
-		return "", err
+		return InstallationToken{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return InstallationToken{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "", fmt.Errorf("github api %s returned %s", endpoint, resp.Status)
+		return InstallationToken{}, fmt.Errorf("github api %s returned %s", endpoint, resp.Status)
 	}
 	var body struct {
-		Token string `json:"token"`
+		Token     string    `json:"token"`
+		ExpiresAt time.Time `json:"expires_at"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", err
+		return InstallationToken{}, err
 	}
 	if body.Token == "" {
-		return "", errors.New("github returned empty installation token")
+		return InstallationToken{}, errors.New("github returned empty installation token")
 	}
-	return body.Token, nil
+	return InstallationToken{Token: body.Token, ExpiresAt: body.ExpiresAt}, nil
+}
+
+func NewGitHubAppJWTClient(appID, privateKeyPath string) (*Client, error) {
+	jwt, err := CreateAppJWT(appID, privateKeyPath, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	return New(jwt), nil
 }
 
 func CreateAppJWT(appID, privateKeyPath string, now time.Time) (string, error) {

@@ -207,7 +207,7 @@ export GITHUB_TOKEN='ghs_or_installation_token_here'
 
 The scanner mints GitHub App JWTs and installation tokens internally when app credentials are provided. It uses the resulting token for GitHub API enumeration and injects it into private clone URLs internally. You do not need to modify global git config.
 
-For long-running scans, GitHub App installation tokens are refreshed before each repository scan so clone operations do not fail because an earlier token expired.
+For long-running scans, GitHub App installation tokens are cached and reused. The scanner refreshes an installation token only when it is missing an expiration time or is within 10 minutes of expiring.
 
 If you prefer git-level authentication, you can still configure git yourself:
 
