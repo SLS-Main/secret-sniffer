@@ -1,0 +1,12 @@
+{
+  "detectors": [
+    {
+      "id": "internal-api-key",
+      "name": "Internal API Key",
+      "severity": "high",
+      "keywords": ["internal_api_key", "x-internal-key"],
+      "regex": "(?i)(internal_api_key|x-internal-key)\\s*[:=]\\s*['\\\"]?([a-z0-9]{32,64})",
+      "secret_group": 2
+    }
+  ]
+}

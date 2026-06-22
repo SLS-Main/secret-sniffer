@@ -1,0 +1,6 @@
+secret-sniffer
+*.jsonl
+*.findings.jsonl
+findings*.json
+*.sarif
+.secret-sniffer-baseline.json
