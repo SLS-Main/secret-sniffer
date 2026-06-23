@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"secret-sniffer/internal/baseline"
@@ -27,6 +28,7 @@ func main() {
 	var format string
 	var outputPath string
 	var outputFlushFindings int
+	var repoConcurrency int
 	var include string
 	var exclude string
 	var baselinePath string
@@ -57,6 +59,7 @@ func main() {
 	flag.StringVar(&format, "format", "human", "output format: human, json, jsonl, sarif")
 	flag.StringVar(&outputPath, "output", "", "stream findings to this JSONL file as they are discovered")
 	flag.IntVar(&outputFlushFindings, "output-flush-findings", 25, "fsync streamed output after this many findings")
+	flag.IntVar(&repoConcurrency, "repo-concurrency", 1, "number of repositories to scan concurrently for GitHub org/enterprise/access scans")
 	flag.StringVar(&customPath, "custom-detectors", "", "path to custom detector JSON")
 	flag.StringVar(&baselinePath, "baseline", "", "path to baseline JSON of accepted fingerprints")
 	flag.StringVar(&writeBaselinePath, "write-baseline", "", "write finding fingerprints to baseline JSON")
@@ -106,6 +109,9 @@ func main() {
 	if cfg.Workers < 1 {
 		cfg.Workers = 1
 	}
+	if repoConcurrency < 1 {
+		repoConcurrency = 1
+	}
 	cfg.Include = splitCSV(include)
 	cfg.Exclude = splitCSV(exclude)
 	runtime.GOMAXPROCS(cfg.Workers)
@@ -119,21 +125,29 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	targets, tokenByTarget, tokenExpiryByTarget, installationByTarget, summary, err := scanTargets(ctx, cfg.Target, githubOrgs, githubEnterprise, githubAccessible, githubClients, quiet)
+	targets, tokenByTarget, _, installationByTarget, summary, err := scanTargets(ctx, cfg.Target, githubOrgs, githubEnterprise, githubAccessible, githubClients, quiet)
 	if err != nil {
 		fatal(err)
 	}
 	printDiscoverySummary(quiet, summary)
-	logf(quiet, "secret-sniffer: scanning %d target(s) with %d worker(s) per target", len(targets), cfg.Workers)
+	logf(quiet, "secret-sniffer: scanning %d target(s) with %d worker(s) per target and repo_concurrency=%d", len(targets), cfg.Workers, repoConcurrency)
 	includeSecrets := noRedact && !redact
+	format = strings.ToLower(format)
+	if outputPath == "" {
+		outputPath = defaultOutputPath(format)
+	}
 	var outputFile *os.File
 	if outputPath != "" {
-		outputFile, err = os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		outputFile, err = os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			fatal(err)
 		}
 		defer outputFile.Close()
-		logf(quiet, "secret-sniffer: streaming findings to %s", outputPath)
+		if format == "jsonl" {
+			logf(quiet, "secret-sniffer: streaming findings to %s", outputPath)
+		} else {
+			logf(quiet, "secret-sniffer: writing %s output to %s", format, outputPath)
+		}
 	}
 	var knownBaseline map[string]struct{}
 	if baselinePath != "" {
@@ -143,64 +157,99 @@ func main() {
 			fatal(err)
 		}
 	}
+	tokenCache := map[int64]githubapi.InstallationToken{}
+	for _, gc := range githubClients {
+		if gc.installationID > 0 {
+			tokenCache[gc.installationID] = githubapi.InstallationToken{Token: gc.token, ExpiresAt: gc.tokenExpiresAt}
+		}
+	}
 	var findings []detectors.Finding
 	totalBeforeBaseline := 0
 	totalAfterBaseline := 0
 	streamedSinceSync := 0
-	for i, target := range targets {
-		logf(quiet, "secret-sniffer: [%d/%d] scanning %s", i+1, len(targets), target)
-		targetCfg := cfg
-		targetCfg.Target = target
-		targetCfg.GitHubToken = tokenByTarget[target]
-		if installationID := installationByTarget[target]; installationID > 0 && githubAppID != "" && githubAppPrivateKey != "" && shouldRefreshToken(tokenExpiryByTarget[target], time.Now()) {
-			refreshed, err := refreshInstallationToken(ctx, githubAppID, githubAppPrivateKey, installationID)
-			if err != nil {
-				fatal(fmt.Errorf("refresh github installation token for %s: %w", target, err))
-			}
-			targetCfg.GitHubToken = refreshed.Token
-			tokenByTarget[target] = refreshed.Token
-			tokenExpiryByTarget[target] = refreshed.ExpiresAt
-			logf(quiet, "secret-sniffer: [%d/%d] refreshed GitHub App installation token, expires=%s", i+1, len(targets), refreshed.ExpiresAt.Format(time.RFC3339))
-		}
-		runner := scanner.New(targetCfg, registry)
-		targetFindings, err := runner.Scan(ctx)
-		if err != nil {
-			fatal(err)
-		}
-		totalBeforeBaseline += len(targetFindings)
-		if knownBaseline != nil {
-			targetFindings = baseline.Filter(targetFindings, knownBaseline)
-		}
-		totalAfterBaseline += len(targetFindings)
-		logf(quiet, "secret-sniffer: [%d/%d] finished %s, findings=%d", i+1, len(targets), target, len(targetFindings))
-		summary.addScanResult(target, len(targetFindings))
-		for _, finding := range targetFindings {
-			if err := output.WriteFindingHuman(os.Stderr, finding); err != nil {
-				fatal(err)
-			}
-			if outputFile != nil {
-				if err := output.WriteFindingJSONL(outputFile, finding, includeSecrets); err != nil {
+	var mu sync.Mutex
+	var tokenMu sync.Mutex
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for worker := 0; worker < repoConcurrency; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				target := targets[i]
+				logf(quiet, "secret-sniffer: [%d/%d] scanning %s", i+1, len(targets), target)
+				targetCfg := cfg
+				targetCfg.Target = target
+				targetCfg.GitHubToken = tokenByTarget[target]
+				if installationID := installationByTarget[target]; installationID > 0 && githubAppID != "" && githubAppPrivateKey != "" {
+					token, refreshed, err := cachedInstallationToken(ctx, githubAppID, githubAppPrivateKey, installationID, tokenCache, &tokenMu)
+					if err != nil {
+						fatal(fmt.Errorf("get github installation token for %s: %w", target, err))
+					}
+					targetCfg.GitHubToken = token.Token
+					if refreshed {
+						logf(quiet, "secret-sniffer: [%d/%d] refreshed GitHub App installation token, expires=%s", i+1, len(targets), token.ExpiresAt.Format(time.RFC3339))
+					}
+				}
+				runner := scanner.New(targetCfg, registry)
+				targetFindings, err := runner.Scan(ctx)
+				if err != nil {
 					fatal(err)
 				}
-				streamedSinceSync++
-				if outputFlushFindings < 1 || streamedSinceSync >= outputFlushFindings {
+				mu.Lock()
+				totalBeforeBaseline += len(targetFindings)
+				mu.Unlock()
+				if knownBaseline != nil {
+					targetFindings = baseline.Filter(targetFindings, knownBaseline)
+				}
+				mu.Lock()
+				totalAfterBaseline += len(targetFindings)
+				mu.Unlock()
+				logf(quiet, "secret-sniffer: [%d/%d] finished %s, findings=%d", i+1, len(targets), target, len(targetFindings))
+				mu.Lock()
+				summary.addScanResult(target, len(targetFindings))
+				mu.Unlock()
+				for _, finding := range targetFindings {
+					if err := output.WriteFindingHuman(os.Stderr, finding); err != nil {
+						fatal(err)
+					}
+					if outputFile != nil && format == "jsonl" {
+						mu.Lock()
+						if err := output.WriteFindingJSONL(outputFile, finding, includeSecrets); err != nil {
+							mu.Unlock()
+							fatal(err)
+						}
+						streamedSinceSync++
+						if outputFlushFindings < 1 || streamedSinceSync >= outputFlushFindings {
+							if err := outputFile.Sync(); err != nil {
+								mu.Unlock()
+								fatal(err)
+							}
+							streamedSinceSync = 0
+						}
+						mu.Unlock()
+					}
+				}
+				mu.Lock()
+				if outputFile != nil && format == "jsonl" && streamedSinceSync > 0 {
 					if err := outputFile.Sync(); err != nil {
+						mu.Unlock()
 						fatal(err)
 					}
 					streamedSinceSync = 0
 				}
+				if outputFile == nil || format != "jsonl" || writeBaselinePath != "" {
+					findings = append(findings, targetFindings...)
+				}
+				mu.Unlock()
 			}
-		}
-		if outputFile != nil && streamedSinceSync > 0 {
-			if err := outputFile.Sync(); err != nil {
-				fatal(err)
-			}
-			streamedSinceSync = 0
-		}
-		if outputFile == nil || strings.ToLower(format) != "jsonl" || writeBaselinePath != "" {
-			findings = append(findings, targetFindings...)
-		}
+		}()
 	}
+	for i := range targets {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
 	if writeBaselinePath != "" {
 		if err := baseline.Write(writeBaselinePath, findings); err != nil {
 			fatal(err)
@@ -217,12 +266,20 @@ func main() {
 	}
 
 	meta := output.Meta{Target: strings.Join(targets, ","), StartedAt: start, Duration: time.Since(start), Findings: totalAfterBaseline}
-	if outputFile == nil || strings.ToLower(format) != "jsonl" {
-		if err := output.Write(os.Stdout, strings.ToLower(format), findings, meta, includeSecrets); err != nil {
+	if outputFile == nil {
+		if err := output.Write(os.Stdout, format, findings, meta, includeSecrets); err != nil {
 			fatal(err)
 		}
+	} else if format != "jsonl" {
+		if err := output.Write(outputFile, format, findings, meta, includeSecrets); err != nil {
+			fatal(err)
+		}
+		if err := outputFile.Sync(); err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stdout, "scan complete: %d findings in %s, output=%s\n", summary.FindingsAfterBaseline, time.Since(start).Round(time.Millisecond), outputPath)
 	} else {
-		fmt.Fprintf(os.Stdout, "scan complete: %d findings in %s\n", summary.FindingsAfterBaseline, time.Since(start).Round(time.Millisecond))
+		fmt.Fprintf(os.Stdout, "scan complete: %d findings in %s, output=%s\n", summary.FindingsAfterBaseline, time.Since(start).Round(time.Millisecond), outputPath)
 	}
 	logf(quiet, "secret-sniffer: complete, findings=%d, duration=%s", totalAfterBaseline, time.Since(start).Round(time.Millisecond))
 	if failOnFindings && totalAfterBaseline > 0 {
@@ -372,6 +429,19 @@ func logf(quiet bool, format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 }
 
+func defaultOutputPath(format string) string {
+	switch format {
+	case "json":
+		return "secret-sniffer-findings.json"
+	case "jsonl":
+		return "secret-sniffer-findings.jsonl"
+	case "sarif":
+		return "secret-sniffer-findings.sarif"
+	default:
+		return ""
+	}
+}
+
 func addRepos(targets *[]string, tokens map[string]string, expires map[string]time.Time, installations map[string]int64, repos []githubapi.Repository, gc githubClient) {
 	for _, repo := range repos {
 		if repo.CloneURL != "" {
@@ -389,6 +459,20 @@ func refreshInstallationToken(ctx context.Context, appID, privateKeyPath string,
 		return githubapi.InstallationToken{}, err
 	}
 	return appClient.InstallationToken(ctx, installationID)
+}
+
+func cachedInstallationToken(ctx context.Context, appID, privateKeyPath string, installationID int64, cache map[int64]githubapi.InstallationToken, mu *sync.Mutex) (githubapi.InstallationToken, bool, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	if token, ok := cache[installationID]; ok && !shouldRefreshToken(token.ExpiresAt, time.Now()) {
+		return token, false, nil
+	}
+	token, err := refreshInstallationToken(ctx, appID, privateKeyPath, installationID)
+	if err != nil {
+		return githubapi.InstallationToken{}, false, err
+	}
+	cache[installationID] = token
+	return token, true, nil
 }
 
 func shouldRefreshToken(expiresAt, now time.Time) bool {

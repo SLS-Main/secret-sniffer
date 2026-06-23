@@ -2,5 +2,6 @@
 *.jsonl
 *.findings.jsonl
 findings*.json
+secret-sniffer-findings.json
 *.sarif
 .secret-sniffer-baseline.json

@@ -66,8 +66,9 @@ GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-histor
 --git-history         Scan every reachable git blob in addition to the worktree.
 --verify              Attempt live provider verification for supported detectors.
 --format              Output format: human, json, jsonl, sarif.
---output              Stream findings to this JSONL file as they are discovered.
+--output              Write findings to this file. JSONL streams during scanning.
 --output-flush-findings  Fsync streamed output after this many findings. Default: 25.
+--repo-concurrency    Number of repositories to scan concurrently for GitHub org/enterprise/access scans.
 --include             Comma-separated glob patterns to include.
 --exclude             Comma-separated glob patterns to exclude.
 --custom-detectors    Path to custom detector JSON.
@@ -91,7 +92,13 @@ GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-histor
 
 ## Output Formats
 
-Progress logs are written to stderr by default. Findings are written to stdout, so redirects such as `> findings.jsonl` still produce clean JSONL output while the console shows what the scanner is doing. Use `--quiet` to suppress progress logs.
+Progress logs are written to stderr by default. Human output prints to stdout. Machine-readable formats write to files automatically when `--output` is not provided:
+
+- `--format json` writes `secret-sniffer-findings.json`.
+- `--format jsonl` writes `secret-sniffer-findings.jsonl`.
+- `--format sarif` writes `secret-sniffer-findings.sarif`.
+
+Use `--output` to choose a different path. Use `--quiet` to suppress progress logs.
 
 Findings are also printed to stderr as they are discovered. For long scans, use `--output` so findings are streamed to disk incrementally instead of waiting for the full scan to finish:
 
@@ -105,7 +112,7 @@ Findings are also printed to stderr as they are discovered. For long scans, use 
   --format jsonl
 ```
 
-When `--output` is used with `--format jsonl`, findings are streamed to the output file and stdout receives only the final completion line. This prevents large multi-repository scans from retaining every finding in memory just to render final output.
+When `--format jsonl` is used, findings are streamed to the output file and stdout receives only the final completion line. This prevents large multi-repository scans from retaining every finding in memory just to render final output.
 
 Human output:
 
@@ -187,8 +194,9 @@ Preferred GitHub App usage:
   --github-accessible \
   --git-history \
   --workers 32 \
+  --repo-concurrency 4 \
   --format jsonl \
-  > accessible.findings.jsonl
+  --output accessible.findings.jsonl
 ```
 
 If the app has multiple installations and you want one specific installation:
@@ -269,8 +277,9 @@ For a GitHub App installation token, this uses `/installation/repositories`. For
   --github-accessible \
   --git-history \
   --workers 32 \
+  --repo-concurrency 4 \
   --format jsonl \
-  > accessible.findings.jsonl
+  --output accessible.findings.jsonl
 ```
 
 ### Scan An Enterprise
@@ -346,21 +355,26 @@ while read -r repo; do
 done < repos.txt
 ```
 
-### External Parallel Org Scans
+### Parallel Organization And Enterprise Scans
 
-Native org and enterprise modes scan repositories sequentially inside one process, with each repo scan using `--workers`. For very large estates, you can still run several scanner processes with moderate worker counts. Example for a 48-core machine:
+Use `--repo-concurrency` to scan multiple repositories at the same time inside one process. Each repository gets `--workers` scanner workers, so choose both values together based on CPU and memory.
+
+Example for a 48-core machine:
 
 ```bash
-mkdir -p results
-
-cat repos.txt | xargs -n 1 -P 4 -I {} sh -c '
-  repo="$1"
-  name=$(printf "%s" "$repo" | sed "s#https://github.com/##; s#/#_#g")
-  ./secret-sniffer --target "$repo" --git-history --workers 12 --format jsonl > "results/${name}.jsonl"
-' sh {}
+./secret-sniffer \
+  --github-app-id 123456 \
+  --github-app-private-key /secure/path/app-private-key.pem \
+  --github-accessible \
+  --git-history \
+  --repo-concurrency 4 \
+  --workers 12 \
+  --format jsonl \
+  --output findings.jsonl \
+  --summary-output github-summary.json
 ```
 
-This runs 4 repositories at a time with 12 workers each.
+This runs 4 repositories at a time with 12 workers per repository.
 
 ## Discovery Summary
 
