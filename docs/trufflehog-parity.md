@@ -12,9 +12,9 @@ Current tracked mapping summary:
 - Total mappings: `238`
 - Direct catalog mappings: `233`
 - Sub-detector mappings: `5`
-- Implemented mappings: `36`
-- Partial mappings: `8`
-- Planned mappings: `194`
+- Implemented mappings: `67`
+- Partial mappings: `9`
+- Planned mappings: `162`
 - Untracked catalog directories: `637`
 
 This project is not trying to copy TruffleHog's discovery algorithm. Parity means comparable source coverage, provider detector coverage, verification coverage, output usability, and operational behavior on large servers.
@@ -47,10 +47,15 @@ Current built-in detector families:
 - Discord and Telegram tokens
 - npm, PyPI, Docker Hub
 - Datadog, New Relic, PagerDuty
-- Heroku, Cloudflare, DigitalOcean
+- Heroku, Cloudflare, DigitalOcean, Azure DevOps, Terraform Cloud, Netlify, Pulumi, Doppler, Tailscale, ngrok
+- Buildkite, NuGet, RubyGems
 - Linear, Notion, Postman, Supabase, Firebase
 - MongoDB, PostgreSQL, MySQL connection URIs
-- Shopify, Square, PayPal
+- Shopify, Square, PayPal, Razorpay key IDs
+- Slack, Discord, and Microsoft Teams webhooks
+- Grafana, Sentry, Honeycomb, Opsgenie, Splunk Observability, Webex bot tokens
+- Hugging Face, Groq, Replicate
+- Airtable, Asana, ClickUp, Typeform, HubSpot, Mailchimp, Klaviyo
 - JWTs, private keys, SSH private keys
 - Basic-auth URLs and generic assigned secrets
 
