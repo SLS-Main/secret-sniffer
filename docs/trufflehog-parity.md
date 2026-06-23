@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `279`
-- Direct catalog mappings: `274`
+- Total mappings: `284`
+- Direct catalog mappings: `279`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `166`
+- Implemented mappings: `183`
 - Partial mappings: `18`
-- Planned mappings: `95`
-- Untracked catalog directories: `596`
+- Planned mappings: `83`
+- Untracked catalog directories: `591`
 
 Accounting notes:
 
@@ -86,6 +86,10 @@ Current built-in detector families:
 - Flutterwave, Pagar.me, Recharge Payments, Lemon Squeezy, Plaid partial coverage
 - Cloudinary URLs, Zendesk, Freshdesk, HelpCrunch, Courier, LINE Messaging, Mattermost
 - HashiCorp Vault AppRole partial coverage
+- Cloudflare global keys, Docker auth configs, Azure Search, Azure API Management
+- Auth0 management tokens, VirusTotal, Shodan, SecurityTrails
+- Snowflake URLs, SQL Server connection strings, RabbitMQ URIs
+- NewsAPI, OpenWeather, Tomorrow.io, HERE, Polygon.io
 - JWTs, private keys, SSH private keys
 - Basic-auth URLs and generic assigned secrets
 

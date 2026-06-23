@@ -174,6 +174,22 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"courier-api-key", "COURIER_AUTH_TOKEN=pk_live_" + strings.Repeat("A", 28), "pk_live_" + strings.Repeat("A", 28)},
 		{"hashicorp-vault-approle", "vault role_id=11111111-2222-3333-4444-555555555555 secret_id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
 		{"mattermost-personal-token", "mattermost token abc123def456ghi789jkl012mn team.cloud.mattermost.com", "abc123def456ghi789jkl012mn"},
+		{"cloudflare-global-api-key", "cloudflare global_api_key=0123456789abcdef0123456789abcdef01234", "0123456789abcdef0123456789abcdef01234"},
+		{"docker-auth-config", `{"auths":{"ghcr.io":{"auth":"dXNlcjpwYXQxMjM0NTY3ODkw"}}}`, `"auths":{"ghcr.io":{"auth":"dXNlcjpwYXQxMjM0NTY3ODkw"`},
+		{"azure-search-key", "https://acme.search.windows.net api-key: " + strings.Repeat("A", 52), strings.Repeat("A", 52)},
+		{"azure-apim-subscription-key", "Ocp-Apim-Subscription-Key: 0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"},
+		{"auth0-domain-jwt", "tenant.auth0.com token=eyJ" + strings.Repeat("A", 24) + ".eyJ" + strings.Repeat("B", 24) + "." + strings.Repeat("C", 24), "eyJ" + strings.Repeat("A", 24) + ".eyJ" + strings.Repeat("B", 24) + "." + strings.Repeat("C", 24)},
+		{"virustotal-api-key", "virustotal_api_key=" + strings.Repeat("a", 64), strings.Repeat("a", 64)},
+		{"shodan-api-key", "SHODAN_API_KEY=" + strings.Repeat("A", 32), strings.Repeat("A", 32)},
+		{"securitytrails-api-key", "securitytrails_key=" + strings.Repeat("A", 32), strings.Repeat("A", 32)},
+		{"snowflake-url", "snowflake://svc:Sup3rSecret@xy12345.us-east-1/db", "snowflake://svc:Sup3rSecret@xy12345.us-east-1/db"},
+		{"sqlserver-connection-string", "Server=tcp:x.database.windows.net;User ID=app;Password=P@ssw0rd123;", "Server=tcp:x.database.windows.net;User ID=app;Password=P@ssw0rd123;"},
+		{"rabbitmq-uri", "amqps://user:VerySecret123@mq.example/vhost", "amqps://user:VerySecret123@mq.example/vhost"},
+		{"newsapi-key", "newsapi_key=0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"},
+		{"openweather-api-key", "openweather APPID=0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"},
+		{"tomorrowio-api-key", "tomorrow.io apikey=AbCdEfGhIjKlMnOpQrStUvWxYz123456", "AbCdEfGhIjKlMnOpQrStUvWxYz123456"},
+		{"here-api-key", "platform.here.com apiKey " + strings.Repeat("A", 43), strings.Repeat("A", 43)},
+		{"polygon-api-key", "POLYGON_API_KEY=" + strings.Repeat("A", 32), strings.Repeat("A", 32)},
 	}
 
 	for _, tc := range cases {
