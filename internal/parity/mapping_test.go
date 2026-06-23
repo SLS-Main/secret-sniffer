@@ -23,8 +23,14 @@ func TestCurrentReportCountsMappings(t *testing.T) {
 	if r.CatalogTracked+r.Untracked != r.CatalogSize {
 		t.Fatalf("catalog accounting mismatch: %#v", r)
 	}
-	if r.CatalogTracked+r.SubDetectorTracked != r.TotalTracked {
+	if r.CatalogTracked+r.SubDetectorTracked+r.DuplicateMappings != r.TotalTracked {
 		t.Fatalf("tracked accounting mismatch: %#v", r)
+	}
+	if r.SubDetectorTracked != len(r.SubDetectorTruffleHogIDs) {
+		t.Fatalf("sub-detector count mismatch: %#v", r)
+	}
+	if r.DuplicateMappings != len(r.DuplicateTruffleHogIDs) {
+		t.Fatalf("duplicate count mismatch: %#v", r)
 	}
 }
 

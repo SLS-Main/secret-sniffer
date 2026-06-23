@@ -508,7 +508,7 @@ The parity report includes:
 - TruffleHog snapshot commit.
 - Full TruffleHog detector catalog size.
 - Current tracked mappings.
-- Implemented, partial, planned, and untracked counts.
+- Implemented, partial, planned, duplicate, sub-detector, and untracked counts.
 - Untracked TruffleHog detector IDs.
 
 Detailed parity notes live in `docs/trufflehog-parity.md`.

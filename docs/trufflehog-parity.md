@@ -9,13 +9,21 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `238`
-- Direct catalog mappings: `233`
-- Sub-detector mappings: `5`
-- Implemented mappings: `67`
-- Partial mappings: `9`
-- Planned mappings: `162`
-- Untracked catalog directories: `637`
+- Total mappings: `242`
+- Direct catalog mappings: `237`
+- Sub-detector mappings: `4`
+- Duplicate catalog mappings: `1`
+- Implemented mappings: `86`
+- Partial mappings: `11`
+- Planned mappings: `145`
+- Untracked catalog directories: `633`
+
+Accounting notes:
+
+- `catalog_size` is the generated TruffleHog detector directory count from the pinned snapshot.
+- `catalog_tracked` counts unique mapped IDs that exist in that generated catalog.
+- `sub_detector_tracked` counts mapped IDs not present as top-level catalog directories, such as `github/v2`.
+- `duplicate_mappings` counts extra mapping rows for one catalog ID, such as separate `aws` access-key and secret-key coverage.
 
 This project is not trying to copy TruffleHog's discovery algorithm. Parity means comparable source coverage, provider detector coverage, verification coverage, output usability, and operational behavior on large servers.
 
@@ -56,6 +64,10 @@ Current built-in detector families:
 - Grafana, Sentry, Honeycomb, Opsgenie, Splunk Observability, Webex bot tokens
 - Hugging Face, Groq, Replicate
 - Airtable, Asana, ClickUp, Typeform, HubSpot, Mailchimp, Klaviyo
+- Nightfall, Endor Labs, TruffleHog Enterprise token shapes, Tines webhooks
+- Pinecone, LangSmith, Langfuse, ElevenLabs, xAI, Voiceflow
+- Harness, Zoho CRM, Intercom, Front, Segment, PostHog, LaunchDarkly
+- Coda, Monday.com, Postmark, Calendly
 - JWTs, private keys, SSH private keys
 - Basic-auth URLs and generic assigned secrets
 

@@ -17,17 +17,20 @@ type Mapping struct {
 }
 
 type Report struct {
-	SnapshotCommit       string    `json:"snapshot_commit"`
-	CatalogSize          int       `json:"catalog_size"`
-	TotalTracked         int       `json:"total_tracked"`
-	CatalogTracked       int       `json:"catalog_tracked"`
-	SubDetectorTracked   int       `json:"sub_detector_tracked"`
-	Implemented          int       `json:"implemented"`
-	Partial              int       `json:"partial"`
-	Planned              int       `json:"planned"`
-	Untracked            int       `json:"untracked"`
-	UntrackedTruffleHogs []string  `json:"untracked_trufflehog_ids"`
-	Mappings             []Mapping `json:"mappings"`
+	SnapshotCommit           string    `json:"snapshot_commit"`
+	CatalogSize              int       `json:"catalog_size"`
+	TotalTracked             int       `json:"total_tracked"`
+	CatalogTracked           int       `json:"catalog_tracked"`
+	SubDetectorTracked       int       `json:"sub_detector_tracked"`
+	DuplicateMappings        int       `json:"duplicate_mappings"`
+	Implemented              int       `json:"implemented"`
+	Partial                  int       `json:"partial"`
+	Planned                  int       `json:"planned"`
+	Untracked                int       `json:"untracked"`
+	UntrackedTruffleHogs     []string  `json:"untracked_trufflehog_ids"`
+	SubDetectorTruffleHogIDs []string  `json:"sub_detector_trufflehog_ids"`
+	DuplicateTruffleHogIDs   []string  `json:"duplicate_trufflehog_ids"`
+	Mappings                 []Mapping `json:"mappings"`
 }
 
 const SnapshotCommit = GeneratedSnapshotCommit
@@ -45,17 +48,40 @@ func CurrentReport() Report {
 			r.Planned++
 		}
 	}
+	r.CatalogTracked, r.SubDetectorTracked, r.DuplicateMappings, r.SubDetectorTruffleHogIDs, r.DuplicateTruffleHogIDs = mappedCatalogStats(m)
 	r.UntrackedTruffleHogs = untrackedCatalogIDs(m)
 	r.Untracked = len(r.UntrackedTruffleHogs)
-	r.CatalogTracked = r.CatalogSize - r.Untracked
-	r.SubDetectorTracked = r.TotalTracked - r.CatalogTracked
 	return r
+}
+
+func mappedCatalogStats(mappings []Mapping) (catalogTracked, subDetectorTracked, duplicateMappings int, subDetectorIDs, duplicateIDs []string) {
+	catalog := catalogSet()
+	seen := map[string]int{}
+	for _, m := range mappings {
+		seen[m.TruffleHogID]++
+	}
+	for id, count := range seen {
+		if _, ok := catalog[id]; ok {
+			catalogTracked++
+		} else {
+			subDetectorTracked++
+			subDetectorIDs = append(subDetectorIDs, id)
+		}
+		if count > 1 {
+			duplicateMappings += count - 1
+			duplicateIDs = append(duplicateIDs, id)
+		}
+	}
+	return catalogTracked, subDetectorTracked, duplicateMappings, subDetectorIDs, duplicateIDs
 }
 
 func untrackedCatalogIDs(mappings []Mapping) []string {
 	tracked := map[string]struct{}{}
+	catalog := catalogSet()
 	for _, m := range mappings {
-		tracked[m.TruffleHogID] = struct{}{}
+		if _, ok := catalog[m.TruffleHogID]; ok {
+			tracked[m.TruffleHogID] = struct{}{}
+		}
 	}
 	untracked := make([]string, 0, len(TruffleHogCatalog))
 	for _, id := range TruffleHogCatalog {
@@ -64,6 +90,14 @@ func untrackedCatalogIDs(mappings []Mapping) []string {
 		}
 	}
 	return untracked
+}
+
+func catalogSet() map[string]struct{} {
+	catalog := make(map[string]struct{}, len(TruffleHogCatalog))
+	for _, id := range TruffleHogCatalog {
+		catalog[id] = struct{}{}
+	}
+	return catalog
 }
 
 func CurrentMappings() []Mapping {
@@ -130,6 +164,7 @@ func CurrentMappings() []Mapping {
 		mapPlanned("developer-tooling", "sourcegraphcody", "Sourcegraph Cody token."),
 		mapPlanned("developer-tooling", "jiratoken", "Jira token."),
 		mapPlanned("developer-tooling", "atlassian", "Atlassian API token."),
+		mapImplemented("developer-tooling", "launchdarkly", "launchdarkly-key", "LaunchDarkly server-side API/SDK key coverage."),
 
 		mapImplemented("communication", "slack", "slack-token", "Slack token coverage."),
 		mapImplemented("communication", "discordbottoken", "discord-bot-token", "Discord bot token coverage."),
@@ -183,34 +218,34 @@ func CurrentMappings() []Mapping {
 
 		mapImplemented("marketing/crm", "hubspot_apikey", "hubspot-private-app-token", "HubSpot private app token coverage."),
 		mapImplemented("marketing/crm", "mailchimp", "mailchimp-key", "Mailchimp API key coverage."),
-		mapPlanned("customer-success", "intercom", "Intercom access token."),
+		mapImplemented("customer-success", "intercom", "intercom-access-token", "Intercom access token coverage with provider context."),
 		mapPlanned("customer-support", "zendeskapi", "Zendesk API token."),
 		mapPlanned("crm", "salesforce", "Salesforce credential."),
 		mapPlanned("marketing-automation", "customerio", "Customer.io API key."),
 		mapImplemented("email-marketing", "klaviyo", "klaviyo-key", "Klaviyo API key coverage."),
-		mapPlanned("sales-scheduling", "calendlyapikey", "Calendly API key."),
+		mapImplemented("sales-scheduling", "calendlyapikey", "calendly-api-key", "Calendly API key coverage with provider context."),
 		mapImplemented("forms/customer-data", "typeform", "typeform-token", "Typeform token coverage."),
 		mapImplemented("collaboration/customer-data", "airtablepersonalaccesstoken", "airtable-pat", "Airtable personal access token coverage."),
-		mapPlanned("collaboration/customer-data", "coda", "Coda API token."),
+		mapImplemented("collaboration/customer-data", "coda", "coda-api-token", "Coda API token coverage with provider context."),
 		mapImplemented("collaboration/customer-data", "notion", "notion-token", "Notion token coverage."),
 		mapImplemented("project-management", "asanapersonalaccesstoken", "asana-pat", "Asana personal access token coverage."),
-		mapPlanned("project-management/crm", "monday", "Monday.com API token."),
+		mapImplemented("project-management/crm", "monday", "monday-api-token", "Monday.com API token coverage with provider context."),
 		mapImplemented("project-management", "clickuppersonaltoken", "clickup-token", "ClickUp personal token coverage."),
 		mapPlanned("project-management", "trelloapikey", "Trello API key."),
 		mapPlanned("project-management", "wrike", "Wrike API token."),
 		mapPlanned("customer-support", "freshdesk", "Freshdesk API key."),
 		mapPlanned("customer-support", "helpscout", "Help Scout API key."),
-		mapPlanned("customer-support/email-saas", "front", "Front API token."),
+		mapImplemented("customer-support/email-saas", "front", "front-api-token", "Front API token coverage."),
 		mapPlanned("crm", "closecrm", "Close CRM API key."),
 		mapPlanned("crm", "pipedrive", "Pipedrive API token."),
 		mapPlanned("email-marketing", "mailerlite", "MailerLite API key."),
 		mapPlanned("email-saas", "mailjetbasicauth", "Mailjet basic auth credential."),
 		mapPlanned("email-saas", "mandrill", "Mandrill API key."),
-		mapPlanned("email-saas", "postmark", "Postmark server token."),
+		mapImplemented("email-saas", "postmark", "postmark-token", "Postmark server token coverage with provider context."),
 		mapPlanned("email-saas", "sparkpost", "SparkPost API key."),
 		mapPlanned("email-saas", "elasticemail", "Elastic Email API key."),
 		mapPlanned("customer-messaging", "onesignal", "OneSignal app/API key."),
-		mapPlanned("crm", "zohocrm", "Zoho CRM token."),
+		mapImplemented("crm", "zohocrm", "zoho-crm-token", "Zoho CRM token coverage."),
 		mapPlanned("crm", "copper", "Copper CRM API key."),
 		mapPlanned("crm", "capsulecrm", "Capsule CRM API key."),
 		mapPlanned("sales-intelligence", "apollo", "Apollo API key."),
@@ -224,7 +259,7 @@ func CurrentMappings() []Mapping {
 		mapPlanned("identity/auth", "auth0oauth", "Auth0 OAuth credential."),
 		mapPlanned("identity/auth", "onelogin", "OneLogin API credential."),
 		mapPlanned("identity/auth", "jumpcloud", "JumpCloud API key."),
-		mapPlanned("security/dlp", "nightfall", "Nightfall DLP API key."),
+		mapImplemented("security/dlp", "nightfall", "nightfall-api-key", "Nightfall DLP API key coverage."),
 		mapPlanned("security/scanning", "detectify", "Detectify API key."),
 		mapPlanned("threat-intel", "securitytrails", "SecurityTrails API key."),
 		mapPlanned("threat-intel", "urlscan", "urlscan.io API key."),
@@ -239,8 +274,8 @@ func CurrentMappings() []Mapping {
 		mapPlanned("security/scanning", "spectralops", "SpectralOps API key."),
 		mapPlanned("cloud-security", "wiz", "Wiz API credential."),
 		mapPlanned("security/asset-inventory", "jupiterone", "JupiterOne API token."),
-		mapPlanned("security/scanning", "endorlabs", "Endor Labs API key."),
-		mapPlanned("security/scanning", "trufflehogenterprise", "TruffleHog Enterprise token."),
+		mapPartial("security/scanning", "endorlabs", "endorlabs-token", "Endor Labs token coverage; paired key/secret correlation planned."),
+		mapPartial("security/scanning", "trufflehogenterprise", "trufflehog-enterprise-key", "TruffleHog Enterprise key/secret shapes covered; tuple correlation planned."),
 		mapPlanned("vpn/auth", "openvpn", "OpenVPN credential/config secret."),
 		mapPlanned("vpn/auth", "zerotier", "ZeroTier API token."),
 		mapPlanned("identity/auth", "azure_entra", "Microsoft Entra identity credential."),
@@ -294,16 +329,16 @@ func CurrentMappings() []Mapping {
 		mapPlanned("public-api", "twitchaccesstoken", "Twitch access token."),
 
 		mapPlanned("ai-ml", "deepseek", "DeepSeek API key."),
-		mapPlanned("ai-ml", "elevenlabs", "ElevenLabs API key."),
-		mapPlanned("ai-ml", "langsmith", "LangSmith API key."),
-		mapPlanned("ai-ml", "langfuse", "Langfuse key."),
+		mapImplemented("ai-ml", "elevenlabs", "elevenlabs-api-key", "ElevenLabs API key coverage with provider context."),
+		mapImplemented("ai-ml", "langsmith", "langsmith-api-key", "LangSmith API key coverage."),
+		mapImplemented("ai-ml", "langfuse", "langfuse-secret-key", "Langfuse secret key coverage."),
 		mapPlanned("ai-ml", "weightsandbiases", "Weights & Biases API key."),
-		mapPlanned("ai-ml", "pinecone", "Pinecone API key."),
-		mapPlanned("ai-ml", "xai", "xAI API key."),
+		mapImplemented("ai-ml", "pinecone", "pinecone-api-key", "Pinecone API key coverage."),
+		mapImplemented("ai-ml", "xai", "xai-api-key", "xAI API key coverage."),
 		mapPlanned("ai-ml", "assemblyai", "AssemblyAI API key."),
 		mapPlanned("ai-ml", "deepgram", "Deepgram API key."),
 		mapPlanned("ai-ml", "edenai", "Eden AI API key."),
-		mapPlanned("ai-ml", "voiceflow", "Voiceflow API key."),
+		mapImplemented("ai-ml", "voiceflow", "voiceflow-api-key", "Voiceflow API key coverage."),
 		mapPlanned("ai-ml", "monkeylearn", "MonkeyLearn API key."),
 		mapPlanned("observability", "logzio", "Logz.io token."),
 		mapPlanned("observability", "sumologickey", "Sumo Logic key."),
@@ -312,7 +347,10 @@ func CurrentMappings() []Mapping {
 		mapPlanned("ci-cd", "codeclimate", "Code Climate token."),
 		mapPlanned("ci-cd", "codacy", "Codacy API token."),
 		mapPlanned("ci-cd", "coveralls", "Coveralls repository token."),
-		mapPlanned("ci-cd", "harness", "Harness token."),
+		mapImplemented("ci-cd", "harness", "harness-pat", "Harness personal access token coverage with provider context."),
+		mapImplemented("analytics", "posthog", "posthog-personal-api-key", "PostHog personal API key coverage."),
+		mapImplemented("analytics/customer-data", "segmentapikey", "segment-api-key", "Segment API key coverage with provider context."),
+		mapImplemented("security/automation", "tineswebhook", "tines-webhook", "Tines webhook URL coverage."),
 	}
 }
 
