@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `269`
-- Direct catalog mappings: `264`
+- Total mappings: `279`
+- Direct catalog mappings: `274`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `155`
-- Partial mappings: `16`
-- Planned mappings: `98`
-- Untracked catalog directories: `606`
+- Implemented mappings: `166`
+- Partial mappings: `18`
+- Planned mappings: `95`
+- Untracked catalog directories: `596`
 
 Accounting notes:
 
@@ -83,6 +83,9 @@ Current built-in detector families:
 - GCP service account JSON and application default credentials
 - Redis URIs, Azure Redis connection strings, Couchbase Capella URIs
 - Close CRM, Paystack, Wrike, Facebook OAuth secret, Twitter/X consumer secret
+- Flutterwave, Pagar.me, Recharge Payments, Lemon Squeezy, Plaid partial coverage
+- Cloudinary URLs, Zendesk, Freshdesk, HelpCrunch, Courier, LINE Messaging, Mattermost
+- HashiCorp Vault AppRole partial coverage
 - JWTs, private keys, SSH private keys
 - Basic-auth URLs and generic assigned secrets
 

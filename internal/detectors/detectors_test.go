@@ -161,6 +161,19 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"wrike-access-token", "wrike token ey" + strings.Repeat("A", 333), "ey" + strings.Repeat("A", 333)},
 		{"twitter-consumer-secret", "twitter consumer_secret " + strings.Repeat("A", 50), strings.Repeat("A", 50)},
 		{"facebook-oauth-secret", "facebook app_secret " + strings.Repeat("A", 32), strings.Repeat("A", 32)},
+		{"flutterwave-secret-key", "FLWSECK-0123456789abcdef0123456789abcdef-X", "FLWSECK-0123456789abcdef0123456789abcdef-X"},
+		{"pagarme-live-key", "ak_live_0123456789abcdefghijklmnopqrst", "ak_live_0123456789abcdefghijklmnopqrst"},
+		{"rechargepayments-token", "sk_1x1_" + strings.Repeat("a", 64), "sk_1x1_" + strings.Repeat("a", 64)},
+		{"lemonsqueezy-api-token", "lemonsqueezy token eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", 314) + "." + strings.Repeat("B", 512), "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", 314) + "." + strings.Repeat("B", 512)},
+		{"plaid-access-token", "access-sandbox-01234567-89ab-cdef-0123-456789abcdef", "access-sandbox-01234567-89ab-cdef-0123-456789abcdef"},
+		{"cloudinary-url", "cloudinary://123456789012345:AbCdEfGhIjKlMnOpQrStUvWxYz1@demo-cloud", "cloudinary://123456789012345:AbCdEfGhIjKlMnOpQrStUvWxYz1@demo-cloud"},
+		{"zendesk-api-token", "acme.zendesk.com ZENDESK_API_TOKEN=" + strings.Repeat("A", 40), strings.Repeat("A", 40)},
+		{"freshdesk-api-key", "acme.freshdesk.com FRESHDESK_API_KEY=a1B2c3D4e5F6g7H8i9J0", "a1B2c3D4e5F6g7H8i9J0"},
+		{"helpcrunch-api-key", "HELPCRUNCH_TOKEN=" + strings.Repeat("A", 328), strings.Repeat("A", 328)},
+		{"line-messaging-token", "LINE_MESSAGING_TOKEN=" + strings.Repeat("A", 172), strings.Repeat("A", 172)},
+		{"courier-api-key", "COURIER_AUTH_TOKEN=pk_live_" + strings.Repeat("A", 28), "pk_live_" + strings.Repeat("A", 28)},
+		{"hashicorp-vault-approle", "vault role_id=11111111-2222-3333-4444-555555555555 secret_id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+		{"mattermost-personal-token", "mattermost token abc123def456ghi789jkl012mn team.cloud.mattermost.com", "abc123def456ghi789jkl012mn"},
 	}
 
 	for _, tc := range cases {
