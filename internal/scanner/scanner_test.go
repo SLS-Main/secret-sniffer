@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,6 +50,53 @@ func TestScannerIncludeExcludeGlobs(t *testing.T) {
 			t.Fatalf("unexpected file scanned: %s", f.File)
 		}
 	}
+}
+
+func TestScannerFindsSecretInBase64Payload(t *testing.T) {
+	dir := t.TempDir()
+	secret := "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef"
+	encoded := base64.StdEncoding.EncodeToString([]byte(secret))
+	path := filepath.Join(dir, "config.txt")
+	if err := os.WriteFile(path, []byte("encoded_secret="+encoded), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{Target: dir, Workers: 2, MaxFileBytes: 1024 * 1024}, detectors.DefaultRegistry())
+	findings, err := s.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(findings, "openai-key", "sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef") {
+		t.Fatalf("expected decoded openai finding, got %#v", findings)
+	}
+}
+
+func TestScannerFindsSecretInBase64URLPayload(t *testing.T) {
+	dir := t.TempDir()
+	secret := "github_token=ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(secret))
+	path := filepath.Join(dir, "config.txt")
+	if err := os.WriteFile(path, []byte("encoded_secret="+encoded), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{Target: dir, Workers: 2, MaxFileBytes: 1024 * 1024}, detectors.DefaultRegistry())
+	findings, err := s.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(findings, "github-token", "ghp_abcdefghijklmnopqrstuvwxyz0123456789") {
+		t.Fatalf("expected decoded github finding, got %#v", findings)
+	}
+}
+
+func hasFinding(findings []detectors.Finding, detectorID, secret string) bool {
+	for _, f := range findings {
+		if f.DetectorID == detectorID && f.Secret == secret {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGitHubCloneURLInjectsToken(t *testing.T) {

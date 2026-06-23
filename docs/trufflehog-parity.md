@@ -76,6 +76,7 @@ Current built-in detector families:
 - Local filesystem scanning
 - GitHub repository URL cloning
 - Optional full git object scanning with `--git-history`
+- Bounded base64 and base64url decoding before detector matching
 - High-concurrency worker pool via `--workers`
 - JSON, JSONL, SARIF, and human output
 - Raw-secret redaction by default with `--no-redact` opt-in

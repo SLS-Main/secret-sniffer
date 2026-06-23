@@ -4,17 +4,23 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
 	"secret-sniffer/internal/detectors"
 )
+
+var base64CandidateRe = regexp.MustCompile(`\b[A-Za-z0-9+/_-]{20,}={0,2}\b`)
+
+const maxBase64CandidateBytes = 8192
 
 type Config struct {
 	Target       string
@@ -167,9 +173,16 @@ func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Fi
 func (s *Scanner) scanBytes(file, commit string, b []byte) []detectors.Finding {
 	seen := map[string]struct{}{}
 	var findings []detectors.Finding
+	findings = append(findings, s.scanByteView(file, commit, b, b, seen)...)
+	findings = append(findings, s.scanDecodedBase64(file, commit, b, seen)...)
+	return findings
+}
+
+func (s *Scanner) scanByteView(file, commit string, source, view []byte, seen map[string]struct{}) []detectors.Finding {
+	var findings []detectors.Finding
 	for _, d := range s.detectors {
-		for _, c := range d.Detect(b) {
-			f := detectors.ToFinding(c, file, commit, b, s.cfg.Verify)
+		for _, c := range d.Detect(view) {
+			f := detectors.ToFinding(c, file, commit, source, s.cfg.Verify)
 			key := f.DetectorID + "\x00" + f.Secret + "\x00" + f.File + "\x00" + f.Commit
 			if _, ok := seen[key]; ok {
 				continue
@@ -179,6 +192,65 @@ func (s *Scanner) scanBytes(file, commit string, b []byte) []detectors.Finding {
 		}
 	}
 	return findings
+}
+
+func (s *Scanner) scanDecodedBase64(file, commit string, b []byte, seen map[string]struct{}) []detectors.Finding {
+	matches := base64CandidateRe.FindAllIndex(b, -1)
+	decodedSeen := map[string]struct{}{}
+	var findings []detectors.Finding
+	for _, m := range matches {
+		encoded := b[m[0]:m[1]]
+		if len(encoded) > maxBase64CandidateBytes || !plausibleBase64Candidate(encoded) {
+			continue
+		}
+		decoded, ok := decodeBase64Candidate(encoded)
+		if !ok || len(decoded) < 8 || isBinary(decoded) {
+			continue
+		}
+		decodedKey := string(decoded)
+		if _, ok := decodedSeen[decodedKey]; ok {
+			continue
+		}
+		decodedSeen[decodedKey] = struct{}{}
+		for _, d := range s.detectors {
+			for _, c := range d.Detect(decoded) {
+				// Report the source line/column of the encoded blob while preserving
+				// the decoded secret value for remediation.
+				c.Start = m[0]
+				c.End = m[1]
+				f := detectors.ToFinding(c, file, commit, b, s.cfg.Verify)
+				key := f.DetectorID + "\x00" + f.Secret + "\x00" + f.File + "\x00" + f.Commit
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				findings = append(findings, f)
+			}
+		}
+	}
+	return findings
+}
+
+func plausibleBase64Candidate(b []byte) bool {
+	if len(b)%4 == 1 {
+		return false
+	}
+	if bytes.Count(b, []byte("-"))+bytes.Count(b, []byte("_")) > 0 && bytes.Count(b, []byte("+"))+bytes.Count(b, []byte("/")) > 0 {
+		return false
+	}
+	return true
+}
+
+func decodeBase64Candidate(b []byte) ([]byte, bool) {
+	s := string(b)
+	encodings := []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding}
+	for _, enc := range encodings {
+		decoded, err := enc.DecodeString(s)
+		if err == nil && len(decoded) > 0 {
+			return decoded, true
+		}
+	}
+	return nil, false
 }
 
 func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.Finding, error) {
