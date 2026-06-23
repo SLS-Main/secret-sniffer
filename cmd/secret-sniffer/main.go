@@ -48,6 +48,7 @@ func main() {
 	var redact bool
 	var noRedact bool
 	var quiet bool
+	var noColor bool
 
 	flag.StringVar(&cfg.Target, "target", ".", "local path or GitHub repository URL to scan")
 	flag.IntVar(&cfg.Workers, "workers", runtime.NumCPU(), "number of concurrent workers")
@@ -77,6 +78,7 @@ func main() {
 	flag.BoolVar(&redact, "redact", false, "omit raw secrets from machine-readable output")
 	flag.BoolVar(&noRedact, "no-redact", true, "include raw secrets in machine-readable output; default true")
 	flag.BoolVar(&quiet, "quiet", false, "suppress progress logs on stderr")
+	flag.BoolVar(&noColor, "no-color", false, "disable colored console output")
 	flag.BoolVar(&showVersion, "version", false, "print version")
 	flag.Parse()
 
@@ -120,17 +122,18 @@ func main() {
 	defer cancel()
 
 	start := time.Now()
-	logf(quiet, "secret-sniffer: starting scan")
+	console := newConsole(quiet, noColor)
+	console.step("Starting scan")
 	githubClients, err := githubClients(ctx, githubToken, githubAppID, githubAppPrivateKey, githubInstallationID, githubAccessible)
 	if err != nil {
 		fatal(err)
 	}
-	targets, tokenByTarget, _, installationByTarget, summary, err := scanTargets(ctx, cfg.Target, githubOrgs, githubEnterprise, githubAccessible, githubClients, quiet)
+	targets, tokenByTarget, _, installationByTarget, summary, err := scanTargets(ctx, cfg.Target, githubOrgs, githubEnterprise, githubAccessible, githubClients, console)
 	if err != nil {
 		fatal(err)
 	}
-	printDiscoverySummary(quiet, summary)
-	logf(quiet, "secret-sniffer: scanning %d target(s) with %d worker(s) per target and repo_concurrency=%d", len(targets), cfg.Workers, repoConcurrency)
+	console.discoverySummary(summary)
+	console.info("Scanning %d target(s), workers=%d, repo_concurrency=%d", len(targets), cfg.Workers, repoConcurrency)
 	includeSecrets := noRedact && !redact
 	format = strings.ToLower(format)
 	if outputPath == "" {
@@ -144,14 +147,14 @@ func main() {
 		}
 		defer outputFile.Close()
 		if format == "jsonl" {
-			logf(quiet, "secret-sniffer: streaming findings to %s", outputPath)
+			console.info("Streaming findings to %s", outputPath)
 		} else {
-			logf(quiet, "secret-sniffer: writing %s output to %s", format, outputPath)
+			console.info("Writing %s output to %s", format, outputPath)
 		}
 	}
 	var knownBaseline map[string]struct{}
 	if baselinePath != "" {
-		logf(quiet, "secret-sniffer: loading baseline %s", baselinePath)
+		console.info("Loading baseline %s", baselinePath)
 		knownBaseline, err = baseline.Load(baselinePath)
 		if err != nil {
 			fatal(err)
@@ -177,7 +180,7 @@ func main() {
 			defer wg.Done()
 			for i := range jobs {
 				target := targets[i]
-				logf(quiet, "secret-sniffer: [%d/%d] scanning %s", i+1, len(targets), target)
+				console.repoStart(i+1, len(targets), target)
 				targetCfg := cfg
 				targetCfg.Target = target
 				targetCfg.GitHubToken = tokenByTarget[target]
@@ -188,7 +191,7 @@ func main() {
 					}
 					targetCfg.GitHubToken = token.Token
 					if refreshed {
-						logf(quiet, "secret-sniffer: [%d/%d] refreshed GitHub App installation token, expires=%s", i+1, len(targets), token.ExpiresAt.Format(time.RFC3339))
+						console.info("[%d/%d] Refreshed GitHub App installation token, expires=%s", i+1, len(targets), token.ExpiresAt.Format(time.RFC3339))
 					}
 				}
 				runner := scanner.New(targetCfg, registry)
@@ -205,14 +208,12 @@ func main() {
 				mu.Lock()
 				totalAfterBaseline += len(targetFindings)
 				mu.Unlock()
-				logf(quiet, "secret-sniffer: [%d/%d] finished %s, findings=%d", i+1, len(targets), target, len(targetFindings))
+				console.repoDone(i+1, len(targets), target, len(targetFindings))
 				mu.Lock()
 				summary.addScanResult(target, len(targetFindings))
 				mu.Unlock()
 				for _, finding := range targetFindings {
-					if err := output.WriteFindingHuman(os.Stderr, finding); err != nil {
-						fatal(err)
-					}
+					console.finding(finding)
 					if outputFile != nil && format == "jsonl" {
 						mu.Lock()
 						if err := output.WriteFindingJSONL(outputFile, finding, includeSecrets); err != nil {
@@ -257,12 +258,12 @@ func main() {
 	}
 	summary.FindingsBeforeBaseline = totalBeforeBaseline
 	summary.FindingsAfterBaseline = totalAfterBaseline
-	printScanSummary(quiet, summary)
+	console.scanSummary(summary)
 	if summaryOutputPath != "" {
 		if err := writeSummary(summaryOutputPath, summary); err != nil {
 			fatal(err)
 		}
-		logf(quiet, "secret-sniffer: wrote summary to %s", summaryOutputPath)
+		console.info("Wrote summary to %s", summaryOutputPath)
 	}
 
 	meta := output.Meta{Target: strings.Join(targets, ","), StartedAt: start, Duration: time.Since(start), Findings: totalAfterBaseline}
@@ -281,7 +282,7 @@ func main() {
 	} else {
 		fmt.Fprintf(os.Stdout, "scan complete: %d findings in %s, output=%s\n", summary.FindingsAfterBaseline, time.Since(start).Round(time.Millisecond), outputPath)
 	}
-	logf(quiet, "secret-sniffer: complete, findings=%d, duration=%s", totalAfterBaseline, time.Since(start).Round(time.Millisecond))
+	console.done(totalAfterBaseline, time.Since(start).Round(time.Millisecond))
 	if failOnFindings && totalAfterBaseline > 0 {
 		os.Exit(2)
 	}
@@ -366,44 +367,44 @@ func githubClients(ctx context.Context, token, appID, privateKeyPath, installati
 	return []githubClient{{client: githubapi.New(installationToken.Token), token: installationToken.Token, tokenExpiresAt: installationToken.ExpiresAt, installationID: installationID}}, nil
 }
 
-func scanTargets(ctx context.Context, target, orgs, enterprise string, accessible bool, clients []githubClient, quiet bool) ([]string, map[string]string, map[string]time.Time, map[string]int64, discoverySummary, error) {
+func scanTargets(ctx context.Context, target, orgs, enterprise string, accessible bool, clients []githubClient, console console) ([]string, map[string]string, map[string]time.Time, map[string]int64, discoverySummary, error) {
 	var targets []string
 	tokens := map[string]string{}
 	expires := map[string]time.Time{}
 	installations := map[string]int64{}
 	summary := discoverySummary{Enterprise: enterprise, RequestedOrgs: splitCSV(orgs), Accessible: accessible, Orgs: []orgSummary{}}
 	for _, org := range splitCSV(orgs) {
-		logf(quiet, "secret-sniffer: discovering repositories for GitHub org %s", org)
+		console.info("Discovering repositories for GitHub org %s", org)
 		for _, gc := range clients {
 			repos, err := gc.client.RepositoriesForOrg(ctx, org)
 			if err != nil {
 				return nil, nil, nil, nil, summary, err
 			}
-			logf(quiet, "secret-sniffer: discovered %d repositories for org %s", len(repos), org)
+			console.info("Discovered %d repositories for org %s", len(repos), org)
 			addRepos(&targets, tokens, expires, installations, repos, gc)
 			summary.addRepos(repos)
 		}
 	}
 	if enterprise != "" {
-		logf(quiet, "secret-sniffer: discovering repositories for GitHub enterprise %s", enterprise)
+		console.info("Discovering repositories for GitHub enterprise %s", enterprise)
 		for _, gc := range clients {
 			repos, err := gc.client.RepositoriesForEnterprise(ctx, enterprise)
 			if err != nil {
 				return nil, nil, nil, nil, summary, err
 			}
-			logf(quiet, "secret-sniffer: discovered %d repositories for enterprise %s", len(repos), enterprise)
+			console.info("Discovered %d repositories for enterprise %s", len(repos), enterprise)
 			addRepos(&targets, tokens, expires, installations, repos, gc)
 			summary.addRepos(repos)
 		}
 	}
 	if accessible {
-		logf(quiet, "secret-sniffer: discovering all repositories accessible to GitHub credential(s)")
+		console.info("Discovering all repositories accessible to GitHub credential(s)")
 		for _, gc := range clients {
 			repos, err := gc.client.AccessibleRepositories(ctx)
 			if err != nil {
 				return nil, nil, nil, nil, summary, err
 			}
-			logf(quiet, "secret-sniffer: discovered %d accessible repositories", len(repos))
+			console.info("Discovered %d accessible repositories", len(repos))
 			addRepos(&targets, tokens, expires, installations, repos, gc)
 			summary.addRepos(repos)
 		}
@@ -422,11 +423,113 @@ func scanTargets(ctx context.Context, target, orgs, enterprise string, accessibl
 	return targets, tokens, expires, installations, summary, nil
 }
 
-func logf(quiet bool, format string, args ...any) {
-	if quiet {
+type console struct {
+	quiet bool
+	color bool
+}
+
+const (
+	colorReset  = "\033[0m"
+	colorDim    = "\033[2m"
+	colorRed    = "\033[31m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+	colorGreen  = "\033[32m"
+	colorCyan   = "\033[36m"
+	colorBold   = "\033[1m"
+)
+
+func newConsole(quiet, noColor bool) console {
+	return console{quiet: quiet, color: !noColor}
+}
+
+func (c console) printf(label, color, format string, args ...any) {
+	if c.quiet {
 		return
 	}
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	if c.color {
+		fmt.Fprintf(os.Stderr, "%s%-9s%s %s\n", color, label, colorReset, fmt.Sprintf(format, args...))
+		return
+	}
+	fmt.Fprintf(os.Stderr, "%-9s %s\n", label, fmt.Sprintf(format, args...))
+}
+
+func (c console) step(msg string, args ...any) { c.printf("START", colorBlue, msg, args...) }
+func (c console) info(msg string, args ...any) { c.printf("INFO", colorCyan, msg, args...) }
+func (c console) done(findings int, duration time.Duration) {
+	c.printf("DONE", colorGreen, "findings=%d duration=%s", findings, duration)
+}
+
+func (c console) repoStart(current, total int, target string) {
+	c.printf("REPO", colorBlue, "[%d/%d] %s", current, total, target)
+}
+
+func (c console) repoDone(current, total int, target string, findings int) {
+	clr := colorGreen
+	if findings > 0 {
+		clr = colorYellow
+	}
+	c.printf("REPO", clr, "[%d/%d] done findings=%d %s", current, total, findings, target)
+}
+
+func (c console) finding(f detectors.Finding) {
+	if c.quiet {
+		return
+	}
+	clr := severityColor(f.Severity)
+	secret := f.Secret
+	if secret == "" {
+		secret = f.Redacted
+	}
+	verified := ""
+	if f.Verified {
+		verified = " verified"
+	}
+	if c.color {
+		fmt.Fprintf(os.Stderr, "%s%-9s%s %s%s%s %s:%d:%d %s%s%s %s\n", clr, "FINDING", colorReset, colorBold, strings.ToUpper(f.Severity), colorReset, f.File, f.Line, f.Column, colorDim, f.Name+verified, colorReset, secret)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "%-9s %s %s:%d:%d %s%s %s\n", "FINDING", strings.ToUpper(f.Severity), f.File, f.Line, f.Column, f.Name, verified, secret)
+}
+
+func (c console) discoverySummary(summary discoverySummary) {
+	if c.quiet || summary.TotalRepositories == 0 || len(summary.Orgs) == 0 {
+		return
+	}
+	if summary.Enterprise != "" {
+		c.info("Enterprise discovery: %s", summary.Enterprise)
+	} else if summary.Accessible {
+		c.info("Accessible repository discovery")
+	} else {
+		c.info("Organization discovery")
+	}
+	c.info("Discovered orgs=%d repos=%d", len(summary.Orgs), summary.TotalRepositories)
+	for _, org := range summary.Orgs {
+		c.printf("ORG", colorCyan, "%s repos=%d", org.Name, org.Repositories)
+	}
+}
+
+func (c console) scanSummary(summary discoverySummary) {
+	if c.quiet || summary.TotalRepositories == 0 {
+		return
+	}
+	c.printf("SUMMARY", colorBold, "repos=%d findings_before_baseline=%d findings_after_baseline=%d", summary.TotalRepositories, summary.FindingsBeforeBaseline, summary.FindingsAfterBaseline)
+	for _, org := range summary.Orgs {
+		c.printf("ORG", colorCyan, "%s repos=%d findings=%d", org.Name, org.Repositories, org.Findings)
+	}
+}
+
+func severityColor(sev string) string {
+	switch strings.ToLower(sev) {
+	case "critical", "high":
+		return colorRed
+	case "medium":
+		return colorYellow
+	case "low":
+		return colorBlue
+	default:
+		return colorCyan
+	}
 }
 
 func defaultOutputPath(format string) string {
@@ -557,33 +660,6 @@ func targetOwner(target string) string {
 		}
 	}
 	return ""
-}
-
-func printDiscoverySummary(quiet bool, summary discoverySummary) {
-	if quiet || summary.TotalRepositories == 0 || len(summary.Orgs) == 0 {
-		return
-	}
-	if summary.Enterprise != "" {
-		logf(false, "secret-sniffer: enterprise %s discovery summary", summary.Enterprise)
-	} else if summary.Accessible {
-		logf(false, "secret-sniffer: accessible repository discovery summary")
-	} else {
-		logf(false, "secret-sniffer: organization discovery summary")
-	}
-	logf(false, "secret-sniffer: orgs=%d repos=%d", len(summary.Orgs), summary.TotalRepositories)
-	for _, org := range summary.Orgs {
-		logf(false, "secret-sniffer:   %s repos=%d", org.Name, org.Repositories)
-	}
-}
-
-func printScanSummary(quiet bool, summary discoverySummary) {
-	if quiet || summary.TotalRepositories == 0 {
-		return
-	}
-	logf(false, "secret-sniffer: scan summary repos=%d findings_before_baseline=%d findings_after_baseline=%d", summary.TotalRepositories, summary.FindingsBeforeBaseline, summary.FindingsAfterBaseline)
-	for _, org := range summary.Orgs {
-		logf(false, "secret-sniffer:   %s repos=%d findings=%d", org.Name, org.Repositories, org.Findings)
-	}
 }
 
 func writeSummary(path string, summary discoverySummary) error {

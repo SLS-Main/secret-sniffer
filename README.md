@@ -86,6 +86,7 @@ GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-histor
 --redact              Omit raw secrets from machine-readable output.
 --no-redact           Include raw secrets in output. Default: true.
 --quiet               Suppress progress logs on stderr.
+--no-color            Disable colored console output.
 --list-detectors      Print built-in detector metadata as JSON.
 --trufflehog-parity   Print tracked TruffleHog detector parity mappings as JSON.
 ```
