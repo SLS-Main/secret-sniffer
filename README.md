@@ -494,6 +494,8 @@ The parity report includes:
 
 Detailed parity notes live in `docs/trufflehog-parity.md`.
 
+The implementation roadmap lives in `docs/roadmap.md`.
+
 ## CI Examples
 
 Fail a build if findings are present:
