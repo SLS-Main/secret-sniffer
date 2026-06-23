@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `251`
-- Direct catalog mappings: `246`
+- Total mappings: `268`
+- Direct catalog mappings: `263`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `122`
-- Partial mappings: `13`
-- Planned mappings: `116`
-- Untracked catalog directories: `624`
+- Implemented mappings: `144`
+- Partial mappings: `14`
+- Planned mappings: `110`
+- Untracked catalog directories: `607`
 
 Accounting notes:
 
@@ -75,6 +75,10 @@ Current built-in detector families:
 - OpenAI admin, DeepSeek, Weights & Biases, AssemblyAI, Deepgram, Eden AI, MonkeyLearn
 - Contentful, Storyblok, Sanity, Webflow, Shortcut
 - Mapbox, LocationIQ, CoinAPI, Etherscan, BscScan, Guardian Open Platform
+- CircleCI, Sourcegraph, Sourcegraph Cody, Snyk, UptimeRobot, Sumo Logic partial coverage
+- Sendinblue/Brevo, Teamwork, Salesblink, Smooch, Mailmodo
+- Zapier webhooks, Deno Deploy, Supabase management tokens, Prefect, Figma, SaladCloud
+- PlanetScale, Databricks, Portainer, Statuspage
 - JWTs, private keys, SSH private keys
 - Basic-auth URLs and generic assigned secrets
 
