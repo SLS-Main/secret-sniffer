@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `244`
-- Direct catalog mappings: `239`
+- Total mappings: `251`
+- Direct catalog mappings: `246`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `102`
+- Implemented mappings: `122`
 - Partial mappings: `13`
-- Planned mappings: `129`
-- Untracked catalog directories: `631`
+- Planned mappings: `116`
+- Untracked catalog directories: `624`
 
 Accounting notes:
 
@@ -72,6 +72,9 @@ Current built-in detector families:
 - Azure App Configuration, Storage, Cosmos DB, SAS URLs, and Function key URLs
 - SpectralOps, Okta, urlscan.io
 - Atlassian, Jira, Salesforce token shapes, Twilio auth tokens, Mailjet basic auth
+- OpenAI admin, DeepSeek, Weights & Biases, AssemblyAI, Deepgram, Eden AI, MonkeyLearn
+- Contentful, Storyblok, Sanity, Webflow, Shortcut
+- Mapbox, LocationIQ, CoinAPI, Etherscan, BscScan, Guardian Open Platform
 - JWTs, private keys, SSH private keys
 - Basic-auth URLs and generic assigned secrets
 
