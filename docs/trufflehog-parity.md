@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `268`
-- Direct catalog mappings: `263`
+- Total mappings: `269`
+- Direct catalog mappings: `264`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `144`
-- Partial mappings: `14`
-- Planned mappings: `110`
-- Untracked catalog directories: `607`
+- Implemented mappings: `155`
+- Partial mappings: `16`
+- Planned mappings: `98`
+- Untracked catalog directories: `606`
 
 Accounting notes:
 
@@ -79,6 +79,10 @@ Current built-in detector families:
 - Sendinblue/Brevo, Teamwork, Salesblink, Smooch, Mailmodo
 - Zapier webhooks, Deno Deploy, Supabase management tokens, Prefect, Figma, SaladCloud
 - PlanetScale, Databricks, Portainer, Statuspage
+- AWS AppSync, Azure OpenAI, Azure Batch, Azure Container Registry
+- GCP service account JSON and application default credentials
+- Redis URIs, Azure Redis connection strings, Couchbase Capella URIs
+- Close CRM, Paystack, Wrike, Facebook OAuth secret, Twitter/X consumer secret
 - JWTs, private keys, SSH private keys
 - Basic-auth URLs and generic assigned secrets
 

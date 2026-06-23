@@ -147,6 +147,20 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"planetscale-db-password", "pscale_pw_" + strings.Repeat("A", 43), "pscale_pw_" + strings.Repeat("A", 43)},
 		{"databricks-token", "databricks dapi" + strings.Repeat("a", 32), "dapi" + strings.Repeat("a", 32)},
 		{"portainer-token", "portainertoken=ptr_" + strings.Repeat("A", 32), "ptr_" + strings.Repeat("A", 32)},
+		{"aws-appsync-api-key", "https://abcdefghijklmnopqrstuvwxyz.appsync-api.us-east-1.amazonaws.com/graphql api_key=da2-abcdefghijklmnopqrstuvwxyz", "da2-abcdefghijklmnopqrstuvwxyz"},
+		{"azure-openai-key", "https://demo.openai.azure.com api-key=0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"},
+		{"azure-batch-key", "https://acct.region.batch.azure.com key=" + strings.Repeat("A", 88), strings.Repeat("A", 88)},
+		{"azure-container-registry-password", "myregistry.azurecr.io " + strings.Repeat("a", 42) + "+ACRbbbbbb", strings.Repeat("a", 42) + "+ACRbbbbbb"},
+		{"gcp-service-account-json", `{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n","client_email":"fake@proj.iam.gserviceaccount.com","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs"}`, `{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n","client_email":"fake@proj.iam.gserviceaccount.com","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs"}`},
+		{"gcp-application-default-credentials", `{"client_id":"fake.apps.googleusercontent.com","client_secret":"` + strings.Repeat("A", 24) + `","refresh_token":"` + strings.Repeat("B", 32) + `"}`, `{"client_id":"fake.apps.googleusercontent.com","client_secret":"` + strings.Repeat("A", 24) + `","refresh_token":"` + strings.Repeat("B", 32) + `"}`},
+		{"redis-uri", "rediss://default:FakeRedisPass123@example.redis.cache.windows.net:6380", "rediss://default:FakeRedisPass123@example.redis.cache.windows.net:6380"},
+		{"azure-redis-connection-string", "demo.redis.cache.windows.net:6380,password=" + strings.Repeat("A", 44) + ",ssl=True,abortConnect=False", "demo.redis.cache.windows.net:6380,password=" + strings.Repeat("A", 44) + ",ssl=True,abortConnect=False"},
+		{"couchbase-capella-uri", "couchbases://user:Passw0rd!@cb.abc123.cloud.couchbase.com", "couchbases://user:Passw0rd!@cb.abc123.cloud.couchbase.com"},
+		{"closecrm-api-key", "api_" + strings.Repeat("A", 45), "api_" + strings.Repeat("A", 45)},
+		{"paystack-secret-key", "sk_test_" + strings.Repeat("A", 40), "sk_test_" + strings.Repeat("A", 40)},
+		{"wrike-access-token", "wrike token ey" + strings.Repeat("A", 333), "ey" + strings.Repeat("A", 333)},
+		{"twitter-consumer-secret", "twitter consumer_secret " + strings.Repeat("A", 50), strings.Repeat("A", 50)},
+		{"facebook-oauth-secret", "facebook app_secret " + strings.Repeat("A", 32), strings.Repeat("A", 32)},
 	}
 
 	for _, tc := range cases {
