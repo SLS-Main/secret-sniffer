@@ -31,3 +31,31 @@ func TestDefaultOutputPath(t *testing.T) {
 		}
 	}
 }
+
+func TestIsGitHubDiscovery(t *testing.T) {
+	if !isGitHubDiscovery("org", "", false) {
+		t.Fatal("org should count as github discovery")
+	}
+	if !isGitHubDiscovery("", "enterprise", false) {
+		t.Fatal("enterprise should count as github discovery")
+	}
+	if !isGitHubDiscovery("", "", true) {
+		t.Fatal("accessible should count as github discovery")
+	}
+	if isGitHubDiscovery("", "", false) {
+		t.Fatal("empty discovery inputs should not count as github discovery")
+	}
+}
+
+func TestDiscoverySummaryAddInstallation(t *testing.T) {
+	var summary discoverySummary
+	client := githubClient{installationID: 42, account: "acme", accountType: "Organization"}
+	summary.addInstallation(client, 3)
+	summary.addInstallation(client, 2)
+	if len(summary.Installations) != 1 {
+		t.Fatalf("expected one installation, got %d", len(summary.Installations))
+	}
+	if summary.Installations[0].Repositories != 5 {
+		t.Fatalf("expected five repos, got %d", summary.Installations[0].Repositories)
+	}
+}

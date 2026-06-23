@@ -75,6 +75,7 @@ GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-histor
 --baseline            Path to accepted-finding baseline JSON.
 --write-baseline      Write current finding fingerprints to baseline JSON.
 --summary-output      Write GitHub discovery and scan summary JSON to this path.
+--summary-only        Discover GitHub orgs/repositories, write summary, and exit without scanning.
 --github-org          Comma-separated GitHub organization names to enumerate and scan.
 --github-enterprise   GitHub Enterprise Cloud slug; enumerate orgs and scan all repos.
 --github-accessible   Scan all repositories accessible to the GitHub token.
@@ -354,6 +355,23 @@ while read -r repo; do
     --fail-on-findings \
     --format jsonl
 done < repos.txt
+```
+
+### Discovery Summary And Summary-Only Mode
+
+GitHub discovery prints a summary before scanning starts. It includes the enterprise name when provided, requested orgs, discovered org names, GitHub App installations, and repository counts.
+
+For GitHub discovery modes, the scanner writes a discovery summary before scanning starts. If `--summary-output` is not supplied, it writes `secret-sniffer-summary.json`.
+
+Generate only the discovery summary without scanning:
+
+```bash
+./secret-sniffer \
+  --github-app-id 123456 \
+  --github-app-private-key /secure/path/app-private-key.pem \
+  --github-accessible \
+  --summary-only \
+  --summary-output github-summary.json
 ```
 
 ### Parallel Organization And Enterprise Scans

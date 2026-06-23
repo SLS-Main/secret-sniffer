@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"flag"
@@ -44,6 +45,7 @@ func main() {
 	var listDetectors bool
 	var truffleHogParity bool
 	var githubAccessible bool
+	var summaryOnly bool
 	var failOnFindings bool
 	var redact bool
 	var noRedact bool
@@ -72,6 +74,7 @@ func main() {
 	flag.StringVar(&githubAppPrivateKey, "github-app-private-key", os.Getenv("GITHUB_APP_PRIVATE_KEY"), "path to GitHub App private key PEM; defaults to GITHUB_APP_PRIVATE_KEY")
 	flag.StringVar(&githubInstallationID, "github-installation-id", os.Getenv("GITHUB_INSTALLATION_ID"), "optional GitHub App installation ID; defaults to GITHUB_INSTALLATION_ID")
 	flag.BoolVar(&githubAccessible, "github-accessible", false, "scan all repositories accessible to the GitHub token")
+	flag.BoolVar(&summaryOnly, "summary-only", false, "discover GitHub orgs/repositories, write summary, and exit without scanning")
 	flag.BoolVar(&listDetectors, "list-detectors", false, "print detector metadata as JSON and exit")
 	flag.BoolVar(&truffleHogParity, "trufflehog-parity", false, "print tracked TruffleHog detector parity mappings as JSON and exit")
 	flag.BoolVar(&failOnFindings, "fail-on-findings", false, "exit with status 2 when findings are present")
@@ -133,6 +136,19 @@ func main() {
 		fatal(err)
 	}
 	console.discoverySummary(summary)
+	if summaryOutputPath == "" && isGitHubDiscovery(githubOrgs, githubEnterprise, githubAccessible) {
+		summaryOutputPath = "secret-sniffer-summary.json"
+	}
+	if summaryOutputPath != "" {
+		if err := writeSummary(summaryOutputPath, summary); err != nil {
+			fatal(err)
+		}
+		console.info("Wrote discovery summary to %s", summaryOutputPath)
+	}
+	if summaryOnly {
+		console.done(0, time.Since(start).Round(time.Millisecond))
+		return
+	}
 	console.info("Scanning %d target(s), workers=%d, repo_concurrency=%d", len(targets), cfg.Workers, repoConcurrency)
 	includeSecrets := noRedact && !redact
 	format = strings.ToLower(format)
@@ -263,7 +279,7 @@ func main() {
 		if err := writeSummary(summaryOutputPath, summary); err != nil {
 			fatal(err)
 		}
-		console.info("Wrote summary to %s", summaryOutputPath)
+		console.info("Updated summary at %s", summaryOutputPath)
 	}
 
 	meta := output.Meta{Target: strings.Join(targets, ","), StartedAt: start, Duration: time.Since(start), Findings: totalAfterBaseline}
@@ -293,16 +309,26 @@ type githubClient struct {
 	token          string
 	tokenExpiresAt time.Time
 	installationID int64
+	account        string
+	accountType    string
 }
 
 type discoverySummary struct {
-	Enterprise             string       `json:"enterprise,omitempty"`
-	RequestedOrgs          []string     `json:"requested_orgs,omitempty"`
-	Accessible             bool         `json:"accessible"`
-	TotalRepositories      int          `json:"total_repositories"`
-	FindingsBeforeBaseline int          `json:"findings_before_baseline"`
-	FindingsAfterBaseline  int          `json:"findings_after_baseline"`
-	Orgs                   []orgSummary `json:"orgs"`
+	Enterprise             string                `json:"enterprise,omitempty"`
+	RequestedOrgs          []string              `json:"requested_orgs,omitempty"`
+	Accessible             bool                  `json:"accessible"`
+	TotalRepositories      int                   `json:"total_repositories"`
+	FindingsBeforeBaseline int                   `json:"findings_before_baseline"`
+	FindingsAfterBaseline  int                   `json:"findings_after_baseline"`
+	Installations          []installationSummary `json:"installations,omitempty"`
+	Orgs                   []orgSummary          `json:"orgs"`
+}
+
+type installationSummary struct {
+	ID           int64  `json:"id"`
+	Account      string `json:"account"`
+	AccountType  string `json:"account_type"`
+	Repositories int    `json:"repositories"`
 }
 
 type orgSummary struct {
@@ -334,11 +360,13 @@ func githubClients(ctx context.Context, token, appID, privateKeyPath, installati
 			if err != nil {
 				return nil, fmt.Errorf("mint installation token for %s/%d: %w", installation.Account.Login, installation.ID, err)
 			}
-			out = append(out, githubClient{client: githubapi.New(token.Token), token: token.Token, tokenExpiresAt: token.ExpiresAt, installationID: installation.ID})
+			out = append(out, githubClient{client: githubapi.New(token.Token), token: token.Token, tokenExpiresAt: token.ExpiresAt, installationID: installation.ID, account: installation.Account.Login, accountType: installation.Account.Type})
 		}
 		return out, nil
 	}
 	var installationID int64
+	var account string
+	var accountType string
 	if installationIDRaw != "" {
 		id, err := strconv.ParseInt(installationIDRaw, 10, 64)
 		if err != nil {
@@ -359,12 +387,14 @@ func githubClients(ctx context.Context, token, appID, privateKeyPath, installati
 			return nil, fmt.Errorf("github app has %d installations; provide --github-installation-id or use --github-accessible to scan all installations", len(installations))
 		}
 		installationID = installations[0].ID
+		account = installations[0].Account.Login
+		accountType = installations[0].Account.Type
 	}
 	installationToken, err := refreshInstallationToken(ctx, appID, privateKeyPath, installationID)
 	if err != nil {
 		return nil, err
 	}
-	return []githubClient{{client: githubapi.New(installationToken.Token), token: installationToken.Token, tokenExpiresAt: installationToken.ExpiresAt, installationID: installationID}}, nil
+	return []githubClient{{client: githubapi.New(installationToken.Token), token: installationToken.Token, tokenExpiresAt: installationToken.ExpiresAt, installationID: installationID, account: account, accountType: accountType}}, nil
 }
 
 func scanTargets(ctx context.Context, target, orgs, enterprise string, accessible bool, clients []githubClient, console console) ([]string, map[string]string, map[string]time.Time, map[string]int64, discoverySummary, error) {
@@ -383,6 +413,7 @@ func scanTargets(ctx context.Context, target, orgs, enterprise string, accessibl
 			console.info("Discovered %d repositories for org %s", len(repos), org)
 			addRepos(&targets, tokens, expires, installations, repos, gc)
 			summary.addRepos(repos)
+			summary.addInstallation(gc, len(repos))
 		}
 	}
 	if enterprise != "" {
@@ -395,6 +426,7 @@ func scanTargets(ctx context.Context, target, orgs, enterprise string, accessibl
 			console.info("Discovered %d repositories for enterprise %s", len(repos), enterprise)
 			addRepos(&targets, tokens, expires, installations, repos, gc)
 			summary.addRepos(repos)
+			summary.addInstallation(gc, len(repos))
 		}
 	}
 	if accessible {
@@ -404,9 +436,14 @@ func scanTargets(ctx context.Context, target, orgs, enterprise string, accessibl
 			if err != nil {
 				return nil, nil, nil, nil, summary, err
 			}
-			console.info("Discovered %d accessible repositories", len(repos))
+			if gc.account != "" {
+				console.info("Discovered %d accessible repositories for installation %d (%s)", len(repos), gc.installationID, gc.account)
+			} else {
+				console.info("Discovered %d accessible repositories", len(repos))
+			}
 			addRepos(&targets, tokens, expires, installations, repos, gc)
 			summary.addRepos(repos)
+			summary.addInstallation(gc, len(repos))
 		}
 	}
 	if len(targets) == 0 {
@@ -420,6 +457,7 @@ func scanTargets(ctx context.Context, target, orgs, enterprise string, accessibl
 	targets = dedupeStrings(targets)
 	summary.TotalRepositories = len(targets)
 	summary.sortOrgs()
+	summary.sortInstallations()
 	return targets, tokens, expires, installations, summary, nil
 }
 
@@ -493,15 +531,30 @@ func (c console) finding(f detectors.Finding) {
 }
 
 func (c console) discoverySummary(summary discoverySummary) {
-	if c.quiet || summary.TotalRepositories == 0 || len(summary.Orgs) == 0 {
+	if c.quiet || summary.TotalRepositories == 0 {
 		return
 	}
 	if summary.Enterprise != "" {
-		c.info("Enterprise discovery: %s", summary.Enterprise)
+		c.info("GitHub enterprise: %s", summary.Enterprise)
 	} else if summary.Accessible {
 		c.info("Accessible repository discovery")
-	} else {
+	} else if len(summary.RequestedOrgs) > 0 {
 		c.info("Organization discovery")
+	} else {
+		c.info("Target discovery")
+	}
+	if len(summary.RequestedOrgs) > 0 {
+		c.info("Requested orgs: %s", strings.Join(summary.RequestedOrgs, ", "))
+	}
+	if len(summary.Installations) > 0 {
+		c.info("GitHub App installations=%d", len(summary.Installations))
+		for _, installation := range summary.Installations {
+			account := installation.Account
+			if account == "" {
+				account = "unknown"
+			}
+			c.printf("INSTALL", colorCyan, "%s id=%d type=%s repos=%d", account, installation.ID, installation.AccountType, installation.Repositories)
+		}
 	}
 	c.info("Discovered orgs=%d repos=%d", len(summary.Orgs), summary.TotalRepositories)
 	for _, org := range summary.Orgs {
@@ -543,6 +596,10 @@ func defaultOutputPath(format string) string {
 	default:
 		return ""
 	}
+}
+
+func isGitHubDiscovery(orgs, enterprise string, accessible bool) bool {
+	return orgs != "" || enterprise != "" || accessible
 }
 
 func addRepos(targets *[]string, tokens map[string]string, expires map[string]time.Time, installations map[string]int64, repos []githubapi.Repository, gc githubClient) {
@@ -625,6 +682,19 @@ func (s *discoverySummary) addOrgRepos(name string, count int) {
 	s.Orgs = append(s.Orgs, orgSummary{Name: name, Repositories: count})
 }
 
+func (s *discoverySummary) addInstallation(gc githubClient, repos int) {
+	if gc.installationID == 0 {
+		return
+	}
+	for i := range s.Installations {
+		if s.Installations[i].ID == gc.installationID {
+			s.Installations[i].Repositories += repos
+			return
+		}
+	}
+	s.Installations = append(s.Installations, installationSummary{ID: gc.installationID, Account: gc.account, AccountType: gc.accountType, Repositories: repos})
+}
+
 func (s *discoverySummary) addScanResult(target string, findings int) {
 	s.FindingsBeforeBaseline += findings
 	owner := targetOwner(target)
@@ -641,6 +711,15 @@ func (s *discoverySummary) addScanResult(target string, findings int) {
 
 func (s *discoverySummary) sortOrgs() {
 	slices.SortFunc(s.Orgs, func(a, b orgSummary) int { return strings.Compare(a.Name, b.Name) })
+}
+
+func (s *discoverySummary) sortInstallations() {
+	slices.SortFunc(s.Installations, func(a, b installationSummary) int {
+		if a.Account == b.Account {
+			return cmp.Compare(a.ID, b.ID)
+		}
+		return strings.Compare(a.Account, b.Account)
+	})
 }
 
 func repoOwner(repo githubapi.Repository) string {
