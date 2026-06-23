@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `242`
-- Direct catalog mappings: `237`
+- Total mappings: `244`
+- Direct catalog mappings: `239`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `86`
-- Partial mappings: `11`
-- Planned mappings: `145`
-- Untracked catalog directories: `633`
+- Implemented mappings: `102`
+- Partial mappings: `13`
+- Planned mappings: `129`
+- Untracked catalog directories: `631`
 
 Accounting notes:
 
@@ -68,6 +68,10 @@ Current built-in detector families:
 - Pinecone, LangSmith, Langfuse, ElevenLabs, xAI, Voiceflow
 - Harness, Zoho CRM, Intercom, Front, Segment, PostHog, LaunchDarkly
 - Coda, Monday.com, Postmark, Calendly
+- Fly.io, Cloudflare CA keys, Artifactory access/reference tokens
+- Azure App Configuration, Storage, Cosmos DB, SAS URLs, and Function key URLs
+- SpectralOps, Okta, urlscan.io
+- Atlassian, Jira, Salesforce token shapes, Twilio auth tokens, Mailjet basic auth
 - JWTs, private keys, SSH private keys
 - Basic-auth URLs and generic assigned secrets
 
