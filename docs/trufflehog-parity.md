@@ -13,9 +13,9 @@ Current tracked mapping summary:
 - Direct catalog mappings: `287`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `197`
+- Implemented mappings: `227`
 - Partial mappings: `18`
-- Planned mappings: `77`
+- Planned mappings: `47`
 - Untracked catalog directories: `583`
 
 Accounting notes:
@@ -91,6 +91,11 @@ Current built-in detector families:
 - Snowflake URLs, SQL Server connection strings, RabbitMQ URIs
 - NewsAPI, OpenWeather, Tomorrow.io, HERE, Polygon.io
 - Aiven, AbuseIPDB, SonarCloud, JumpCloud, Pipedrive, SparkPost
+- Vercel, Railway, Travis CI, BetterStack, Logz.io, Code Climate, Codacy, Coveralls
+- Customer.io, Trello, Help Scout, MailerLite, Mandrill, OneSignal
+- Copper, Capsule CRM, Apollo, Lemlist, GetResponse
+- AlienVault OTX, Censys, VPNAPI.io, IPQualityScore, IPstack, IPGeolocation, ZeroTier
+- Weatherstack, AccuWeather, Weatherbit, MapQuest
 - Dropbox, ReadMe, Rootly, Web3.Storage, Stripe PaymentIntent client secrets, Checkout.com
 - Aha and LarkSuite app secrets
 - JWTs, private keys, SSH private keys
