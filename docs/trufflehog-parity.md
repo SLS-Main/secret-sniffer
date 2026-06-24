@@ -13,9 +13,9 @@ Current tracked mapping summary:
 - Direct catalog mappings: `287`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `252`
-- Partial mappings: `18`
-- Planned mappings: `22`
+- Implemented mappings: `267`
+- Partial mappings: `21`
+- Planned mappings: `4`
 - Untracked catalog directories: `583`
 
 Accounting notes:
@@ -91,6 +91,10 @@ Current built-in detector families:
 - Snowflake URLs, SQL Server connection strings, RabbitMQ URIs
 - NewsAPI, OpenWeather, Tomorrow.io, HERE, Polygon.io
 - AWS session tokens and Alibaba Cloud access key IDs
+- Scaleway secret keys, GitHub App private keys, Datadog application keys, Braintree access tokens
+- GitHub/GitLab OAuth client secrets, Azure Entra client secrets, Twitch client secrets
+- Auth0 OAuth client secrets, OneLogin client secrets, LDAP credential URLs, LoginRadius API secrets, Stytch secrets
+- Detectify, Wiz client secrets, JupiterOne API tokens, Twitter/X bearer tokens, Twitch access tokens
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
