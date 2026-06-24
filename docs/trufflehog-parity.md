@@ -13,9 +13,9 @@ Current tracked mapping summary:
 - Direct catalog mappings: `287`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `227`
+- Implemented mappings: `252`
 - Partial mappings: `18`
-- Planned mappings: `47`
+- Planned mappings: `22`
 - Untracked catalog directories: `583`
 
 Accounting notes:
@@ -90,6 +90,11 @@ Current built-in detector families:
 - Auth0 management tokens, VirusTotal, Shodan, SecurityTrails
 - Snowflake URLs, SQL Server connection strings, RabbitMQ URIs
 - NewsAPI, OpenWeather, Tomorrow.io, HERE, Polygon.io
+- AWS session tokens and Alibaba Cloud access key IDs
+- IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
+- Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
+- FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
+- World Weather Online, Positionstack, Geocodio
 - Aiven, AbuseIPDB, SonarCloud, JumpCloud, Pipedrive, SparkPost
 - Vercel, Railway, Travis CI, BetterStack, Logz.io, Code Climate, Codacy, Coveralls
 - Customer.io, Trello, Help Scout, MailerLite, Mandrill, OneSignal
