@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `292`
-- Direct catalog mappings: `287`
+- Total mappings: `299`
+- Direct catalog mappings: `294`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `267`
-- Partial mappings: `21`
-- Planned mappings: `4`
-- Untracked catalog directories: `583`
+- Implemented mappings: `276`
+- Partial mappings: `22`
+- Planned mappings: `1`
+- Untracked catalog directories: `576`
 
 Accounting notes:
 
@@ -95,6 +95,8 @@ Current built-in detector families:
 - GitHub/GitLab OAuth client secrets, Azure Entra client secrets, Twitch client secrets
 - Auth0 OAuth client secrets, OneLogin client secrets, LDAP credential URLs, LoginRadius API secrets, Stytch secrets
 - Detectify, Wiz client secrets, JupiterOne API tokens, Twitter/X bearer tokens, Twitch access tokens
+- Webex access tokens, Coinbase CDP API keys, OpenVPN static keys
+- Fastly, Telnyx, Vagrant Cloud, Zeplin, Vultr, Bitly, Algolia admin keys
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
