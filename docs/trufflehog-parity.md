@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `284`
-- Direct catalog mappings: `279`
+- Total mappings: `292`
+- Direct catalog mappings: `287`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `183`
+- Implemented mappings: `197`
 - Partial mappings: `18`
-- Planned mappings: `83`
-- Untracked catalog directories: `591`
+- Planned mappings: `77`
+- Untracked catalog directories: `583`
 
 Accounting notes:
 
@@ -90,6 +90,9 @@ Current built-in detector families:
 - Auth0 management tokens, VirusTotal, Shodan, SecurityTrails
 - Snowflake URLs, SQL Server connection strings, RabbitMQ URIs
 - NewsAPI, OpenWeather, Tomorrow.io, HERE, Polygon.io
+- Aiven, AbuseIPDB, SonarCloud, JumpCloud, Pipedrive, SparkPost
+- Dropbox, ReadMe, Rootly, Web3.Storage, Stripe PaymentIntent client secrets, Checkout.com
+- Aha and LarkSuite app secrets
 - JWTs, private keys, SSH private keys
 - Basic-auth URLs and generic assigned secrets
 

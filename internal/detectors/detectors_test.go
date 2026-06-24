@@ -190,6 +190,20 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"tomorrowio-api-key", "tomorrow.io apikey=AbCdEfGhIjKlMnOpQrStUvWxYz123456", "AbCdEfGhIjKlMnOpQrStUvWxYz123456"},
 		{"here-api-key", "platform.here.com apiKey " + strings.Repeat("A", 43), strings.Repeat("A", 43)},
 		{"polygon-api-key", "POLYGON_API_KEY=" + strings.Repeat("A", 32), strings.Repeat("A", 32)},
+		{"aiven-token", "aiven_token=\"" + strings.Repeat("A", 372) + "\"", strings.Repeat("A", 372)},
+		{"abuseipdb-api-key", "abuseipdb_key=\"" + strings.Repeat("a", 80) + "\"", strings.Repeat("a", 80)},
+		{"sonarcloud-token", "SONAR_TOKEN=\"" + strings.Repeat("a", 40) + "\"", strings.Repeat("a", 40)},
+		{"jumpcloud-api-key", "jumpcloud_api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"pipedrive-api-token", "pipedrive_token=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"sparkpost-api-key", "sparkpost_api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"dropbox-token", "sl.u." + strings.Repeat("A", 140), "sl.u." + strings.Repeat("A", 140)},
+		{"readme-api-key", "rdme_" + strings.Repeat("a", 70), "rdme_" + strings.Repeat("a", 70)},
+		{"rootly-api-key", "rootly_" + strings.Repeat("a", 64), "rootly_" + strings.Repeat("a", 64)},
+		{"web3storage-token", "web3 " + "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ" + strings.Repeat("A", 120) + "." + strings.Repeat("B", 40), "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ" + strings.Repeat("A", 120) + "." + strings.Repeat("B", 40)},
+		{"stripe-payment-intent-client-secret", "pi_" + strings.Repeat("A", 24) + "_secret_" + strings.Repeat("B", 25), "pi_" + strings.Repeat("A", 24) + "_secret_" + strings.Repeat("B", 25)},
+		{"checkout-secret-key", "checkout sk_test_12345678-1234-1234-1234-123456789abc", "sk_test_12345678-1234-1234-1234-123456789abc"},
+		{"aha-api-key", "example.aha.io token=" + strings.Repeat("a", 64), strings.Repeat("a", 64)},
+		{"larksuite-app-secret", "larksuite app_id=cli_ABCDEFGHIJKLMNOP app_secret=" + strings.Repeat("A", 32), strings.Repeat("A", 32)},
 	}
 
 	for _, tc := range cases {
