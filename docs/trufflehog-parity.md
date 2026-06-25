@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `353`
-- Direct catalog mappings: `348`
+- Total mappings: `369`
+- Direct catalog mappings: `364`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `325`
+- Implemented mappings: `341`
 - Partial mappings: `27`
 - Planned mappings: `1`
-- Untracked catalog directories: `522`
+- Untracked catalog directories: `506`
 
 Accounting notes:
 
@@ -106,6 +106,8 @@ Current built-in detector families:
 - Less Annoying CRM, MeaningCloud, OpenUV, PandaScore, Paperform, ParseHub, PDFShift
 - People Data Labs, Plivo partial coverage, RapidAPI, ScraperAPI, Scrapestack, ScrapingBee
 - Serpstack, Shotstack, SignalWire partial coverage, TestingBot partial coverage
+- Abstract, Alchemy, Apify, APILayer, Bannerbear, Baremetrics, Beamer, Bitbar
+- BlazeMeter, ButterCMS, Canny, ChartMogul, Clearbit, Clockify, CloudConvert, Cloudmersive
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
