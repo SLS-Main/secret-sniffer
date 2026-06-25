@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `336`
-- Direct catalog mappings: `331`
+- Total mappings: `353`
+- Direct catalog mappings: `348`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `311`
-- Partial mappings: `24`
+- Implemented mappings: `325`
+- Partial mappings: `27`
 - Planned mappings: `1`
-- Untracked catalog directories: `539`
+- Untracked catalog directories: `522`
 
 Accounting notes:
 
@@ -103,6 +103,9 @@ Current built-in detector families:
 - Percy, Crowdin, PostageApp, Sendbird organization tokens
 - Checkly, Confluent partial coverage, DocuSign, GoCardless, Gumroad, HelloSign
 - Mailboxlayer, Mediastack, OpenCage, Packagecloud, Phrase, Semaphore, Scrutinizer CI, Sauce Labs partial coverage
+- Less Annoying CRM, MeaningCloud, OpenUV, PandaScore, Paperform, ParseHub, PDFShift
+- People Data Labs, Plivo partial coverage, RapidAPI, ScraperAPI, Scrapestack, ScrapingBee
+- Serpstack, Shotstack, SignalWire partial coverage, TestingBot partial coverage
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
