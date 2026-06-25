@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `310`
-- Direct catalog mappings: `305`
+- Total mappings: `322`
+- Direct catalog mappings: `317`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `287`
+- Implemented mappings: `299`
 - Partial mappings: `22`
 - Planned mappings: `1`
-- Untracked catalog directories: `565`
+- Untracked catalog directories: `553`
 
 Accounting notes:
 
@@ -99,6 +99,8 @@ Current built-in detector families:
 - Fastly, Telnyx, Vagrant Cloud, Zeplin, Vultr, Bitly, Algolia admin keys
 - Airbrake, Bugsnag, Infura, MessageBird, Pinata, Pushbullet, Sendbird
 - StormGlass, Todoist, Uploadcare
+- BrowserStack, Cloudsmith, Eventbrite, Harvest, Lokalise, MaxMind, Nylas, Pipedream
+- Percy, Crowdin, PostageApp, Sendbird organization tokens
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
