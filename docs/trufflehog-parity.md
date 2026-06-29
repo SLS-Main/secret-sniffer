@@ -11,14 +11,14 @@ TruffleHog is a project of Truffle Security. This project is not affiliated with
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `686`
-- Direct catalog mappings: `681`
+- Total mappings: `706`
+- Direct catalog mappings: `701`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `639`
+- Implemented mappings: `659`
 - Partial mappings: `46`
 - Planned mappings: `1`
-- Untracked catalog directories: `189`
+- Untracked catalog directories: `169`
 
 Accounting notes:
 
@@ -160,6 +160,9 @@ Current built-in detector families:
 - Float, Flowlu, FMFW, FormBucket, FormCraft, Form.io, Formsite, Foursquare partial coverage
 - Frame.io, FreshBooks, Fulcrum, FXMarket, Gengo, Geocodify, Geo.ipify, GetEmail
 - GetEmails, GetGeoAPI, GetGist, GetSandbox
+- Gitter, Glassnode, GoCanvas, GoDaddy, GoodDay, GraphCMS, GrooveHQ, GTmetrix
+- Guru, Gyazo, Happy Scribe, Hive, Hiveage, Holistic, Humanity, Hybiscus
+- HyperTrack, IBM Cloud user keys, Iconfinder, IEX APIs
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
