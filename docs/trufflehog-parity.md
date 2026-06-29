@@ -4,19 +4,21 @@ Snapshot source: `trufflesecurity/trufflehog` at `9b6b5326bfe25dbd856eccc8a8275e
 
 TruffleHog detector directories at snapshot: `870`.
 
-The full detector directory catalog is generated into `internal/parity/catalog.go` from the snapshot above.
+The detector directory identifier catalog is generated into `internal/parity/catalog.go` from the snapshot above.
+
+TruffleHog is a project of Truffle Security. This project is not affiliated with or endorsed by Truffle Security. The generated parity catalog contains only detector directory identifiers from the pinned snapshot for comparison and interoperability tracking. It does not include TruffleHog source code, detector regexes, verifier logic, or documentation text.
 
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `444`
-- Direct catalog mappings: `439`
+- Total mappings: `464`
+- Direct catalog mappings: `459`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `410`
-- Partial mappings: `33`
+- Implemented mappings: `426`
+- Partial mappings: `37`
 - Planned mappings: `1`
-- Untracked catalog directories: `431`
+- Untracked catalog directories: `411`
 
 Accounting notes:
 
@@ -25,7 +27,7 @@ Accounting notes:
 - `sub_detector_tracked` counts mapped IDs not present as top-level catalog directories, such as `github/v2`.
 - `duplicate_mappings` counts extra mapping rows for one catalog ID, such as separate `aws` access-key and secret-key coverage.
 
-This project is not trying to copy TruffleHog's discovery algorithm. Parity means comparable source coverage, provider detector coverage, verification coverage, output usability, and operational behavior on large servers.
+This project is not trying to copy TruffleHog's discovery algorithm or source code. Parity means comparable source coverage, provider detector coverage, verification coverage, output usability, and operational behavior on large servers.
 
 ## Current Implemented Coverage
 
@@ -64,14 +66,14 @@ Current built-in detector families:
 - Grafana, Sentry, Honeycomb, Opsgenie, Splunk Observability, Webex bot tokens
 - Hugging Face, Groq, Replicate
 - Airtable, Asana, ClickUp, Typeform, HubSpot, Mailchimp, Klaviyo
-- Nightfall, Endor Labs, TruffleHog Enterprise token shapes, Tines webhooks
+- Nightfall, Endor Labs, TruffleHog Enterprise credential formats, Tines webhooks
 - Pinecone, LangSmith, Langfuse, ElevenLabs, xAI, Voiceflow
 - Harness, Zoho CRM, Intercom, Front, Segment, PostHog, LaunchDarkly
 - Coda, Monday.com, Postmark, Calendly
 - Fly.io, Cloudflare CA keys, Artifactory access/reference tokens
 - Azure App Configuration, Storage, Cosmos DB, SAS URLs, and Function key URLs
 - SpectralOps, Okta, urlscan.io
-- Atlassian, Jira, Salesforce token shapes, Twilio auth tokens, Mailjet basic auth
+- Atlassian, Jira, Salesforce token formats, Twilio auth tokens, Mailjet basic auth
 - OpenAI admin, DeepSeek, Weights & Biases, AssemblyAI, Deepgram, Eden AI, MonkeyLearn
 - Contentful, Storyblok, Sanity, Webflow, Shortcut
 - Mapbox, LocationIQ, CoinAPI, Etherscan, BscScan, Guardian Open Platform
@@ -119,6 +121,10 @@ Current built-in detector families:
 - Clarifai, ClickSend SMS, Codemagic, Databox, Diffbot, Edamam partial coverage, Ethplorer
 - Face++ partial coverage, Geckoboard, Hasura, Holiday API, HTML2PDF, IP2Location, ipapi
 - IPInfoDB, Jotform, Keen.io, Languagelayer, LINE Notify, LinkPreview
+- Loggly, Mixpanel partial coverage, Mockaroo, Mux partial coverage, Nutritionix partial coverage
+- OANDA, Onfleet, PDFLayer, Pepipost, Pivotal Tracker, Pixabay, Podio
+- PubNub publish/subscribe keys, Pusher channel keys, Qualaroo, RAWG, RingCentral partial coverage
+- ScrapeOwl, Scrapfly
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer

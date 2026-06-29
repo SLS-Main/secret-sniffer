@@ -69,7 +69,7 @@ Partially implemented:
 
 ### Detector Coverage
 
-- Continue mapping the remaining TruffleHog catalog entries.
+- Continue mapping the remaining TruffleHog detector-directory identifiers.
 - Implement high-value planned detectors first: Azure, GCP service accounts, Slack webhooks, Discord webhooks, Grafana, Sentry, Hugging Face, Groq, Redis, Snowflake, Terraform Cloud, Vault, CircleCI, Buildkite, Snyk, Artifactory, NuGet, RubyGems.
 - Add stronger false-positive filters for generic assigned secrets.
 - Add detector-specific examples and tests for every built-in detector.
