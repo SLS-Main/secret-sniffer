@@ -11,14 +11,14 @@ TruffleHog is a project of Truffle Security. This project is not affiliated with
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `524`
-- Direct catalog mappings: `519`
+- Total mappings: `564`
+- Direct catalog mappings: `559`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `478`
+- Implemented mappings: `518`
 - Partial mappings: `45`
 - Planned mappings: `1`
-- Untracked catalog directories: `351`
+- Untracked catalog directories: `311`
 
 Accounting notes:
 
@@ -136,6 +136,12 @@ Current built-in detector families:
 - Tableau partial coverage, ThousandEyes, Ticketmaster, The Odds API, Thinkific, Ubidots
 - uClassify, UPC Database, UpLead, VBOUT, Veriphone, Walk Score, WebsitePulse
 - Whoxy, Wistia, Wit.ai
+- Ticket Tailor, TMetric, Teamgate, Teamwork Spaces, SignUpGenius, SpeechText.AI
+- Sirv, Siteleaf, Skrapp, SkyBiometry, SimplyNoted, Simvoly, Sinch Message
+- SSLMate, Statuspal, Storecove, Stormboard, Streak, Stripo, Sugester
+- Abyssale, Adafruit IO, Adobe IO, Aero Workflow, Agora, Airship, Alconost
+- Alegra, Aletheia, AllSports, Anypoint, Apacta, API2Cart, Apideck, Apifonica
+- APIMatic, APImetrics, Appointedd, AppOptics, AppSynergy
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
