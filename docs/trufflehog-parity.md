@@ -11,14 +11,14 @@ TruffleHog is a project of Truffle Security. This project is not affiliated with
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `604`
-- Direct catalog mappings: `599`
+- Total mappings: `645`
+- Direct catalog mappings: `640`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `558`
+- Implemented mappings: `599`
 - Partial mappings: `45`
 - Planned mappings: `1`
-- Untracked catalog directories: `271`
+- Untracked catalog directories: `230`
 
 Accounting notes:
 
@@ -148,6 +148,12 @@ Current built-in detector families:
 - Bulbul, BulkSMS, Caflou, CalorieNinjas, Campayn, Captain Data, Cashboard
 - Caspio, CentralStationCRM, CEX.IO, ChatBot, Chatfuel, Chec, Checkvist
 - Cicero, ClickHelp, Cliengo, Clientary, ClinchPad, Clockwork SMS
+- Avaza, Cloud Elements, Cloudimage, Cloudplan, Cloverly, Cloze, Clustdoc, Codequiry
+- Collect2, Column, Commerce.js, Commodities, CompanyHub, ConversionTools, Convier
+- Countrylayer, Currencycloud, Customer.guru, D7 Network, Dandelion, Dareboost
+- Data.gov, Demio, dfuse, Diggernaut, Disqus, Ditto, DNSCheck, Docparser, Documo
+- Dotdigital, Dovico, DronaHQ, Drone CI, Duply, Dynalist, Dyspatch
+- Eagle Eye Networks, Easy Insight, EcoStruxure IT, 8x8
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
