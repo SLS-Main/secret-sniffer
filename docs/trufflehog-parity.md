@@ -11,14 +11,14 @@ TruffleHog is a project of Truffle Security. This project is not affiliated with
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `564`
-- Direct catalog mappings: `559`
+- Total mappings: `584`
+- Direct catalog mappings: `579`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `518`
+- Implemented mappings: `538`
 - Partial mappings: `45`
 - Planned mappings: `1`
-- Untracked catalog directories: `311`
+- Untracked catalog directories: `291`
 
 Accounting notes:
 
@@ -142,6 +142,9 @@ Current built-in detector families:
 - Abyssale, Adafruit IO, Adobe IO, Aero Workflow, Agora, Airship, Alconost
 - Alegra, Aletheia, AllSports, Anypoint, Apacta, API2Cart, Apideck, Apifonica
 - APIMatic, APImetrics, Appointedd, AppOptics, AppSynergy
+- Apptivo, Artsy, Atera, Atlassian Data Center, AudD, Autodesk, Autopilot
+- Axonaut, AYLIEN, Beebole, BeSnappy, Billomat, Blitapp, Blogger, BombBomb
+- Boost Note, BorgBase, BuddyNS, Budibase, BugHerd
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
