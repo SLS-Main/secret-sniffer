@@ -555,3 +555,13 @@ Scan only likely secret-bearing files:
 - Rotate any verified or high-confidence credentials before broad disclosure.
 - Keep verification disabled unless you are authorized to contact provider APIs.
 - Prefer baselines for accepted legacy findings instead of suppressing detectors globally.
+
+## License
+
+This project is licensed under the **Do The Damn Job License 1.0**.
+
+You may use it personally, internally, commercially, in consulting, in incident response, in remediation, in forensics, in managed services, and as a feature inside a broader commercial product.
+
+You may not rebrand and resell it as your own dedicated secret scanner.
+
+See [LICENSE](./LICENSE.md) for details.
