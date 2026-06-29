@@ -11,14 +11,14 @@ TruffleHog is a project of Truffle Security. This project is not affiliated with
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `464`
-- Direct catalog mappings: `459`
+- Total mappings: `524`
+- Direct catalog mappings: `519`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `426`
-- Partial mappings: `37`
+- Implemented mappings: `478`
+- Partial mappings: `45`
 - Planned mappings: `1`
-- Untracked catalog directories: `411`
+- Untracked catalog directories: `351`
 
 Accounting notes:
 
@@ -125,6 +125,17 @@ Current built-in detector families:
 - OANDA, Onfleet, PDFLayer, Pepipost, Pivotal Tracker, Pixabay, Podio
 - PubNub publish/subscribe keys, Pusher channel keys, Qualaroo, RAWG, RingCentral partial coverage
 - ScrapeOwl, Scrapfly
+- ScreenshotAPI, Screenshotlayer, SelectPdf, Sheety, Shipday, Signable, Signaturit
+- Simplesat, SmartyStreets partial coverage, Snipcart, Spoonacular, SportsMonk
+- Spotify partial coverage, StatusCake, StockData, StoryChief, Strava partial coverage
+- Swiftype, Tatum, TaxJar
+- TextMagic, Tiingo, TimeCamp, TimezoneAPI, Toggl Track, TomTom, Wise/TransferWise
+- Unsplash, Userstack, Visual Crossing, Voicegain, WePay partial coverage, Yandex, Yelp
+- YNAB, ZenRows, Zenscrape, Zenserp, ZeroBounce, Zipcodebase
+- Bitfinex partial coverage, BitMEX partial coverage, KuCoin partial coverage, Smartsheet
+- Tableau partial coverage, ThousandEyes, Ticketmaster, The Odds API, Thinkific, Ubidots
+- uClassify, UPC Database, UpLead, VBOUT, Veriphone, Walk Score, WebsitePulse
+- Whoxy, Wistia, Wit.ai
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
