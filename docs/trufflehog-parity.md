@@ -11,14 +11,14 @@ TruffleHog is a project of Truffle Security. This project is not affiliated with
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `645`
-- Direct catalog mappings: `640`
+- Total mappings: `666`
+- Direct catalog mappings: `661`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `599`
+- Implemented mappings: `620`
 - Partial mappings: `45`
 - Planned mappings: `1`
-- Untracked catalog directories: `230`
+- Untracked catalog directories: `209`
 
 Accounting notes:
 
@@ -154,6 +154,9 @@ Current built-in detector families:
 - Data.gov, Demio, dfuse, Diggernaut, Disqus, Ditto, DNSCheck, Docparser, Documo
 - Dotdigital, Dovico, DronaHQ, Drone CI, Duply, Dynalist, Dyspatch
 - Eagle Eye Networks, Easy Insight, EcoStruxure IT, 8x8
+- Dwolla, EnableX, Enigma, Envoy, Eraser, Everhour, ExportSDK, Extractor API
+- Feedier, FetchRSS, Fibery, File.io, Finage, Findl, Flatio, Fleetbase, Flexport
+- Flickr, FlightAPI, FlightLabs, FlightStats
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
