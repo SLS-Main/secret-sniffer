@@ -9,14 +9,14 @@ The full detector directory catalog is generated into `internal/parity/catalog.g
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `403`
-- Direct catalog mappings: `398`
+- Total mappings: `424`
+- Direct catalog mappings: `419`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `373`
-- Partial mappings: `29`
+- Implemented mappings: `392`
+- Partial mappings: `31`
 - Planned mappings: `1`
-- Untracked catalog directories: `472`
+- Untracked catalog directories: `451`
 
 Accounting notes:
 
@@ -113,6 +113,9 @@ Current built-in detector families:
 - NeutrinoAPI partial coverage, Numverify, Omnisend, OwlBot, PandaDoc, PartnerStack, Pastebin
 - PayMongo, PhotoRoom, ProxyCrawl, Qase, Rebrandly, RepairShopr, Reply.io, Restpack
 - RocketReach, Route4Me, Salesflare
+- Adzuna partial coverage, AirVisual, Amadeus partial coverage, Ambee, Amplitude, APIFLASH
+- APITemplate, Appcues, AppFollow, Autoklose, Aviationstack, Ayrshare, BestTime
+- Brandfetch, Browshot, Calendarific, Carbon Interface, CraftMyPDF, CurrentsAPI, DeBounce, Detect Language
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
