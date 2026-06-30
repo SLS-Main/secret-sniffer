@@ -27,6 +27,7 @@ Implemented:
 - Detector inventory output with `--list-detectors`.
 - TruffleHog parity report with `--trufflehog-parity`.
 - Raw secrets in output by default for remediation workflows.
+- In-memory archive scanning for `zip`, `tar`, `tar.gz`, `tgz`, and `gz` with recursion and decompression limits.
 
 Partially implemented:
 
@@ -41,7 +42,7 @@ Partially implemented:
 1. Improve GitHub scanning resilience.
 2. Add detector batches from the parity table.
 3. Improve git history performance.
-4. Add archive/container/source expansion.
+4. Add container and package-artifact expansion.
 5. Add better reporting and remediation workflows.
 
 ## Planned Features
@@ -112,10 +113,9 @@ Partially implemented:
 
 ### Archive, Artifact, And Container Scanning
 
-- Scan zip, tar, tar.gz, and tgz archives.
 - Scan Docker/OCI image layers.
 - Scan package archives such as npm packages, wheels, jars, and gems.
-- Add recursion and decompression limits.
+- Expand archive support beyond standard-library formats only when it can be done safely without shelling out to external extractors by default.
 - Add binary string extraction for selected file types.
 
 ### Operations And Scale

@@ -1,15 +1,20 @@
 package scanner
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -31,6 +36,12 @@ type Config struct {
 	Include      []string
 	Exclude      []string
 	GitHubToken  string
+
+	ScanArchives         bool
+	MaxArchiveDepth      int
+	MaxArchiveEntries    int
+	MaxArchiveBytes      int64
+	MaxExpandedFileBytes int64
 }
 
 type Scanner struct {
@@ -125,7 +136,10 @@ func (s *Scanner) allowedPath(root, path string) bool {
 	if len(s.cfg.Include) > 0 && !matchAny(s.cfg.Include, rel, base) {
 		return false
 	}
-	defaultExcludes := []string{"*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.ico", "*.pdf", "*.zip", "*.tar", "*.gz", "*.7z", "*.exe", "*.dll", "*.so", "*.dylib"}
+	defaultExcludes := []string{"*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.ico", "*.pdf", "*.7z", "*.exe", "*.dll", "*.so", "*.dylib"}
+	if !s.cfg.ScanArchives {
+		defaultExcludes = append(defaultExcludes, "*.zip", "*.tar", "*.gz", "*.tgz")
+	}
 	if matchAny(defaultExcludes, rel, base) || matchAny(s.cfg.Exclude, rel, base) {
 		return false
 	}
@@ -142,8 +156,8 @@ func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Fi
 			defer wg.Done()
 			for path := range jobs {
 				b, err := os.ReadFile(path)
-				if err == nil && !isBinary(b) {
-					out <- s.scanBytes(path, "", b)
+				if err == nil {
+					out <- s.scanBlob(ctx, path, "", b, 0)
 				}
 			}
 		}()
@@ -276,8 +290,8 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 					continue
 				}
 				b, err := gitBlob(ctx, repo, o.hash, s.cfg.MaxFileBytes)
-				if err == nil && !isBinary(b) {
-					out <- s.scanBytes(o.path, o.hash, b)
+				if err == nil {
+					out <- s.scanBlob(ctx, o.path, o.hash, b, 0)
 				}
 			}
 		}()
@@ -336,6 +350,198 @@ func gitBlob(ctx context.Context, repo, hash string, max int64) ([]byte, error) 
 	}
 	cat := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "-p", hash)
 	return cat.Output()
+}
+
+func (s *Scanner) scanBlob(ctx context.Context, file, commit string, b []byte, depth int) []detectors.Finding {
+	if ctx.Err() != nil {
+		return nil
+	}
+	if s.cfg.ScanArchives && depth <= s.maxArchiveDepth() && archiveKind(file) != "" {
+		return s.scanArchiveBytes(ctx, file, commit, b, depth)
+	}
+	if isBinary(b) {
+		return nil
+	}
+	return s.scanBytes(file, commit, b)
+}
+
+func (s *Scanner) scanArchiveBytes(ctx context.Context, file, commit string, b []byte, depth int) []detectors.Finding {
+	switch archiveKind(file) {
+	case "zip":
+		return s.scanZip(ctx, file, commit, b, depth)
+	case "tar":
+		return s.scanTar(ctx, file, commit, bytes.NewReader(b), depth)
+	case "targz":
+		zr, err := gzip.NewReader(bytes.NewReader(b))
+		if err != nil {
+			return nil
+		}
+		defer zr.Close()
+		return s.scanTar(ctx, file, commit, zr, depth)
+	case "gz":
+		zr, err := gzip.NewReader(bytes.NewReader(b))
+		if err != nil {
+			return nil
+		}
+		defer zr.Close()
+		name := strings.TrimSuffix(file, ".gz")
+		if name == file {
+			name = file + "!/decompressed"
+		} else {
+			name = file + "!/" + path.Base(name)
+		}
+		entry, ok := readLimited(zr, s.maxExpandedFileBytes())
+		if !ok {
+			return nil
+		}
+		return s.scanBlob(ctx, name, commit, entry, depth+1)
+	}
+	return nil
+}
+
+func (s *Scanner) scanZip(ctx context.Context, file, commit string, b []byte, depth int) []detectors.Finding {
+	zr, err := zip.NewReader(bytes.NewReader(b), int64(len(b)))
+	if err != nil {
+		return nil
+	}
+	var findings []detectors.Finding
+	var expanded int64
+	entries := 0
+	for _, entry := range zr.File {
+		if ctx.Err() != nil || entries >= s.maxArchiveEntries() || expanded >= s.maxArchiveBytes() {
+			break
+		}
+		if entry.FileInfo().IsDir() {
+			continue
+		}
+		name, ok := safeArchivePath(entry.Name)
+		if !ok {
+			continue
+		}
+		if entry.UncompressedSize64 > uint64(s.maxExpandedFileBytes()) {
+			continue
+		}
+		r, err := entry.Open()
+		if err != nil {
+			continue
+		}
+		content, ok := readLimited(r, s.maxExpandedFileBytes())
+		_ = r.Close()
+		if !ok {
+			continue
+		}
+		if expanded+int64(len(content)) > s.maxArchiveBytes() {
+			break
+		}
+		expanded += int64(len(content))
+		entries++
+		findings = append(findings, s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)...)
+	}
+	return findings
+}
+
+func (s *Scanner) scanTar(ctx context.Context, file, commit string, r io.Reader, depth int) []detectors.Finding {
+	tr := tar.NewReader(r)
+	var findings []detectors.Finding
+	var expanded int64
+	entries := 0
+	for {
+		if ctx.Err() != nil || entries >= s.maxArchiveEntries() || expanded >= s.maxArchiveBytes() {
+			break
+		}
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break
+		}
+		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
+			continue
+		}
+		name, ok := safeArchivePath(h.Name)
+		if !ok || h.Size > s.maxExpandedFileBytes() {
+			continue
+		}
+		content, ok := readLimited(tr, s.maxExpandedFileBytes())
+		if !ok {
+			continue
+		}
+		if expanded+int64(len(content)) > s.maxArchiveBytes() {
+			break
+		}
+		expanded += int64(len(content))
+		entries++
+		findings = append(findings, s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)...)
+	}
+	return findings
+}
+
+func archiveKind(file string) string {
+	file = strings.ToLower(file)
+	switch {
+	case strings.HasSuffix(file, ".zip"):
+		return "zip"
+	case strings.HasSuffix(file, ".tar"):
+		return "tar"
+	case strings.HasSuffix(file, ".tar.gz") || strings.HasSuffix(file, ".tgz"):
+		return "targz"
+	case strings.HasSuffix(file, ".gz"):
+		return "gz"
+	default:
+		return ""
+	}
+}
+
+func safeArchivePath(name string) (string, bool) {
+	name = strings.ReplaceAll(name, "\\", "/")
+	if name == "" || strings.HasPrefix(name, "/") {
+		return "", false
+	}
+	clean := path.Clean(name)
+	if clean == "." || strings.HasPrefix(clean, "../") || clean == ".." {
+		return "", false
+	}
+	return clean, true
+}
+
+func readLimited(r io.Reader, max int64) ([]byte, bool) {
+	b, err := io.ReadAll(io.LimitReader(r, max+1))
+	if err != nil || int64(len(b)) > max {
+		return nil, false
+	}
+	return b, true
+}
+
+func (s *Scanner) maxArchiveDepth() int {
+	if s.cfg.MaxArchiveDepth <= 0 {
+		return 2
+	}
+	return s.cfg.MaxArchiveDepth
+}
+
+func (s *Scanner) maxArchiveEntries() int {
+	if s.cfg.MaxArchiveEntries <= 0 {
+		return 10000
+	}
+	return s.cfg.MaxArchiveEntries
+}
+
+func (s *Scanner) maxArchiveBytes() int64 {
+	if s.cfg.MaxArchiveBytes <= 0 {
+		return 250 * 1024 * 1024
+	}
+	return s.cfg.MaxArchiveBytes
+}
+
+func (s *Scanner) maxExpandedFileBytes() int64 {
+	if s.cfg.MaxExpandedFileBytes > 0 {
+		return s.cfg.MaxExpandedFileBytes
+	}
+	if s.cfg.MaxFileBytes > 0 {
+		return s.cfg.MaxFileBytes
+	}
+	return 25 * 1024 * 1024
 }
 
 func isGitRepo(path string) bool { _, err := os.Stat(filepath.Join(path, ".git")); return err == nil }

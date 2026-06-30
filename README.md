@@ -6,6 +6,8 @@ High-concurrency GitHub and filesystem secret scanner written in Go.
 
 During scans, likely base64 and base64url substrings are decoded and scanned with the same detector registry. Decoded findings are reported against the source file and source line/column of the encoded blob while preserving the decoded secret value for remediation.
 
+Archive scanning is available with `--scan-archives` for `.zip`, `.tar`, `.tar.gz`, `.tgz`, and single-file `.gz`. Archive contents are expanded in memory with safety limits, never written to disk, and findings are reported with virtual paths such as `backup.zip!/config/.env`.
+
 This project does not use TruffleHog's discovery algorithm. The scanner is detector-first and is being built toward TruffleHog feature parity through an explicit parity map. Current tracked parity covers 875 mappings, including 807 implemented mappings from the pinned detector catalog snapshot.
 
 ## Build
@@ -65,6 +67,11 @@ GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-histor
 --target              Local file, local directory, or GitHub repo URL. Default: .
 --workers             Concurrent scanner workers. Default: runtime CPU count.
 --max-file-bytes      Maximum file/blob size to scan. Default: 26214400.
+--scan-archives       Scan supported archives in memory: zip, tar, tar.gz, tgz, gz.
+--max-archive-depth   Maximum nested archive depth. Default: 2.
+--max-archive-entries Maximum entries to inspect per archive. Default: 10000.
+--max-archive-bytes   Maximum expanded bytes to inspect per archive. Default: 262144000.
+--max-expanded-file-bytes  Maximum decompressed archive entry size to scan. Default: 26214400.
 --git-history         Scan every reachable git blob in addition to the worktree.
 --verify              Attempt live provider verification for supported detectors.
 --format              Output format: human, json, jsonl, sarif.
@@ -181,6 +188,18 @@ Recommended defaults for broad repository scans:
   --exclude 'node_modules/*,vendor/*,.cache/*,dist/*,build/*' \
   --format jsonl \
   > findings.jsonl
+```
+
+Scan supported archives in the worktree and git history:
+
+```bash
+./secret-sniffer \
+  --target /data/repo \
+  --git-history \
+  --scan-archives \
+  --max-archive-depth 2 \
+  --workers 32 \
+  --format jsonl
 ```
 
 ## GitHub App, Organization, And Enterprise Scanning
