@@ -334,6 +334,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Smartlead | Outbound email automation | `api.smartlead.ai`, API key, client secret | Provider host plus API/client-secret labels | Implemented SecretSniffer-only |
 | Salesforce Pardot | Marketing automation | `pi.pardot.com`, client secret, refresh token | Pardot host/context plus OAuth secret labels | Implemented SecretSniffer-only beyond generic Salesforce mappings |
 | Front | Shared inbox and customer operations | `api2.frontapp.com`, API token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
+| incident.io | Incident management | `api.incident.io`, API key, bearer token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| FireHydrant | Incident management and service catalog | `api.firehydrant.io`, service token, API key | Provider host plus API/service-token labels | Implemented SecretSniffer-only |
+| Squadcast | Incident response and on-call | `api.squadcast.com`, API token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| ilert | Alerting and on-call | `api.ilert.com`, API key/token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| xMatters | Incident automation | `api.xmatters.com`, API token, password secret | Provider host plus API/token/password labels | Implemented SecretSniffer-only |
+| Semgrep AppSec Platform | SAST and supply-chain security | `semgrep.dev`, app token, API token | Provider context plus app/API token labels | Implemented SecretSniffer-only |
+| Socket.dev | Dependency and supply-chain security | `api.socket.dev`, API key | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
+| Aikido Security | AppSec and cloud security | `app.aikido.dev`, API token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
+| Infisical | Secrets management | `app.infisical.com`, service token, client secret | Provider host plus service/access-token labels | Implemented SecretSniffer-only |
+| Cronitor | Monitoring and cron observability | `cronitor.io`, API key, telemetry key | Provider host plus API/telemetry key labels | Implemented SecretSniffer-only |
 
 ## Explicit Differences From TruffleHog
 
