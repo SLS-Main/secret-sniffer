@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -140,7 +141,7 @@ func (c *Client) InstallationToken(ctx context.Context, installationID int64) (I
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return InstallationToken{}, fmt.Errorf("github api %s returned %s", endpoint, resp.Status)
+		return InstallationToken{}, githubAPIError(endpoint, resp)
 	}
 	var body struct {
 		Token     string    `json:"token"`
@@ -313,12 +314,46 @@ func (c *Client) get(ctx context.Context, endpoint string, v any) (string, error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "", fmt.Errorf("github api %s returned %s", endpoint, resp.Status)
+		return "", githubAPIError(endpoint, resp)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
 		return "", err
 	}
 	return resp.Header.Get("Link"), nil
+}
+
+func githubAPIError(endpoint string, resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	message := strings.TrimSpace(string(body))
+	if len(body) > 0 {
+		var apiBody struct {
+			Message          string `json:"message"`
+			DocumentationURL string `json:"documentation_url"`
+		}
+		if err := json.Unmarshal(body, &apiBody); err == nil {
+			parts := []string{}
+			if apiBody.Message != "" {
+				parts = append(parts, apiBody.Message)
+			}
+			if apiBody.DocumentationURL != "" {
+				parts = append(parts, "docs="+apiBody.DocumentationURL)
+			}
+			if len(parts) > 0 {
+				message = strings.Join(parts, "; ")
+			}
+		}
+	}
+	requestID := resp.Header.Get("X-GitHub-Request-Id")
+	if message == "" && requestID == "" {
+		return fmt.Errorf("github api %s returned %s", endpoint, resp.Status)
+	}
+	if requestID == "" {
+		return fmt.Errorf("github api %s returned %s: %s", endpoint, resp.Status, message)
+	}
+	if message == "" {
+		return fmt.Errorf("github api %s returned %s (request_id=%s)", endpoint, resp.Status, requestID)
+	}
+	return fmt.Errorf("github api %s returned %s: %s (request_id=%s)", endpoint, resp.Status, message, requestID)
 }
 
 func nextLink(linkHeader string) string {

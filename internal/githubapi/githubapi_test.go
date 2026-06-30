@@ -76,3 +76,28 @@ func TestInstallationForOrg(t *testing.T) {
 		t.Fatalf("unexpected installation ID: %d", installation.ID)
 	}
 }
+
+func TestGitHubAPIErrorIncludesMessageAndRequestID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-GitHub-Request-Id", "ABC1:DEF2:123")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"message":           "Resource not accessible by integration",
+			"documentation_url": "https://docs.github.com/rest/apps/apps#get-an-organization-installation-for-the-authenticated-app",
+		})
+	}))
+	defer server.Close()
+
+	client := New("app-jwt")
+	client.baseURL = server.URL
+	_, err := client.InstallationForOrg(t.Context(), "acme")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	got := err.Error()
+	for _, want := range []string{"403 Forbidden", "Resource not accessible by integration", "request_id=ABC1:DEF2:123", "docs=https://docs.github.com"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in %q", want, got)
+		}
+	}
+}
