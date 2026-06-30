@@ -356,6 +356,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Deel | HR/payroll and contractor management | `api.deel.com`, API token | Provider API host plus API/access-token labels | Implemented SecretSniffer-only |
 | Gusto | Payroll and benefits | `api.gusto.com`, API token, client secret | Provider API host plus API/OAuth secret labels | Implemented SecretSniffer-only |
 | Workday | HRIS and finance | `workday.com`, client secret, refresh token | Workday host/context plus OAuth secret labels | Implemented SecretSniffer-only |
+| Canvas / Instructure | Learning management system | `canvas.instructure.com`, access token | Provider host plus access/API token labels | Implemented SecretSniffer-only |
+| Blackboard | Learning management system | `learn.blackboard.com`, REST/client secret | Provider host plus REST/client secret labels | Implemented SecretSniffer-only |
+| Moodle | Learning management system | `wstoken`, Moodle webservice endpoint | Moodle/webservice context plus token labels | Implemented SecretSniffer-only |
+| Brightspace / D2L | Learning management system | `auth.brightspace.com`, client secret | Provider host plus OAuth secret labels | Implemented SecretSniffer-only |
+| Schoology | Learning management system | `api.schoology.com`, consumer/API secret | Provider host plus consumer/API secret labels | Implemented SecretSniffer-only |
+| Teachable | Online course platform | `developers.teachable.com`, API key/token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
+| Kajabi | Online course and creator platform | `api.kajabi.com`, API key/token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| LearnWorlds | Online course platform | `api.learnworlds.com`, API key, client secret | Provider host plus API/client-secret labels | Implemented SecretSniffer-only |
+| TalentLMS | Learning management system | `talentlms.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Docebo | Enterprise learning platform | `api.docebo.com`, access token, client secret | Provider host plus API/OAuth token labels | Implemented SecretSniffer-only |
 
 ## Explicit Differences From TruffleHog
 
