@@ -6,7 +6,7 @@ High-concurrency GitHub and filesystem secret scanner written in Go.
 
 During scans, likely base64 and base64url substrings are decoded and scanned with the same detector registry. Decoded findings are reported against the source file and source line/column of the encoded blob while preserving the decoded secret value for remediation.
 
-This project does not use TruffleHog's discovery algorithm. The scanner is detector-first and is being built toward TruffleHog feature parity through an explicit parity map. Current tracked parity covers 871 mappings, including 806 implemented mappings from the pinned detector catalog snapshot.
+This project does not use TruffleHog's discovery algorithm. The scanner is detector-first and is being built toward TruffleHog feature parity through an explicit parity map. Current tracked parity covers 875 mappings, including 807 implemented mappings from the pinned detector catalog snapshot.
 
 ## Build
 

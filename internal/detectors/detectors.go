@@ -161,6 +161,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("mongodb-uri", "MongoDB Connection URI", "critical", []string{"mongodb://", "mongodb+srv://"}, `\b(mongodb(?:\+srv)?://[^\s'\"]+:[^\s'\"]+@[^\s'\"]+)`, 1, nil),
 		NewRegex("postgres-uri", "PostgreSQL Connection URI", "critical", []string{"postgres://", "postgresql://"}, `\b(postgres(?:ql)?://[^\s'\"]+:[^\s'\"]+@[^\s'\"]+)`, 1, nil),
 		NewRegex("mysql-uri", "MySQL Connection URI", "critical", []string{"mysql://"}, `\b(mysql://[^\s'\"]+:[^\s'\"]+@[^\s'\"]+)`, 1, nil),
+		NewRegex("ftp-credential-url", "FTP Credential URL", "critical", []string{"ftp://", "ftps://", "sftp://"}, `\b((?:s?ftp|ftps)://[^:\s'\"/@]{1,120}:[^@\s'\"/]{8,120}@[^\s'\"<>]+)`, 1, nil),
 		NewRegex("shopify-token", "Shopify Token", "high", []string{"shpat_", "shpca_", "shppa_", "shpss_"}, `\b(shp(?:at|ca|pa|ss)_[A-Za-z0-9]{32})\b`, 1, nil),
 		NewRegex("shopify-oauth-client-secret", "Shopify OAuth Client Secret", "critical", []string{"shopify", "myshopify.com", "shopify_app_secret"}, `(?i)\b(?:shopify|myshopify\.com|shopify[_-]?app[_-]?secret)\b[\s\S]{0,240}\b(?:client[_-]?secret|app[_-]?secret|oauth[_-]?secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._~/-]{32,128})\b`, 1, nil),
 		NewRegex("square-token", "Square Token", "critical", []string{"sq0atp-", "sq0csp-"}, `\b(sq0(?:atp|csp)-[A-Za-z0-9_-]{22,60})\b`, 1, nil),

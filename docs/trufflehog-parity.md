@@ -11,14 +11,14 @@ TruffleHog is a project of Truffle Security. This project is not affiliated with
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `871`
-- Direct catalog mappings: `866`
+- Total mappings: `875`
+- Direct catalog mappings: `870`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `806`
-- Partial mappings: `64`
-- Planned mappings: `1`
-- Untracked catalog directories: `4`
+- Implemented mappings: `807`
+- Partial mappings: `66`
+- Planned mappings: `2`
+- Untracked catalog directories: `0`
 
 Accounting notes:
 
@@ -190,6 +190,7 @@ Current built-in detector families:
 - Azure API Management partial coverage, Azure Direct Management partial coverage, Bing subscription keys
 - Box and Box OAuth partial coverage using Box JWT/OAuth config context, Gemini partial coverage, Portainer
 - Shopify OAuth partial coverage, Shutterstock OAuth partial coverage
+- FTP/FTPS/SFTP credential URLs, plus host/user partial coverage only inside credentialed URLs
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer

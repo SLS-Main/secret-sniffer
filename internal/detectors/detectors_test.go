@@ -150,6 +150,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"planetscale-db-password", "pscale_pw_" + strings.Repeat("A", 43), "pscale_pw_" + strings.Repeat("A", 43)},
 		{"databricks-token", "databricks dapi" + strings.Repeat("a", 32), "dapi" + strings.Repeat("a", 32)},
 		{"portainer-token", "portainertoken=ptr_" + strings.Repeat("A", 32), "ptr_" + strings.Repeat("A", 32)},
+		{"ftp-credential-url", "sftp://deploy:Sup3rSecretPass@sftp.example.com/releases", "sftp://deploy:Sup3rSecretPass@sftp.example.com/releases"},
 		{"box-client-secret", `{"boxAppSettings":{"clientID":"abc","clientSecret":"` + strings.Repeat("A", 48) + `"}}`, strings.Repeat("A", 48)},
 		{"shopify-oauth-client-secret", "shopify oauth client_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"aws-appsync-api-key", "https://abcdefghijklmnopqrstuvwxyz.appsync-api.us-east-1.amazonaws.com/graphql api_key=da2-abcdefghijklmnopqrstuvwxyz", "da2-abcdefghijklmnopqrstuvwxyz"},
