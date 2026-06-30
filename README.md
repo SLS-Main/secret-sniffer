@@ -560,7 +560,7 @@ The parity report includes:
 
 The parity report uses TruffleHog detector directory identifiers for compatibility accounting only. It does not include TruffleHog source code, detector regexes, verifier logic, or documentation text.
 
-Detailed parity notes live in `docs/trufflehog-parity.md`.
+Detailed parity notes live in `docs/trufflehog-parity.md`, including the tracked SecretSniffer-only detector backlog and explicit differences from TruffleHog.
 
 The implementation roadmap lives in `docs/roadmap.md`.
 
