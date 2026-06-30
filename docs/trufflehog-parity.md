@@ -11,14 +11,14 @@ TruffleHog is a project of Truffle Security. This project is not affiliated with
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `806`
-- Direct catalog mappings: `801`
+- Total mappings: `826`
+- Direct catalog mappings: `821`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `752`
-- Partial mappings: `53`
+- Implemented mappings: `771`
+- Partial mappings: `54`
 - Planned mappings: `1`
-- Untracked catalog directories: `69`
+- Untracked catalog directories: `49`
 
 Accounting notes:
 
@@ -178,6 +178,9 @@ Current built-in detector families:
 - Privacy.com, ProdPad, Prospect CRM, Protocols.io, PureStake, Qubole, Ramp, Raven
 - ReachMail, Really Simple Systems, Refiner, Rentman, Request Finance, Rev.ai
 - Revamp CRM, RiteKit, Roaring, Robinhood Crypto partial coverage, Rownd, Runrun.it
+- SalesCookie, Salesmate, SatisMeter project/write keys, Scalr, ScraperBox, ScrapingAnt
+- SERPHouse, SherpaDesk, Shutterstock, SigOpt, SimFin, Square app partial coverage
+- Squarespace, Stitch Data, Supernotes, Survey Anyplace, Surveybot, SurveySparrow, Survicate
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
