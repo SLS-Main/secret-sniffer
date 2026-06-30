@@ -235,16 +235,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 
 | Provider | Use case | Credential context | Detection approach | TruffleHog difference |
 | --- | --- | --- | --- | --- |
-| Sportradar | Sports data and sportsbook feeds | `x-api-key`, `api.sportradar.com`, sports API paths | Provider host plus API-key label and 24/40-char key candidates | Net-new candidate |
-| The Odds API | Sportsbook odds aggregation | `api.the-odds-api.com`, `apiKey`, `/v4/sports` | Host/query-param context; avoid generic `apiKey` without host | Net-new candidate |
-| Sportmonks | Sports data and predictions | `api.sportmonks.com`, `api_token`, football API paths | Provider host plus `api_token` label | Net-new candidate |
-| API-FOOTBALL / API-Sports | Sports and odds data | `v3.football.api-sports.io`, `x-apisports-key` | Exact host/header context; RapidAPI-only keys should stay generic/partial | Net-new candidate |
+| Sportradar | Sports data and sportsbook feeds | `x-api-key`, `api.sportradar.com`, sports API paths | Provider host plus API-key label and 24/40-char key candidates | Implemented SecretSniffer-only |
+| The Odds API | Sportsbook odds aggregation | `api.the-odds-api.com`, `apiKey`, `/v4/sports` | Host/query-param context; avoid generic `apiKey` without host | Existing coverage |
+| Sportmonks | Sports data and predictions | `api.sportmonks.com`, `api_token`, football API paths | Provider host plus `api_token` label | Existing coverage |
+| API-FOOTBALL / API-Sports | Sports and odds data | `v3.football.api-sports.io`, `x-apisports-key` | Exact host/header context; RapidAPI-only keys should stay generic/partial | Implemented SecretSniffer-only |
 | PandaScore | Esports fixtures and odds | `api.pandascore.co`, bearer token, `token` query param | Provider host plus auth/token label and esports path context | Already covered; improve with provider-host context if needed |
-| DATA.BET | Sportsbook platform and odds feed | `feed.int.databet.cloud`, widget secret, JWT signing secret, client cert/key | Provider host plus widget secret labels or cert/private-key context | Net-new candidate |
-| Betfair | Betting exchange and trading bots | `api.betfair.com/exchange`, `X-Application`, `X-Authentication` | Require Betfair endpoint plus app/session header context | Net-new candidate |
-| OddsJam | Odds and arbitrage analytics | `api.oddsjam.com`, `OddsJam` API key | Provider host plus key/token label | Net-new candidate |
-| OpticOdds | Odds feed and sportsbook market data | `api.opticodds.com`, `OpticOdds` API key | Provider host plus key/token label | Net-new candidate |
-| GeoComply / GeoGuard | Gambling geolocation compliance | SDK/license credentials, `geocomply`, `geoguard` | Provider SDK/config context only; no generic license-key matching | Net-new candidate |
+| DATA.BET | Sportsbook platform and odds feed | `feed.int.databet.cloud`, widget secret, JWT signing secret, client cert/key | Provider host plus widget secret labels or cert/private-key context | Implemented SecretSniffer-only |
+| Betfair | Betting exchange and trading bots | `api.betfair.com/exchange`, `X-Application`, `X-Authentication` | Require Betfair endpoint plus app/session header context | Implemented SecretSniffer-only |
+| OddsJam | Odds and arbitrage analytics | `api.oddsjam.com`, `OddsJam` API key | Provider host plus key/token label | Implemented SecretSniffer-only |
+| OpticOdds | Odds feed and sportsbook market data | `api.opticodds.com`, `OpticOdds` API key | Provider host plus key/token label | Implemented SecretSniffer-only |
+| GeoComply / GeoGuard | Gambling geolocation compliance | SDK/license credentials, `geocomply`, `geoguard` | Provider SDK/config context only; no generic license-key matching | Implemented SecretSniffer-only |
 
 ### Marketing, Adtech, CRM, And Attribution
 
@@ -255,14 +255,14 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | ActiveCampaign | Email and CRM automation | `ACTIVECAMPAIGN_API_KEY`, `Api-Token`, `*.api-us1.com/api/3` | Account URL plus `Api-Token` or exact env labels | Implemented SecretSniffer-only |
 | HubSpot private app tokens | CRM and marketing automation | `pat-<region>-...`, `HUBSPOT_ACCESS_TOKEN`, `api.hubapi.com` | Distinguish private app PATs from legacy `hapikey` | Existing coverage; improve private-app specificity |
 | Marketo | Marketing automation | `MARKETO_CLIENT_SECRET`, `mktorest.com`, OAuth token endpoint | Provider host plus `client_secret`; pair with client ID when possible | Implemented SecretSniffer-only |
-| Salesforce Marketing Cloud / Pardot | Enterprise marketing automation | `auth.marketingcloudapis.com`, `SFMC_CLIENT_SECRET`, `PARDOT_CLIENT_SECRET` | Provider-specific OAuth client-secret context | Net-new candidate beyond generic Salesforce mappings |
-| Google Ads | Paid search ads | `GOOGLE_ADS_DEVELOPER_TOKEN`, `google-ads.yaml`, `developer-token` | Exact config/header context; avoid generic OAuth-only matches | Net-new candidate beyond Google OAuth |
+| Salesforce Marketing Cloud / Pardot | Enterprise marketing automation | `auth.marketingcloudapis.com`, `SFMC_CLIENT_SECRET`, `PARDOT_CLIENT_SECRET` | Provider-specific OAuth client-secret context | Implemented SecretSniffer-only beyond generic Salesforce mappings |
+| Google Ads | Paid search ads | `GOOGLE_ADS_DEVELOPER_TOKEN`, `google-ads.yaml`, `developer-token` | Exact config/header context; avoid generic OAuth-only matches | Implemented SecretSniffer-only beyond Google OAuth |
 | TikTok Business API | Paid social ads and conversions | `business-api.tiktok.com`, `Access-Token`, app secret | Provider host plus exact header/secret labels | Implemented SecretSniffer-only |
 | LinkedIn Marketing API | B2B ads and integrations | `api.linkedin.com/rest`, `Linkedin-Version`, OAuth client secret | Provider host plus OAuth labels | Implemented SecretSniffer-only |
-| Branch | Mobile attribution and deep links | `branch_key`, `branch_secret`, `api2.branch.io` | Prefer key+secret pair correlation; branch key alone is lower severity | Net-new candidate |
-| AppsFlyer | Mobile attribution | `APPSFLYER_API_TOKEN`, `api.appsflyer.com`, SDK config | API token context; avoid app IDs alone | Net-new candidate |
-| Adjust | Mobile attribution | `ADJUST_API_TOKEN`, `Authorization: Token`, `api.adjust.com` | Provider host plus auth token label | Net-new candidate |
-| Attentive | SMS marketing | `api.attentivemobile.com`, API key, access token, signing secret | Provider host plus exact auth/signing labels | Net-new candidate |
+| Branch | Mobile attribution and deep links | `branch_key`, `branch_secret`, `api2.branch.io` | Prefer key+secret pair correlation; branch key alone is lower severity | Implemented SecretSniffer-only |
+| AppsFlyer | Mobile attribution | `APPSFLYER_API_TOKEN`, `api.appsflyer.com`, SDK config | API token context; avoid app IDs alone | Implemented SecretSniffer-only |
+| Adjust | Mobile attribution | `ADJUST_API_TOKEN`, `Authorization: Token`, `api.adjust.com` | Provider host plus auth token label | Implemented SecretSniffer-only |
+| Attentive | SMS marketing | `api.attentivemobile.com`, API key, access token, signing secret | Provider host plus exact auth/signing labels | Implemented SecretSniffer-only |
 
 ### Financial Institutions, Fintech, Payments, KYC, And Crypto
 
@@ -275,23 +275,23 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Lithic | Card issuing and virtual cards | `LITHIC_API_KEY`, `api.lithic.com` | Provider host plus bearer/API-key label | Implemented SecretSniffer-only |
 | Marqeta | Card issuing | `application_token`, `admin_access_token`, `sandbox-api.marqeta.com` | Require Marqeta context and app/admin token pair | Implemented SecretSniffer-only |
 | Adyen | Payments, issuing, acquiring | `ADYEN_API_KEY`, `ADYEN_HMAC_KEY`, `ws_*@Company.*` | Provider context plus API/HMAC labels or documented username shape | Implemented SecretSniffer-only |
-| Alloy | KYC/KYB and fraud workflows | `ALLOY_API_KEY`, `ALLOY_API_SECRET`, `developer.alloy.com` | Provider host plus API key/secret labels | Net-new candidate |
+| Alloy | KYC/KYB and fraud workflows | `ALLOY_API_KEY`, `ALLOY_API_SECRET`, `developer.alloy.com` | Provider host plus API key/secret labels | Implemented SecretSniffer-only |
 | Persona | KYC/KYB identity verification | `PERSONA_API_KEY`, `PERSONA_WEBHOOK_SECRET`, `api.withpersona.com` | Provider host plus bearer/webhook labels | Implemented SecretSniffer-only |
 | Onfido / Entrust IDV | KYC and document verification | `api_live.`, `api_sandbox.`, regional token prefixes | Distinct prefixed token plus optional provider host/header context | Implemented SecretSniffer-only |
 | Sumsub | KYC/KYB, AML, travel rule | `X-App-Token`, `X-App-Access-Sig`, `api.sumsub.com` | Exact headers plus provider context; pair app token and secret when possible | Implemented SecretSniffer-only |
-| Socure | KYC and fraud | `SOCURE_API_KEY`, `api.socure.com`, `X-API-Key` | Provider host plus exact key label/header | Net-new candidate |
-| ComplyAdvantage | AML and sanctions screening | `COMPLYADVANTAGE_API_KEY`, `api.complyadvantage.com` | Provider host plus exact env label | Net-new candidate |
-| Chainalysis | Crypto KYT and sanctions | `CHAINALYSIS_API_KEY`, `api.chainalysis.com` | Provider host plus API-key label | Net-new candidate |
-| TRM Labs | Crypto AML/KYT | `TRM_LABS_API_KEY`, `api.trmlabs.com` | Provider host plus key/secret label | Net-new candidate |
+| Socure | KYC and fraud | `SOCURE_API_KEY`, `api.socure.com`, `X-API-Key` | Provider host plus exact key label/header | Implemented SecretSniffer-only |
+| ComplyAdvantage | AML and sanctions screening | `COMPLYADVANTAGE_API_KEY`, `api.complyadvantage.com` | Provider host plus exact env label | Implemented SecretSniffer-only |
+| Chainalysis | Crypto KYT and sanctions | `CHAINALYSIS_API_KEY`, `api.chainalysis.com` | Provider host plus API-key label | Implemented SecretSniffer-only |
+| TRM Labs | Crypto AML/KYT | `TRM_LABS_API_KEY`, `api.trmlabs.com` | Provider host plus key/secret label | Implemented SecretSniffer-only |
 | Fireblocks | Crypto custody and treasury | `FIREBLOCKS_API_KEY`, `fireblocks_secret.key`, private key PEM | Fireblocks context plus UUID-like API key or private-key filename/context | Implemented SecretSniffer-only |
-| BitGo | Crypto custody and wallets | `BITGO_ACCESS_TOKEN`, `app.bitgo.com`, `test.bitgo.com` | Provider host/SDK context plus bearer token label | Net-new candidate |
-| Circle | Stablecoin payments and wallets | `CIRCLE_API_KEY`, `api.circle.com`, `api-sandbox.circle.com` | Provider host plus bearer/API-key labels | Net-new candidate |
+| BitGo | Crypto custody and wallets | `BITGO_ACCESS_TOKEN`, `app.bitgo.com`, `test.bitgo.com` | Provider host/SDK context plus bearer token label | Implemented SecretSniffer-only |
+| Circle | Stablecoin payments and wallets | `CIRCLE_API_KEY`, `api.circle.com`, `api-sandbox.circle.com` | Provider host plus bearer/API-key labels | Implemented SecretSniffer-only |
 | Alpaca | Brokerage and trading | `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `paper-api.alpaca.markets` | Exact env/header pair correlation | Implemented SecretSniffer-only |
-| DriveWealth | Brokerage APIs | `DRIVEWEALTH_CLIENT_SECRET`, `bo-api.drivewealth` | Provider host plus OAuth/client-secret context | Net-new candidate |
-| Teller | Open banking | mTLS certificate/private key, `TELLER_SIGNING_SECRET`, `api.teller.io` | Teller context plus PEM/signing labels; avoid generic private-key duplication | Net-new candidate |
-| TrueLayer | Open banking and payments | `TRUELAYER_CLIENT_SECRET`, `TRUELAYER_SIGNING_KEY`, `auth.truelayer.com` | Provider host plus client/signing secret labels | Net-new candidate |
-| Yapily | Open banking | `YAPILY_APPLICATION_SECRET`, `api.yapily.com` | App ID plus app secret pair where possible | Net-new candidate |
-| Tink | Open banking and payments | `TINK_CLIENT_SECRET`, `oauth.tink.com`, `api.tink.com` | OAuth/client-secret context with provider host | Net-new candidate |
+| DriveWealth | Brokerage APIs | `DRIVEWEALTH_CLIENT_SECRET`, `bo-api.drivewealth` | Provider host plus OAuth/client-secret context | Implemented SecretSniffer-only |
+| Teller | Open banking | mTLS certificate/private key, `TELLER_SIGNING_SECRET`, `api.teller.io` | Teller context plus PEM/signing labels; avoid generic private-key duplication | Implemented SecretSniffer-only |
+| TrueLayer | Open banking and payments | `TRUELAYER_CLIENT_SECRET`, `TRUELAYER_SIGNING_KEY`, `auth.truelayer.com` | Provider host plus client/signing secret labels | Implemented SecretSniffer-only |
+| Yapily | Open banking | `YAPILY_APPLICATION_SECRET`, `api.yapily.com` | App ID plus app secret pair where possible | Implemented SecretSniffer-only |
+| Tink | Open banking and payments | `TINK_CLIENT_SECRET`, `oauth.tink.com`, `api.tink.com` | OAuth/client-secret context with provider host | Implemented SecretSniffer-only |
 
 ## Explicit Differences From TruffleHog
 
