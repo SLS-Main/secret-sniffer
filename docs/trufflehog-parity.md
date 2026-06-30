@@ -11,14 +11,14 @@ TruffleHog is a project of Truffle Security. This project is not affiliated with
 Current tracked mapping summary:
 
 - Catalog size: `870`
-- Total mappings: `726`
-- Direct catalog mappings: `721`
+- Total mappings: `806`
+- Direct catalog mappings: `801`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `677`
-- Partial mappings: `48`
+- Implemented mappings: `752`
+- Partial mappings: `53`
 - Planned mappings: `1`
-- Untracked catalog directories: `149`
+- Untracked catalog directories: `69`
 
 Accounting notes:
 
@@ -166,6 +166,18 @@ Current built-in detector families:
 - IEX Cloud, Imagga partial coverage, Impala, Insightly, Instabot, Instamojo partial coverage
 - Interseller, Intra42, Intrinio, InvoiceOcean, Juro, Kanban, Kanban Tool, karmaCRM
 - Knapsack Pro, Kontent, Kylas, Leadfeeder, Lendflow, Lexigram
+- Kraken partial coverage, LarkSuite, LiveAgent, Livestorm, Loadmill, Loyverse
+- Lunch Money, Luno partial coverage, M3O, MadKudu, MagicBell, Magnetic, Mailjet SMS
+- Mailsac, Manifest, Mavenlink, MeisterTask, Meraki, Mesibo, MetaApi
+- Metabase, Metrilo, MindMeister, Miro, mite, Mixmax, Moderation, MoonClerk
+- Moralis, MrTickTock, Freshworks, MyIntervals, Nasdaq Data Link, NetHunt
+- NetSuite partial coverage, NewsCatcher, Nexmo, NFTPort, NVIDIA NGC, Nicereply
+- Nimble, Noticeable, Nozbe Teams, NVAPI, OneDesk, OnePageCRM, OOPSpam
+- Optimizely, Overloop, ParallelDots, Parsers, Parseur, Paydirt, Paymo
+- Planview LeanKit, Planyo, Polls API, Poloniex partial coverage, Postbacks, Powrbot
+- Privacy.com, ProdPad, Prospect CRM, Protocols.io, PureStake, Qubole, Ramp, Raven
+- ReachMail, Really Simple Systems, Refiner, Rentman, Request Finance, Rev.ai
+- Revamp CRM, RiteKit, Roaring, Robinhood Crypto partial coverage, Rownd, Runrun.it
 - IPinfo, CoinLayer, Coinlib, CryptoCompare, BitcoinAverage, WorldCoinIndex, Blocknative
 - Fixer.io, Currencylayer, ExchangeRate-API, ExchangeRatesAPI, CurrencyFreaks, CurrencyScoop
 - FastForex, Marketstack, Financial Modeling Prep, Finnhub, Tradier, Twelve Data, VATLayer
