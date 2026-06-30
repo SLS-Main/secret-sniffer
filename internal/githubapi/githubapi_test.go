@@ -4,7 +4,10 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,5 +51,28 @@ func TestCreateAppJWT(t *testing.T) {
 	}
 	if parts := strings.Split(jwt, "."); len(parts) != 3 {
 		t.Fatalf("expected three JWT parts, got %d: %s", len(parts), jwt)
+	}
+}
+
+func TestInstallationForOrg(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/orgs/acme/installation" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer app-jwt" {
+			t.Fatalf("unexpected auth header: %q", r.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(w).Encode(Installation{ID: 123})
+	}))
+	defer server.Close()
+
+	client := New("app-jwt")
+	client.baseURL = server.URL
+	installation, err := client.InstallationForOrg(t.Context(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installation.ID != 123 {
+		t.Fatalf("unexpected installation ID: %d", installation.ID)
 	}
 }

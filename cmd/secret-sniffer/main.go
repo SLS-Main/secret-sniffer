@@ -132,7 +132,7 @@ func main() {
 	start := time.Now()
 	console := newConsole(quiet, noColor)
 	console.step("Starting scan")
-	githubClients, err := githubClients(ctx, githubToken, githubAppID, githubAppPrivateKey, githubInstallationID, githubAccessible)
+	githubClients, err := githubClients(ctx, githubToken, githubAppID, githubAppPrivateKey, githubInstallationID, githubAccessible, githubOrgs)
 	if err != nil {
 		fatal(err)
 	}
@@ -342,7 +342,7 @@ type orgSummary struct {
 	Findings     int    `json:"findings"`
 }
 
-func githubClients(ctx context.Context, token, appID, privateKeyPath, installationIDRaw string, allInstallations bool) ([]githubClient, error) {
+func githubClients(ctx context.Context, token, appID, privateKeyPath, installationIDRaw string, allInstallations bool, orgsRaw string) ([]githubClient, error) {
 	if appID == "" && privateKeyPath == "" {
 		return []githubClient{{client: githubapi.New(token), token: token}}, nil
 	}
@@ -372,6 +372,29 @@ func githubClients(ctx context.Context, token, appID, privateKeyPath, installati
 	var installationID int64
 	var account string
 	var accountType string
+	if installationIDRaw == "" {
+		orgs := splitCSV(orgsRaw)
+		if len(orgs) > 0 {
+			jwt, err := githubapi.CreateAppJWT(appID, privateKeyPath, time.Now())
+			if err != nil {
+				return nil, err
+			}
+			appClient := githubapi.New(jwt)
+			out := make([]githubClient, 0, len(orgs))
+			for _, org := range orgs {
+				installation, err := appClient.InstallationForOrg(ctx, org)
+				if err != nil {
+					return nil, fmt.Errorf("get github app installation for org %s: %w", org, err)
+				}
+				installationToken, err := appClient.InstallationToken(ctx, installation.ID)
+				if err != nil {
+					return nil, fmt.Errorf("mint installation token for %s/%d: %w", installation.Account.Login, installation.ID, err)
+				}
+				out = append(out, githubClient{client: githubapi.New(installationToken.Token), token: installationToken.Token, tokenExpiresAt: installationToken.ExpiresAt, installationID: installation.ID, account: installation.Account.Login, accountType: installation.Account.Type})
+			}
+			return out, nil
+		}
+	}
 	if installationIDRaw != "" {
 		id, err := strconv.ParseInt(installationIDRaw, 10, 64)
 		if err != nil {
@@ -411,6 +434,9 @@ func scanTargets(ctx context.Context, target, orgs, enterprise string, accessibl
 	for _, org := range splitCSV(orgs) {
 		console.info("Discovering repositories for GitHub org %s", org)
 		for _, gc := range clients {
+			if gc.account != "" && !strings.EqualFold(gc.account, org) {
+				continue
+			}
 			repos, err := gc.client.RepositoriesForOrg(ctx, org)
 			if err != nil {
 				return nil, nil, nil, nil, summary, err

@@ -116,6 +116,15 @@ func (c *Client) Installations(ctx context.Context) ([]Installation, error) {
 	return installations, nil
 }
 
+func (c *Client) InstallationForOrg(ctx context.Context, org string) (Installation, error) {
+	var installation Installation
+	_, err := c.get(ctx, c.baseURL+fmt.Sprintf("/orgs/%s/installation", url.PathEscape(org)), &installation)
+	if err != nil {
+		return Installation{}, err
+	}
+	return installation, nil
+}
+
 func (c *Client) InstallationToken(ctx context.Context, installationID int64) (InstallationToken, error) {
 	endpoint := c.baseURL + fmt.Sprintf("/app/installations/%d/access_tokens", installationID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
