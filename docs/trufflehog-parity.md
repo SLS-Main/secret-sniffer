@@ -322,6 +322,18 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Pendo | Product analytics and guides | `api.pendo.io`, integration key, metadata key | Provider host plus integration/API key labels | Implemented SecretSniffer-only |
 | Heap | Product analytics | `api.heap.io`, API key, env/app ID | Provider host plus API/token/secret labels | Implemented SecretSniffer-only |
 | Contentsquare | Digital experience analytics | `api.contentsquare.com`, API key, client secret | Provider host plus API/client-secret labels | Implemented SecretSniffer-only |
+| Attio | CRM and customer data | `api.attio.com`, API key, access token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
+| Affinity | Relationship intelligence CRM | `api.affinity.co`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Height | Project management | `api.height.app`, API key, bearer token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Gong | Revenue intelligence | `api.gong.io`, access key secret, API token | Provider host plus access-key/API secret labels | Implemented SecretSniffer-only |
+| Chorus | Conversation intelligence | `api.chorus.ai`, API key, access token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Outreach | Sales engagement | `api.outreach.io`, access token, client secret | Provider host plus OAuth/API token labels | Implemented SecretSniffer-only |
+| Salesloft | Sales engagement | `api.salesloft.com`, API key, OAuth token | Provider host plus API/OAuth token labels | Implemented SecretSniffer-only |
+| Clay | Sales enrichment and GTM automation | `api.clay.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Instantly | Outbound email automation | `api.instantly.ai`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Smartlead | Outbound email automation | `api.smartlead.ai`, API key, client secret | Provider host plus API/client-secret labels | Implemented SecretSniffer-only |
+| Salesforce Pardot | Marketing automation | `pi.pardot.com`, client secret, refresh token | Pardot host/context plus OAuth secret labels | Implemented SecretSniffer-only beyond generic Salesforce mappings |
+| Front | Shared inbox and customer operations | `api2.frontapp.com`, API token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
 
 ## Explicit Differences From TruffleHog
 
