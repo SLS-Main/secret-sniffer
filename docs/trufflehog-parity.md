@@ -366,6 +366,18 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | LearnWorlds | Online course platform | `api.learnworlds.com`, API key, client secret | Provider host plus API/client-secret labels | Implemented SecretSniffer-only |
 | TalentLMS | Learning management system | `talentlms.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
 | Docebo | Enterprise learning platform | `api.docebo.com`, access token, client secret | Provider host plus API/OAuth token labels | Implemented SecretSniffer-only |
+| Shippo | Shipping and fulfillment | `api.goshippo.com`, API token | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| EasyPost | Shipping and fulfillment | `api.easypost.com`, `EZAK`, `EZTK` | Provider host plus EasyPost key prefixes/API labels | Implemented SecretSniffer-only |
+| ShipStation | Shipping and order fulfillment | `ssapi.shipstation.com`, API key/secret | Provider host plus API key/secret labels | Implemented SecretSniffer-only |
+| ShipEngine | Shipping API | `api.shipengine.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| AfterShip | Shipment tracking | `api.aftership.com`, API key | Provider host plus API key labels | Implemented SecretSniffer-only |
+| Easyship | Shipping and fulfillment | `api.easyship.com`, API token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
+| Sendcloud | Shipping platform | `panel.sendcloud.sc`, API key/secret | Provider host plus API key/secret labels | Implemented SecretSniffer-only |
+| Avalara AvaTax | Tax compliance | `rest.avatax.com`, license key | Provider host plus license/API secret labels | Implemented SecretSniffer-only |
+| Vertex Tax | Tax compliance | `vertexinc.com`, client secret, trusted ID | Provider context plus tax API secret labels | Implemented SecretSniffer-only |
+| TaxBit | Crypto tax compliance | `api.taxbit.com`, API key/secret | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| signNow | E-signature | `api.signnow.com`, access token, client secret | Provider host plus API/OAuth token labels | Implemented SecretSniffer-only |
+| Adobe Acrobat Sign | E-signature | `api.adobesign.com`, client secret | Provider host plus client/integration secret labels | Implemented SecretSniffer-only |
 
 ## Explicit Differences From TruffleHog
 
