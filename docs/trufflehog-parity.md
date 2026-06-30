@@ -344,6 +344,18 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Aikido Security | AppSec and cloud security | `app.aikido.dev`, API token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
 | Infisical | Secrets management | `app.infisical.com`, service token, client secret | Provider host plus service/access-token labels | Implemented SecretSniffer-only |
 | Cronitor | Monitoring and cron observability | `cronitor.io`, API key, telemetry key | Provider host plus API/telemetry key labels | Implemented SecretSniffer-only |
+| Greenhouse Harvest | Applicant tracking | `harvest.greenhouse.io`, Harvest API key | Provider API host plus Harvest/API key labels | Implemented SecretSniffer-only |
+| Lever | Applicant tracking | `api.lever.co`, API key, OAuth secret | Provider API host plus API/access-token labels | Implemented SecretSniffer-only |
+| Ashby | Applicant tracking | `api.ashbyhq.com`, API key | Provider API host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Workable | Applicant tracking | `api.workable.com`, API token | Provider API host plus API token/key labels | Implemented SecretSniffer-only |
+| SmartRecruiters | Applicant tracking | `api.smartrecruiters.com`, `x-smarttoken` | Provider API host plus exact token/API key labels | Implemented SecretSniffer-only |
+| Personio | HRIS and recruiting | `api.personio.de`, client secret, API secret | Provider API host plus client/API secret labels | Implemented SecretSniffer-only |
+| HiBob | HRIS | `api.hibob.com`, service token | Provider API host plus service/API token labels | Implemented SecretSniffer-only |
+| BambooHR | HRIS | `api.bamboohr.com`, API key | Provider API host plus API/access-token labels | Implemented SecretSniffer-only |
+| Rippling | HRIS and identity | `api.rippling.com`, API token | Provider API host plus API/access-token labels | Implemented SecretSniffer-only |
+| Deel | HR/payroll and contractor management | `api.deel.com`, API token | Provider API host plus API/access-token labels | Implemented SecretSniffer-only |
+| Gusto | Payroll and benefits | `api.gusto.com`, API token, client secret | Provider API host plus API/OAuth secret labels | Implemented SecretSniffer-only |
+| Workday | HRIS and finance | `workday.com`, client secret, refresh token | Workday host/context plus OAuth secret labels | Implemented SecretSniffer-only |
 
 ## Explicit Differences From TruffleHog
 
