@@ -309,6 +309,19 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Sift | Fraud and trust/risk scoring | `api.sift.com`, REST API key, beacon key | Provider host plus API/rest/beacon key labels | Implemented SecretSniffer-only |
 | Forter | Ecommerce fraud prevention | `api.forter.com`, API key, site secret/token | Provider host plus API/secret/token labels | Implemented SecretSniffer-only |
 | Riskified | Ecommerce fraud prevention | `api.riskified.com`, auth token, API key | Provider host plus API/auth token labels | Implemented SecretSniffer-only |
+| Flagsmith | Feature flags and remote config | `api.flagsmith.com`, server/environment key | Provider host plus server/API/environment key labels | Implemented SecretSniffer-only |
+| GrowthBook | Feature flags and experimentation | `api.growthbook.io`, API/SDK/secret key | Provider host plus API/SDK/secret key labels | Implemented SecretSniffer-only |
+| Unleash | Feature flags | `unleash-hosted.com`, API/client/admin token | Hosted Unleash context plus token labels | Implemented SecretSniffer-only |
+| Split.io | Feature flags and experimentation | `sdk.split.io`, `events.split.io`, SDK/admin key | Split hosts plus SDK/API/admin key labels | Implemented SecretSniffer-only |
+| Statsig | Feature gates and experimentation | `api.statsig.com`, server secret, SDK secret | Provider host plus server/SDK secret labels | Implemented SecretSniffer-only |
+| ConfigCat | Feature flags | `cdn-global.configcat.com`, SDK/API key | Provider CDN/API context plus SDK/API key labels | Implemented SecretSniffer-only |
+| VWO | Experimentation and optimization | `dev.visualwebsiteoptimizer.com`, API token, SDK key | Provider host plus API/account token labels | Implemented SecretSniffer-only |
+| AB Tasty | Experimentation and personalization | `api.abtasty.com`, API key, client secret | Provider host plus API/client-secret labels | Implemented SecretSniffer-only |
+| Hotjar | Product analytics and feedback | `api.hotjar.com`, API token/key | Provider host plus API token/key labels | Implemented SecretSniffer-only |
+| LogRocket | Session replay and frontend observability | `api.logrocket.com`, API key, app secret | Provider host plus API/app secret labels | Implemented SecretSniffer-only |
+| Pendo | Product analytics and guides | `api.pendo.io`, integration key, metadata key | Provider host plus integration/API key labels | Implemented SecretSniffer-only |
+| Heap | Product analytics | `api.heap.io`, API key, env/app ID | Provider host plus API/token/secret labels | Implemented SecretSniffer-only |
+| Contentsquare | Digital experience analytics | `api.contentsquare.com`, API key, client secret | Provider host plus API/client-secret labels | Implemented SecretSniffer-only |
 
 ## Explicit Differences From TruffleHog
 
