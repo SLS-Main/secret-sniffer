@@ -163,6 +163,32 @@ Store raw output with restrictive permissions:
 chmod 600 findings.json findings.jsonl 2>/dev/null || true
 ```
 
+## Archive Scanning
+
+Archive scanning is opt-in because archives can expand to much more data than their compressed size:
+
+```bash
+./secret-sniffer --target /path/to/repo --scan-archives --format jsonl
+```
+
+Supported formats use Go's standard library and do not shell out to external extractors:
+
+- `.zip`
+- `.tar`
+- `.tar.gz`
+- `.tgz`
+- single-file `.gz`
+
+Findings inside archives use virtual paths:
+
+```text
+backup.zip!/config/.env
+release.tar.gz!/app/settings.yml
+outer.zip!/inner.zip!/nested.env
+```
+
+Archive contents are expanded in memory only. Entries with absolute paths or `../` traversal are ignored, symlinks and non-regular tar entries are skipped, and decompression is bounded by `--max-archive-depth`, `--max-archive-entries`, `--max-archive-bytes`, and `--max-expanded-file-bytes`.
+
 ## Large Server Usage
 
 Use a worker count near the number of CPU cores. For a 24-core server:
