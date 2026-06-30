@@ -293,6 +293,23 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Yapily | Open banking | `YAPILY_APPLICATION_SECRET`, `api.yapily.com` | App ID plus app secret pair where possible | Implemented SecretSniffer-only |
 | Tink | Open banking and payments | `TINK_CLIENT_SECRET`, `oauth.tink.com`, `api.tink.com` | OAuth/client-secret context with provider host | Implemented SecretSniffer-only |
 
+### Additional Implemented SecretSniffer-Only Coverage
+
+| Provider | Use case | Credential context | Detection approach | TruffleHog difference |
+| --- | --- | --- | --- | --- |
+| Plaid client secrets | Open banking and ACH | `PLAID_SECRET`, `plaid.com`, client secret labels | Provider context plus secret/client-secret labels; complements Plaid access-token coverage | Implemented SecretSniffer-only improvement |
+| Coinbase Exchange / Prime | Crypto exchange, custody, prime brokerage | `CB-ACCESS-SECRET`, `CB-ACCESS-PASSPHRASE`, Coinbase Exchange/Prime hosts | Provider host/header context plus secret/passphrase labels | Implemented SecretSniffer-only beyond CDP key coverage |
+| MoEngage | Customer engagement and marketing automation | `api.moengage.com`, API secret, app secret | Provider host plus API/app secret labels | Implemented SecretSniffer-only |
+| CleverTap | Engagement analytics and messaging | `X-CleverTap-Passcode`, `api.clevertap.com` | Exact passcode/header context plus provider host | Implemented SecretSniffer-only |
+| mParticle | CDP and event ingestion | `s2s.mparticle.com`, API secret, server key | Provider host plus API secret/server key labels | Implemented SecretSniffer-only |
+| SEON | Fraud prevention and risk scoring | `api.seon.io`, `X-API-Key`, license key | Provider host/header context plus API/license key labels | Implemented SecretSniffer-only |
+| Jumio | KYC and identity verification | `api.jumio.com`, `netverify`, client secret | Provider/API context plus client/API secret labels | Implemented SecretSniffer-only |
+| Trulioo | Global identity verification | `api.trulioo.com`, `api.globaldatacompany.com`, `x-trulioo-api-key` | Provider hosts plus exact API-key header labels | Implemented SecretSniffer-only |
+| Sardine | Fraud, risk, KYC, AML | `api.sardine.ai`, client secret, API key | Provider host plus client-secret/API-key labels | Implemented SecretSniffer-only |
+| Sift | Fraud and trust/risk scoring | `api.sift.com`, REST API key, beacon key | Provider host plus API/rest/beacon key labels | Implemented SecretSniffer-only |
+| Forter | Ecommerce fraud prevention | `api.forter.com`, API key, site secret/token | Provider host plus API/secret/token labels | Implemented SecretSniffer-only |
+| Riskified | Ecommerce fraud prevention | `api.riskified.com`, auth token, API key | Provider host plus API/auth token labels | Implemented SecretSniffer-only |
+
 ## Explicit Differences From TruffleHog
 
 - SecretSniffer is detector-first and does not use TruffleHog's discovery algorithm.
