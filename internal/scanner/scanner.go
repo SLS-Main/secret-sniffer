@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"secret-sniffer/internal/detectors"
 )
@@ -61,9 +62,8 @@ func (s *Scanner) Scan(ctx context.Context) ([]detectors.Finding, error) {
 		}
 		cleanup = func() { _ = os.RemoveAll(dir) }
 		defer cleanup()
-		cmd := exec.CommandContext(ctx, "git", "clone", "--quiet", githubCloneURL(target, s.cfg.GitHubToken), dir)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("git clone failed for %s: %w: %s", target, err, string(out))
+		if err := cloneGitHub(ctx, target, s.cfg.GitHubToken, dir); err != nil {
+			return nil, err
 		}
 		target = dir
 	}
@@ -94,6 +94,69 @@ func (s *Scanner) Scan(ctx context.Context) ([]detectors.Finding, error) {
 	}
 	findings = append(findings, worktreeFindings...)
 	return dedupe(findings), nil
+}
+
+func cloneGitHub(ctx context.Context, target, token, dir string) error {
+	cloneURL := githubCloneURL(target, token)
+	var lastErr error
+	for attempt := 1; attempt <= 4; attempt++ {
+		if attempt > 1 {
+			if err := os.RemoveAll(dir); err != nil {
+				return err
+			}
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				return err
+			}
+		}
+		cmd := exec.CommandContext(ctx, "git", "clone", "--quiet", cloneURL, dir)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		lastErr = fmt.Errorf("git clone failed for %s: %w: %s", target, err, strings.TrimSpace(string(out)))
+		if attempt == 4 || !retryableGitCloneError(string(out)) {
+			break
+		}
+		if err := sleepContext(ctx, time.Duration(attempt*attempt)*time.Second); err != nil {
+			return err
+		}
+	}
+	return lastErr
+}
+
+func retryableGitCloneError(output string) bool {
+	low := strings.ToLower(output)
+	transient := []string{
+		"failed to connect",
+		"could not connect to server",
+		"connection refused",
+		"connection reset",
+		"connection timed out",
+		"operation timed out",
+		"the requested url returned error: 502",
+		"the requested url returned error: 503",
+		"the requested url returned error: 504",
+		"gnutls recv error",
+		"early eof",
+		"remote end hung up unexpectedly",
+	}
+	for _, needle := range transient {
+		if strings.Contains(low, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 func (s *Scanner) collectFiles(root string) ([]string, error) {

@@ -310,3 +310,12 @@ func TestGitHubCloneURLInjectsToken(t *testing.T) {
 		t.Fatalf("unexpected clone URL: %s", got)
 	}
 }
+
+func TestRetryableGitCloneError(t *testing.T) {
+	if !retryableGitCloneError("fatal: unable to access 'https://github.com/acme/repo.git/': Failed to connect to github.com port 443 via 127.0.0.1 after 0 ms: Could not connect to server") {
+		t.Fatal("expected connection failure to be retryable")
+	}
+	if retryableGitCloneError("remote: Repository not found. fatal: Authentication failed") {
+		t.Fatal("expected auth failure to be non-retryable")
+	}
+}

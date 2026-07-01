@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -57,5 +58,28 @@ func TestDiscoverySummaryAddInstallation(t *testing.T) {
 	}
 	if summary.Installations[0].Repositories != 5 {
 		t.Fatalf("expected five repos, got %d", summary.Installations[0].Repositories)
+	}
+}
+
+func TestIsGitHubCloneTarget(t *testing.T) {
+	if !isGitHubCloneTarget("https://github.com/acme/repo.git") {
+		t.Fatal("expected github URL to be clone target")
+	}
+	if isGitHubCloneTarget("https://gitlab.com/acme/repo.git") {
+		t.Fatal("did not expect non-github URL to be clone target")
+	}
+	if isGitHubCloneTarget("/tmp/repo") {
+		t.Fatal("did not expect local path to be clone target")
+	}
+}
+
+func TestDiscoverySummaryAddScanFailure(t *testing.T) {
+	var summary discoverySummary
+	summary.addScanFailure("https://github.com/acme/repo", errors.New("temporary clone failure"))
+	if summary.FailedScans != 1 {
+		t.Fatalf("expected one failed scan, got %d", summary.FailedScans)
+	}
+	if len(summary.ScanFailures) != 1 || summary.ScanFailures[0].Target != "https://github.com/acme/repo" {
+		t.Fatalf("unexpected scan failures: %#v", summary.ScanFailures)
 	}
 }

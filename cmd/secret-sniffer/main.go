@@ -208,7 +208,15 @@ func main() {
 				if installationID := installationByTarget[target]; installationID > 0 && githubAppID != "" && githubAppPrivateKey != "" {
 					token, refreshed, err := cachedInstallationToken(ctx, githubAppID, githubAppPrivateKey, installationID, tokenCache, &tokenMu)
 					if err != nil {
-						fatal(fmt.Errorf("get github installation token for %s: %w", target, err))
+						err = fmt.Errorf("get github installation token for %s: %w", target, err)
+						if isGitHubCloneTarget(target) {
+							console.repoError(i+1, len(targets), target, err)
+							mu.Lock()
+							summary.addScanFailure(target, err)
+							mu.Unlock()
+							continue
+						}
+						fatal(err)
 					}
 					targetCfg.GitHubToken = token.Token
 					if refreshed {
@@ -218,6 +226,13 @@ func main() {
 				runner := scanner.New(targetCfg, registry)
 				targetFindings, err := runner.Scan(ctx)
 				if err != nil {
+					if isGitHubCloneTarget(target) {
+						console.repoError(i+1, len(targets), target, err)
+						mu.Lock()
+						summary.addScanFailure(target, err)
+						mu.Unlock()
+						continue
+					}
 					fatal(err)
 				}
 				mu.Lock()
@@ -323,10 +338,17 @@ type discoverySummary struct {
 	RequestedOrgs          []string              `json:"requested_orgs,omitempty"`
 	Accessible             bool                  `json:"accessible"`
 	TotalRepositories      int                   `json:"total_repositories"`
+	FailedScans            int                   `json:"failed_scans,omitempty"`
+	ScanFailures           []scanFailureSummary  `json:"scan_failures,omitempty"`
 	FindingsBeforeBaseline int                   `json:"findings_before_baseline"`
 	FindingsAfterBaseline  int                   `json:"findings_after_baseline"`
 	Installations          []installationSummary `json:"installations,omitempty"`
 	Orgs                   []orgSummary          `json:"orgs"`
+}
+
+type scanFailureSummary struct {
+	Target string `json:"target"`
+	Error  string `json:"error"`
 }
 
 type installationSummary struct {
@@ -541,6 +563,10 @@ func (c console) repoDone(current, total int, target string, findings int) {
 	c.printf("REPO", clr, "[%d/%d] done findings=%d %s", current, total, findings, target)
 }
 
+func (c console) repoError(current, total int, target string, err error) {
+	c.printf("WARN", colorYellow, "[%d/%d] skipped %s: %v", current, total, target, err)
+}
+
 func (c console) finding(f detectors.Finding) {
 	if c.quiet {
 		return
@@ -597,7 +623,7 @@ func (c console) scanSummary(summary discoverySummary) {
 	if c.quiet || summary.TotalRepositories == 0 {
 		return
 	}
-	c.printf("SUMMARY", colorBold, "repos=%d findings_before_baseline=%d findings_after_baseline=%d", summary.TotalRepositories, summary.FindingsBeforeBaseline, summary.FindingsAfterBaseline)
+	c.printf("SUMMARY", colorBold, "repos=%d failed=%d findings_before_baseline=%d findings_after_baseline=%d", summary.TotalRepositories, summary.FailedScans, summary.FindingsBeforeBaseline, summary.FindingsAfterBaseline)
 	for _, org := range summary.Orgs {
 		c.printf("ORG", colorCyan, "%s repos=%d findings=%d", org.Name, org.Repositories, org.Findings)
 	}
@@ -740,6 +766,11 @@ func (s *discoverySummary) addScanResult(target string, findings int) {
 	}
 }
 
+func (s *discoverySummary) addScanFailure(target string, err error) {
+	s.FailedScans++
+	s.ScanFailures = append(s.ScanFailures, scanFailureSummary{Target: target, Error: err.Error()})
+}
+
 func (s *discoverySummary) sortOrgs() {
 	slices.SortFunc(s.Orgs, func(a, b orgSummary) int { return strings.Compare(a.Name, b.Name) })
 }
@@ -770,6 +801,15 @@ func targetOwner(target string) string {
 		}
 	}
 	return ""
+}
+
+func isGitHubCloneTarget(target string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Host)
+	return (u.Scheme == "http" || u.Scheme == "https") && (host == "github.com" || host == "www.github.com")
 }
 
 func writeSummary(path string, summary discoverySummary) error {
