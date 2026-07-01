@@ -302,6 +302,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | MoEngage | Customer engagement and marketing automation | `api.moengage.com`, API secret, app secret | Provider host plus API/app secret labels | Implemented SecretSniffer-only |
 | CleverTap | Engagement analytics and messaging | `X-CleverTap-Passcode`, `api.clevertap.com` | Exact passcode/header context plus provider host | Implemented SecretSniffer-only |
 | mParticle | CDP and event ingestion | `s2s.mparticle.com`, API secret, server key | Provider host plus API secret/server key labels | Implemented SecretSniffer-only |
+| Cohere | LLM API and embeddings | `api.cohere.ai`, API key, bearer token | Provider host plus API/authorization labels | Implemented SecretSniffer-only |
+| Mistral AI | LLM API | `api.mistral.ai`, API key, bearer token | Provider host plus API/authorization labels | Implemented SecretSniffer-only |
+| Together AI | LLM API and inference | `api.together.xyz`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Fireworks AI | LLM inference platform | `api.fireworks.ai`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Voyage AI | Embeddings and reranking | `api.voyageai.com`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Perplexity | LLM API/search | `api.perplexity.ai`, `pplx-` | Provider host/prefix plus API/bearer token labels | Implemented SecretSniffer-only |
+| Qdrant Cloud | Vector database | `cloud.qdrant.io`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Weaviate Cloud | Vector database | `weaviate.cloud`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Zilliz Cloud | Vector database | `api.cloud.zilliz.com`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Chroma Cloud | Vector database | `api.trychroma.com`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
 | SEON | Fraud prevention and risk scoring | `api.seon.io`, `X-API-Key`, license key | Provider host/header context plus API/license key labels | Implemented SecretSniffer-only |
 | Jumio | KYC and identity verification | `api.jumio.com`, `netverify`, client secret | Provider/API context plus client/API secret labels | Implemented SecretSniffer-only |
 | Trulioo | Global identity verification | `api.trulioo.com`, `api.globaldatacompany.com`, `x-trulioo-api-key` | Provider hosts plus exact API-key header labels | Implemented SecretSniffer-only |
