@@ -423,6 +423,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Socket.dev | Dependency and supply-chain security | `api.socket.dev`, API key | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
 | Aikido Security | AppSec and cloud security | `app.aikido.dev`, API token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
 | Infisical | Secrets management | `app.infisical.com`, service token, client secret | Provider host plus service/access-token labels | Implemented SecretSniffer-only |
+| Render | App hosting and deployment | `api.render.com`, API key/token | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Koyeb | App hosting and deployment | `api.koyeb.com`, API token | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Northflank | App hosting and deployment | `api.northflank.com`, API token | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Qovery | App hosting and deployment | `api.qovery.com`, API token | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Porter | Kubernetes app platform | `dashboard.porter.run`, API token | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| EnvKey | Secrets and configuration management | `envkey.com`, server key/org token | Provider context plus server/API token labels | Implemented SecretSniffer-only |
+| Akeyless | Secrets management | `api.akeyless.io`, access secret | Provider host plus access/API secret labels | Implemented SecretSniffer-only |
+| Platform.sh | App hosting and deployment | `api.platform.sh`, API token | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Flightcontrol | AWS deployment platform | `app.flightcontrol.dev`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Cleavr | Server provisioning and deployment | `cleavr.io`, API key | Provider context plus API/bearer token labels | Implemented SecretSniffer-only |
 | Cronitor | Monitoring and cron observability | `cronitor.io`, API key, telemetry key | Provider host plus API/telemetry key labels | Implemented SecretSniffer-only |
 | Greenhouse Harvest | Applicant tracking | `harvest.greenhouse.io`, Harvest API key | Provider API host plus Harvest/API key labels | Implemented SecretSniffer-only |
 | Lever | Applicant tracking | `api.lever.co`, API key, OAuth secret | Provider API host plus API/access-token labels | Implemented SecretSniffer-only |
