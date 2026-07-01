@@ -1273,6 +1273,26 @@ func looksLikeVariableReference(s string) bool {
 	if !variableNamePattern.MatchString(t) {
 		return false
 	}
+	lower := strings.ToLower(t)
+	variableTerms := []string{"api", "key", "secret", "token", "password", "passwd", "pwd", "credential", "credentials", "client"}
+	containsVariableTerm := false
+	for _, term := range variableTerms {
+		if strings.Contains(lower, term) {
+			containsVariableTerm = true
+			break
+		}
+	}
+	if !containsVariableTerm {
+		return false
+	}
+	if strings.Contains(t, ".") {
+		for _, part := range strings.FieldsFunc(t, func(r rune) bool { return r == '_' || r == '.' }) {
+			if len(part) >= 32 {
+				return false
+			}
+		}
+		return true
+	}
 	if !strings.Contains(t, "_") && t != strings.ToUpper(t) {
 		return false
 	}
@@ -1281,15 +1301,7 @@ func looksLikeVariableReference(s string) bool {
 			return false
 		}
 	}
-
-	lower := strings.ToLower(t)
-	variableTerms := []string{"api", "key", "secret", "token", "password", "passwd", "pwd", "credential", "credentials", "client"}
-	for _, term := range variableTerms {
-		if strings.Contains(lower, term) {
-			return true
-		}
-	}
-	return false
+	return true
 }
 
 func containsSensitivePlaceholderAssignment(s string) bool {
@@ -1298,12 +1310,22 @@ func containsSensitivePlaceholderAssignment(s string) bool {
 		if len(match) < 2 {
 			continue
 		}
-		value := strings.Trim(strings.TrimSpace(match[1]), `"'`)
+		value := normalizeAssignmentValue(match[1])
 		if looksLikeVariableReference(value) {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeAssignmentValue(s string) string {
+	t := strings.Trim(strings.TrimSpace(s), `"'`)
+	if strings.HasPrefix(t, "${") {
+		if end := strings.Index(t, "}"); end >= 0 {
+			return t[:end+1]
+		}
+	}
+	return t
 }
 
 func looksLikeRegexFragment(s string) bool {

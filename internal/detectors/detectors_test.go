@@ -1121,6 +1121,8 @@ func TestPlausibleSecretRejectsVariableReferences(t *testing.T) {
 		`{{ sendgrid_api_key }}`,
 		`$(SENDGRID_API_KEY)`,
 		`secrets.SENDGRID_API_KEY`,
+		`Bcrypt.HashPassword`,
+		`_profileEditor.ChangePassword.ProfileData.Password`,
 		`sendgrid_api_key`,
 		`PROD_DB_PASSWORD`,
 	}
@@ -1143,6 +1145,7 @@ func TestAssignedSecretRejectsVariableReferences(t *testing.T) {
 		`Server=tcp:db.example.com;User ID=app;Password=${ConnectionStrings.DSN_Remits.Password};`,
 		`Server=tcp:db.example.com;User ID=app;Password=${ConnectionStrings.DSN_CueballRead.Password};`,
 		`Server=tcp:db.example.com;User ID=app;Password="${ConnectionStrings.DSN_General.Password}";`,
+		`Data Source=${ConnectionStrings.DSN_Remits.Server};Initial Catalog=Remits;Persist Security Info=True;User ID=Remitsuser;Password=${ConnectionStrings.DSN_Remits.Password}"/>`,
 	}
 
 	for _, tc := range cases {
@@ -1156,6 +1159,24 @@ func TestAssignedSecretRejectsVariableReferences(t *testing.T) {
 	literal := "password=" + strings.Repeat("a", 24)
 	if !registryFinds("generic-assigned-secret", literal, strings.Repeat("a", 24)) {
 		t.Fatalf("expected literal assigned secret to be detected: %q", literal)
+	}
+}
+
+func TestGenericAssignedSecretRejectsMemberReferences(t *testing.T) {
+	cases := []string{
+		`password = Bcrypt.HashPassword(userPassword);`,
+		`password = _profileEditor.ChangePassword.ProfileData.Password;`,
+	}
+	for _, tc := range cases {
+		t.Run(tc, func(t *testing.T) {
+			for _, d := range DefaultRegistry() {
+				for _, c := range d.Detect([]byte(tc)) {
+					if c.DetectorID == "generic-assigned-secret" {
+						t.Fatalf("expected member reference to be ignored, got %q from %q", c.Secret, tc)
+					}
+				}
+			}
+		})
 	}
 }
 
