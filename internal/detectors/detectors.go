@@ -1133,10 +1133,59 @@ func plausibleSecret(s string) bool {
 	if strings.Count(s, "0") == len(s) || strings.Count(s, "x") == len(s) {
 		return false
 	}
+	if looksLikeVariableReference(s) {
+		return false
+	}
 	if looksLikeRegexFragment(s) {
 		return false
 	}
 	return true
+}
+
+var variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$`)
+
+func looksLikeVariableReference(s string) bool {
+	t := strings.Trim(strings.TrimSpace(s), `'"`)
+	if len(t) < 2 {
+		return false
+	}
+
+	if strings.HasPrefix(t, "${") && strings.HasSuffix(t, "}") {
+		return true
+	}
+	if strings.HasPrefix(t, "%{") && strings.HasSuffix(t, "}") {
+		return true
+	}
+	if strings.HasPrefix(t, "{{") && strings.HasSuffix(t, "}}") {
+		return true
+	}
+	if strings.HasPrefix(t, "$(") && strings.HasSuffix(t, ")") {
+		return true
+	}
+	if strings.HasPrefix(t, "$") && variableNamePattern.MatchString(strings.TrimPrefix(t, "$")) {
+		return true
+	}
+
+	if !variableNamePattern.MatchString(t) {
+		return false
+	}
+	if !strings.Contains(t, "_") && t != strings.ToUpper(t) {
+		return false
+	}
+	for _, part := range strings.FieldsFunc(t, func(r rune) bool { return r == '_' || r == '.' }) {
+		if len(part) >= 12 {
+			return false
+		}
+	}
+
+	lower := strings.ToLower(t)
+	variableTerms := []string{"api", "key", "secret", "token", "password", "passwd", "pwd", "credential", "credentials", "client"}
+	for _, term := range variableTerms {
+		if strings.Contains(lower, term) {
+			return true
+		}
+	}
+	return false
 }
 
 func looksLikeRegexFragment(s string) bool {

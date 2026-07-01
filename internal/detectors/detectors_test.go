@@ -1014,6 +1014,48 @@ func TestPlausibleSecretRejectsRegexFragments(t *testing.T) {
 	}
 }
 
+func TestPlausibleSecretRejectsVariableReferences(t *testing.T) {
+	cases := []string{
+		`${sendgrid_api_key}`,
+		`$SENDGRID_API_KEY`,
+		`{{ sendgrid_api_key }}`,
+		`$(SENDGRID_API_KEY)`,
+		`secrets.SENDGRID_API_KEY`,
+		`sendgrid_api_key`,
+		`PROD_DB_PASSWORD`,
+	}
+
+	for _, tc := range cases {
+		t.Run(tc, func(t *testing.T) {
+			if plausibleSecret(tc) {
+				t.Fatalf("expected variable reference to be rejected: %q", tc)
+			}
+		})
+	}
+}
+
+func TestAssignedSecretRejectsVariableReferences(t *testing.T) {
+	cases := []string{
+		`password=${sendgrid_api_key}`,
+		`password=$SENDGRID_API_KEY`,
+		`password=sendgrid_api_key_value`,
+		`password=PROD_DB_PASSWORD`,
+	}
+
+	for _, tc := range cases {
+		t.Run(tc, func(t *testing.T) {
+			if registryFinds("generic-assigned-secret", tc, "sendgrid_api_key_value") || registryFinds("generic-assigned-secret", tc, "PROD_DB_PASSWORD") {
+				t.Fatalf("expected assigned variable reference to be ignored: %q", tc)
+			}
+		})
+	}
+
+	literal := "password=" + strings.Repeat("a", 24)
+	if !registryFinds("generic-assigned-secret", literal, strings.Repeat("a", 24)) {
+		t.Fatalf("expected literal assigned secret to be detected: %q", literal)
+	}
+}
+
 func TestLoadCustomFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "detectors.json")
