@@ -374,6 +374,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Coveo | Enterprise search | `platform.cloud.coveo.com`, API key | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
 | Yext | Search and listings | `api.yext.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
 | OpenSearch | Managed search | `opensearch`, `aoss.amazonaws.com`, API key | Provider context plus API/bearer/password labels | Implemented SecretSniffer-only |
+| Contentstack | Headless CMS | `cdn.contentstack.io`, API key, management token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| DatoCMS | Headless CMS | `site-api.datocms.com`, API token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
+| Directus | Headless CMS/data platform | `directus.cloud`, static token | Provider context plus static/API token labels | Implemented SecretSniffer-only |
+| Strapi | Headless CMS | `strapi.io`, API token, JWT secret | Provider context plus API/admin secret labels | Implemented SecretSniffer-only |
+| Prismic | Headless CMS | `.cdn.prismic.io`, access token | Provider host plus access/permanent token labels | Implemented SecretSniffer-only |
+| Builder.io | Visual CMS | `cdn.builder.io`, private key | Provider host plus private/API/write key labels | Implemented SecretSniffer-only |
+| commercetools | Composable commerce | `commercetools.com`, client secret | Provider auth/API hosts plus client-secret labels | Implemented SecretSniffer-only |
+| BigCommerce | Ecommerce platform | `api.bigcommerce.com`, `x-auth-token` | Provider host/header plus API/access token labels | Implemented SecretSniffer-only |
+| Saleor | Composable commerce | `saleor.cloud`, app token, webhook secret | Provider context plus API/app token labels | Implemented SecretSniffer-only |
+| Medusa | Commerce backend | `medusajs`, admin API token, JWT secret | Provider context plus admin token/secret labels | Implemented SecretSniffer-only |
 | incident.io | Incident management | `api.incident.io`, API key, bearer token | Provider host plus API/token labels | Implemented SecretSniffer-only |
 | FireHydrant | Incident management and service catalog | `api.firehydrant.io`, service token, API key | Provider host plus API/service-token labels | Implemented SecretSniffer-only |
 | Squadcast | Incident response and on-call | `api.squadcast.com`, API token | Provider host plus API/token labels | Implemented SecretSniffer-only |
