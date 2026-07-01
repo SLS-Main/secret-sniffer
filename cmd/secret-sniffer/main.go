@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -35,6 +36,8 @@ func main() {
 	var baselinePath string
 	var writeBaselinePath string
 	var summaryOutputPath string
+	var scanJobID string
+	var scanJobPath string
 	var githubOrgs string
 	var githubEnterprise string
 	var githubToken string
@@ -46,6 +49,8 @@ func main() {
 	var truffleHogParity bool
 	var githubAccessible bool
 	var summaryOnly bool
+	var scanResume bool
+	var scanRetryFailed bool
 	var failOnFindings bool
 	var redact bool
 	var noRedact bool
@@ -72,6 +77,10 @@ func main() {
 	flag.StringVar(&baselinePath, "baseline", "", "path to baseline JSON of accepted fingerprints")
 	flag.StringVar(&writeBaselinePath, "write-baseline", "", "write finding fingerprints to baseline JSON")
 	flag.StringVar(&summaryOutputPath, "summary-output", "", "write GitHub discovery and scan summary JSON to this path")
+	flag.StringVar(&scanJobID, "scan-job-id", "", "persist per-repository scan state under this job ID for resume/retry")
+	flag.StringVar(&scanJobPath, "scan-job-path", "", "path to scan job state JSON; defaults to .secret-sniffer-jobs/<job-id>.json")
+	flag.BoolVar(&scanResume, "scan-resume", false, "with --scan-job-id, skip repositories already completed in the job state")
+	flag.BoolVar(&scanRetryFailed, "scan-retry-failed", false, "with --scan-job-id, scan only repositories marked failed in the job state")
 	flag.StringVar(&githubOrgs, "github-org", "", "comma-separated GitHub organization names to enumerate and scan")
 	flag.StringVar(&githubEnterprise, "github-enterprise", "", "GitHub Enterprise Cloud slug; enumerate orgs and scan all repos")
 	flag.StringVar(&githubToken, "github-token", os.Getenv("GITHUB_TOKEN"), "GitHub token for API enumeration and private clones; defaults to GITHUB_TOKEN")
@@ -141,6 +150,29 @@ func main() {
 		fatal(err)
 	}
 	console.discoverySummary(summary)
+	jobPath := ""
+	var jobState *scanJobState
+	if scanResume && scanRetryFailed {
+		fatal(fmt.Errorf("--scan-resume and --scan-retry-failed cannot be used together"))
+	}
+	if scanJobID != "" || scanJobPath != "" || scanResume || scanRetryFailed {
+		if scanJobID == "" {
+			fatal(fmt.Errorf("--scan-job-id is required when using scan job resume/retry options"))
+		}
+		jobPath = scanJobStatePath(scanJobID, scanJobPath)
+		jobState, err = loadOrCreateScanJobState(jobPath, scanJobID, start)
+		if err != nil {
+			fatal(err)
+		}
+		jobState.addTargets(targets)
+		if err := writeScanJobState(jobPath, jobState); err != nil {
+			fatal(err)
+		}
+		originalTargets := len(targets)
+		targets = filterScanJobTargets(targets, jobState, scanResume, scanRetryFailed)
+		summary.TotalRepositories = len(targets)
+		console.info("Scan job %s state=%s selected_repos=%d discovered_repos=%d", scanJobID, jobPath, len(targets), originalTargets)
+	}
 	if summaryOutputPath == "" && isGitHubDiscovery(githubOrgs, githubEnterprise, githubAccessible) {
 		summaryOutputPath = "secret-sniffer-summary.json"
 	}
@@ -162,7 +194,11 @@ func main() {
 	}
 	var outputFile *os.File
 	if outputPath != "" {
-		outputFile, err = os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		outputFlags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		if jobState != nil && format == "jsonl" && (scanResume || scanRetryFailed) {
+			outputFlags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+		}
+		outputFile, err = os.OpenFile(outputPath, outputFlags, 0o600)
 		if err != nil {
 			fatal(err)
 		}
@@ -202,6 +238,15 @@ func main() {
 			for i := range jobs {
 				target := targets[i]
 				console.repoStart(i+1, len(targets), target)
+				if jobState != nil {
+					mu.Lock()
+					jobState.markRunning(target, time.Now())
+					if err := writeScanJobState(jobPath, jobState); err != nil {
+						mu.Unlock()
+						fatal(err)
+					}
+					mu.Unlock()
+				}
 				targetCfg := cfg
 				targetCfg.Target = target
 				targetCfg.GitHubToken = tokenByTarget[target]
@@ -213,6 +258,13 @@ func main() {
 							console.repoError(i+1, len(targets), target, err)
 							mu.Lock()
 							summary.addScanFailure(target, err)
+							if jobState != nil {
+								jobState.markFailed(target, err, time.Now())
+								if writeErr := writeScanJobState(jobPath, jobState); writeErr != nil {
+									mu.Unlock()
+									fatal(writeErr)
+								}
+							}
 							mu.Unlock()
 							continue
 						}
@@ -230,6 +282,13 @@ func main() {
 						console.repoError(i+1, len(targets), target, err)
 						mu.Lock()
 						summary.addScanFailure(target, err)
+						if jobState != nil {
+							jobState.markFailed(target, err, time.Now())
+							if writeErr := writeScanJobState(jobPath, jobState); writeErr != nil {
+								mu.Unlock()
+								fatal(writeErr)
+							}
+						}
 						mu.Unlock()
 						continue
 					}
@@ -247,6 +306,13 @@ func main() {
 				console.repoDone(i+1, len(targets), target, len(targetFindings))
 				mu.Lock()
 				summary.addScanResult(target, len(targetFindings))
+				if jobState != nil {
+					jobState.markCompleted(target, len(targetFindings), time.Now())
+					if err := writeScanJobState(jobPath, jobState); err != nil {
+						mu.Unlock()
+						fatal(err)
+					}
+				}
 				mu.Unlock()
 				for _, finding := range targetFindings {
 					console.finding(finding)
@@ -363,6 +429,29 @@ type orgSummary struct {
 	Repositories int    `json:"repositories"`
 	Findings     int    `json:"findings"`
 }
+
+type scanJobState struct {
+	JobID     string                   `json:"job_id"`
+	CreatedAt time.Time                `json:"created_at"`
+	UpdatedAt time.Time                `json:"updated_at"`
+	Targets   map[string]scanJobTarget `json:"targets"`
+}
+
+type scanJobTarget struct {
+	Status      string    `json:"status"`
+	Findings    int       `json:"findings,omitempty"`
+	Attempts    int       `json:"attempts,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	StartedAt   time.Time `json:"started_at,omitempty"`
+	CompletedAt time.Time `json:"completed_at,omitempty"`
+}
+
+const (
+	scanJobPending   = "pending"
+	scanJobRunning   = "running"
+	scanJobCompleted = "completed"
+	scanJobFailed    = "failed"
+)
 
 func githubClients(ctx context.Context, token, appID, privateKeyPath, installationIDRaw string, allInstallations bool, orgsRaw string) ([]githubClient, error) {
 	if appID == "" && privateKeyPath == "" {
@@ -794,7 +883,11 @@ func repoOwner(repo githubapi.Repository) string {
 
 func targetOwner(target string) string {
 	u, err := url.Parse(target)
-	if err == nil && strings.EqualFold(u.Host, "github.com") {
+	if err == nil {
+		host := strings.ToLower(u.Host)
+		if host != "github.com" && host != "www.github.com" {
+			return ""
+		}
 		parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
 		if len(parts) > 0 {
 			return parts[0]
@@ -810,6 +903,128 @@ func isGitHubCloneTarget(target string) bool {
 	}
 	host := strings.ToLower(u.Host)
 	return (u.Scheme == "http" || u.Scheme == "https") && (host == "github.com" || host == "www.github.com")
+}
+
+func scanJobStatePath(jobID, explicitPath string) string {
+	if explicitPath != "" {
+		return explicitPath
+	}
+	return filepath.Join(".secret-sniffer-jobs", jobID+".json")
+}
+
+func loadOrCreateScanJobState(path, jobID string, now time.Time) (*scanJobState, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &scanJobState{JobID: jobID, CreatedAt: now, UpdatedAt: now, Targets: map[string]scanJobTarget{}}, nil
+		}
+		return nil, err
+	}
+	var state scanJobState
+	if err := json.Unmarshal(b, &state); err != nil {
+		return nil, fmt.Errorf("read scan job state %s: %w", path, err)
+	}
+	if state.JobID != jobID {
+		return nil, fmt.Errorf("scan job state %s has job_id %q, want %q", path, state.JobID, jobID)
+	}
+	if state.Targets == nil {
+		state.Targets = map[string]scanJobTarget{}
+	}
+	return &state, nil
+}
+
+func writeScanJobState(path string, state *scanJobState) error {
+	state.UpdatedAt = time.Now()
+	b, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".scan-job-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+func (s *scanJobState) addTargets(targets []string) {
+	if s.Targets == nil {
+		s.Targets = map[string]scanJobTarget{}
+	}
+	for _, target := range targets {
+		if _, ok := s.Targets[target]; ok {
+			continue
+		}
+		s.Targets[target] = scanJobTarget{Status: scanJobPending}
+	}
+}
+
+func (s *scanJobState) markRunning(target string, now time.Time) {
+	entry := s.Targets[target]
+	entry.Status = scanJobRunning
+	entry.Attempts++
+	entry.Findings = 0
+	entry.Error = ""
+	entry.StartedAt = now
+	entry.CompletedAt = time.Time{}
+	s.Targets[target] = entry
+}
+
+func (s *scanJobState) markCompleted(target string, findings int, now time.Time) {
+	entry := s.Targets[target]
+	entry.Status = scanJobCompleted
+	entry.Findings = findings
+	entry.Error = ""
+	entry.CompletedAt = now
+	s.Targets[target] = entry
+}
+
+func (s *scanJobState) markFailed(target string, err error, now time.Time) {
+	entry := s.Targets[target]
+	entry.Status = scanJobFailed
+	entry.Findings = 0
+	entry.Error = err.Error()
+	entry.CompletedAt = now
+	s.Targets[target] = entry
+}
+
+func filterScanJobTargets(targets []string, state *scanJobState, resume, retryFailed bool) []string {
+	if state == nil || (!resume && !retryFailed) {
+		return targets
+	}
+	out := make([]string, 0, len(targets))
+	for _, target := range targets {
+		entry := state.Targets[target]
+		switch {
+		case retryFailed:
+			if entry.Status == scanJobFailed {
+				out = append(out, target)
+			}
+		case resume:
+			if entry.Status != scanJobCompleted {
+				out = append(out, target)
+			}
+		}
+	}
+	return out
 }
 
 func writeSummary(path string, summary discoverySummary) error {

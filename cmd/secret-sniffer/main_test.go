@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -65,6 +68,9 @@ func TestIsGitHubCloneTarget(t *testing.T) {
 	if !isGitHubCloneTarget("https://github.com/acme/repo.git") {
 		t.Fatal("expected github URL to be clone target")
 	}
+	if !isGitHubCloneTarget("https://www.github.com/acme/repo.git") {
+		t.Fatal("expected www github URL to be clone target")
+	}
 	if isGitHubCloneTarget("https://gitlab.com/acme/repo.git") {
 		t.Fatal("did not expect non-github URL to be clone target")
 	}
@@ -82,4 +88,118 @@ func TestDiscoverySummaryAddScanFailure(t *testing.T) {
 	if len(summary.ScanFailures) != 1 || summary.ScanFailures[0].Target != "https://github.com/acme/repo" {
 		t.Fatalf("unexpected scan failures: %#v", summary.ScanFailures)
 	}
+}
+
+func TestTargetOwner(t *testing.T) {
+	if got := targetOwner("https://github.com/acme/repo.git"); got != "acme" {
+		t.Fatalf("targetOwner github=%q, want acme", got)
+	}
+	if got := targetOwner("https://www.github.com/acme/repo.git"); got != "acme" {
+		t.Fatalf("targetOwner www github=%q, want acme", got)
+	}
+	if got := targetOwner("https://gitlab.com/acme/repo.git"); got != "" {
+		t.Fatalf("targetOwner gitlab=%q, want empty", got)
+	}
+}
+
+func TestScanJobStatePath(t *testing.T) {
+	if got := scanJobStatePath("nightly", ""); got != filepath.Join(".secret-sniffer-jobs", "nightly.json") {
+		t.Fatalf("unexpected default path: %q", got)
+	}
+	if got := scanJobStatePath("nightly", "/tmp/job.json"); got != "/tmp/job.json" {
+		t.Fatalf("explicit path not honored: %q", got)
+	}
+}
+
+func TestScanJobStateTransitions(t *testing.T) {
+	now := time.Unix(1000, 0)
+	state := scanJobState{JobID: "nightly", Targets: map[string]scanJobTarget{}}
+	state.addTargets([]string{"https://github.com/acme/one", "https://github.com/acme/two"})
+	state.markRunning("https://github.com/acme/one", now)
+	state.markCompleted("https://github.com/acme/one", 3, now.Add(time.Second))
+	state.markRunning("https://github.com/acme/two", now)
+	state.markFailed("https://github.com/acme/two", errors.New("proxy failed"), now.Add(time.Second))
+
+	completed := state.Targets["https://github.com/acme/one"]
+	if completed.Status != scanJobCompleted || completed.Findings != 3 || completed.Attempts != 1 || completed.Error != "" {
+		t.Fatalf("unexpected completed state: %#v", completed)
+	}
+	failed := state.Targets["https://github.com/acme/two"]
+	if failed.Status != scanJobFailed || failed.Error != "proxy failed" || failed.Attempts != 1 {
+		t.Fatalf("unexpected failed state: %#v", failed)
+	}
+	state.markRunning("https://github.com/acme/two", now.Add(2*time.Second))
+	retried := state.Targets["https://github.com/acme/two"]
+	if got := retried.Attempts; got != 2 {
+		t.Fatalf("expected retry attempt count 2, got %d", got)
+	}
+	if retried.Findings != 0 || retried.Error != "" {
+		t.Fatalf("retry should clear stale result fields: %#v", retried)
+	}
+}
+
+func TestFilterScanJobTargets(t *testing.T) {
+	targets := []string{"completed", "failed", "running", "pending"}
+	state := &scanJobState{Targets: map[string]scanJobTarget{
+		"completed": {Status: scanJobCompleted},
+		"failed":    {Status: scanJobFailed},
+		"running":   {Status: scanJobRunning},
+		"pending":   {Status: scanJobPending},
+	}}
+
+	resume := filterScanJobTargets(targets, state, true, false)
+	if want := []string{"failed", "running", "pending"}; !equalStrings(resume, want) {
+		t.Fatalf("resume targets=%v, want %v", resume, want)
+	}
+	retry := filterScanJobTargets(targets, state, false, true)
+	if want := []string{"failed"}; !equalStrings(retry, want) {
+		t.Fatalf("retry targets=%v, want %v", retry, want)
+	}
+}
+
+func TestWriteAndLoadScanJobState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "jobs", "nightly.json")
+	now := time.Unix(1000, 0)
+	state := &scanJobState{JobID: "nightly", CreatedAt: now, UpdatedAt: now, Targets: map[string]scanJobTarget{"repo": {Status: scanJobCompleted, Findings: 2}}}
+	if err := writeScanJobState(path, state); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("state file mode=%o, want 600", info.Mode().Perm())
+	}
+	loaded, err := loadOrCreateScanJobState(path, "nightly", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Targets["repo"].Status != scanJobCompleted || loaded.Targets["repo"].Findings != 2 {
+		t.Fatalf("unexpected loaded state: %#v", loaded.Targets["repo"])
+	}
+
+	b, err := json.Marshal(scanJobState{JobID: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadOrCreateScanJobState(path, "nightly", now); err == nil {
+		t.Fatal("expected job ID mismatch error")
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -84,6 +84,10 @@ GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-histor
 --baseline            Path to accepted-finding baseline JSON.
 --write-baseline      Write current finding fingerprints to baseline JSON.
 --summary-output      Write GitHub discovery and scan summary JSON to this path.
+--scan-job-id         Persist per-repository scan state under this job ID.
+--scan-job-path       Path to scan job state JSON. Default: .secret-sniffer-jobs/<job-id>.json.
+--scan-resume         With --scan-job-id, skip repositories already completed in the job state.
+--scan-retry-failed   With --scan-job-id, scan only repositories marked failed in the job state.
 --summary-only        Discover GitHub orgs/repositories, write summary, and exit without scanning.
 --github-org          Comma-separated GitHub organization names to enumerate and scan.
 --github-enterprise   GitHub Enterprise Cloud slug; enumerate orgs and scan all repos.
@@ -124,6 +128,51 @@ Findings are also printed to stderr as they are discovered. For long scans, use 
 ```
 
 When `--format jsonl` is used, findings are streamed to the output file and stdout receives only the final completion line. This prevents large multi-repository scans from retaining every finding in memory just to render final output.
+
+## Resuming Large Scans
+
+Use `--scan-job-id` for long GitHub org, enterprise, or accessible-repository scans. The scanner writes per-repository progress to `.secret-sniffer-jobs/<job-id>.json` after every repo starts, completes, or fails.
+
+```bash
+./secret-sniffer \
+  --github-org ORG \
+  --git-history \
+  --repo-concurrency 4 \
+  --workers 32 \
+  --format jsonl \
+  --output org.findings.jsonl \
+  --scan-job-id org-nightly
+```
+
+If the proxy or network fails during a long run, fix the proxy and resume unfinished repositories:
+
+```bash
+./secret-sniffer \
+  --github-org ORG \
+  --git-history \
+  --repo-concurrency 4 \
+  --workers 32 \
+  --format jsonl \
+  --output org.findings.jsonl \
+  --scan-job-id org-nightly \
+  --scan-resume
+```
+
+To retry only repositories that failed in the previous run:
+
+```bash
+./secret-sniffer \
+  --github-org ORG \
+  --git-history \
+  --repo-concurrency 4 \
+  --workers 32 \
+  --format jsonl \
+  --output org.findings.jsonl \
+  --scan-job-id org-nightly \
+  --scan-retry-failed
+```
+
+When resuming or retrying with `--format jsonl`, the output file is appended to instead of truncated. Use the same discovery flags with the same job ID so the scanner can match discovered repositories to the saved job state.
 
 Human output:
 
