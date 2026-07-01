@@ -37,6 +37,60 @@ func TestDefaultOutputPath(t *testing.T) {
 	}
 }
 
+func TestParseResumeOutputAction(t *testing.T) {
+	cases := map[string]resumeOutputAction{
+		"":          resumeOutputAppend,
+		"a":         resumeOutputAppend,
+		"append":    resumeOutputAppend,
+		"o":         resumeOutputOverwrite,
+		"overwrite": resumeOutputOverwrite,
+		"n":         resumeOutputNew,
+		"new":       resumeOutputNew,
+	}
+	for input, want := range cases {
+		got, ok := parseResumeOutputAction(input)
+		if !ok || got != want {
+			t.Fatalf("parseResumeOutputAction(%q)=(%q,%v), want (%q,true)", input, got, ok, want)
+		}
+	}
+	if _, ok := parseResumeOutputAction("invalid"); ok {
+		t.Fatal("expected invalid action to be rejected")
+	}
+}
+
+func TestNewResumeOutputPath(t *testing.T) {
+	now := time.Date(2026, 7, 1, 14, 30, 45, 0, time.UTC)
+	if got := newResumeOutputPath("findings.jsonl", now); got != "findings.resume-20260701-143045.jsonl" {
+		t.Fatalf("unexpected resume output path: %q", got)
+	}
+	if got := newResumeOutputPath("findings", now); got != "findings.resume-20260701-143045" {
+		t.Fatalf("unexpected extensionless resume output path: %q", got)
+	}
+}
+
+func TestResumeOutputOpenOptionsDefaultsToAppendNonInteractive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "findings.jsonl")
+	if err := os.WriteFile(path, []byte("existing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nonTerminal, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nonTerminal.Close()
+	gotPath, flags, err := resumeOutputOpenOptions(path, time.Unix(0, 0), nonTerminal, os.Stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != path {
+		t.Fatalf("path=%q, want %q", gotPath, path)
+	}
+	if flags&os.O_APPEND == 0 || flags&os.O_TRUNC != 0 {
+		t.Fatalf("expected append flags, got %#x", flags)
+	}
+}
+
 func TestIsGitHubDiscovery(t *testing.T) {
 	if !isGitHubDiscovery("org", "", false) {
 		t.Fatal("org should count as github discovery")

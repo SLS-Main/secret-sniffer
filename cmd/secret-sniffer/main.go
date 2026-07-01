@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	cryptorand "crypto/rand"
@@ -204,8 +205,11 @@ func main() {
 	var outputFile *os.File
 	if outputPath != "" {
 		outputFlags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-		if jobState != nil && format == "jsonl" && (scanResume || scanRetryFailed) {
-			outputFlags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+		if jobState != nil && (scanResume || scanRetryFailed) {
+			outputPath, outputFlags, err = resumeOutputOpenOptions(outputPath, time.Now(), os.Stdin, os.Stderr)
+			if err != nil {
+				fatal(err)
+			}
 		}
 		outputFile, err = os.OpenFile(outputPath, outputFlags, 0o600)
 		if err != nil {
@@ -760,6 +764,89 @@ func defaultOutputPath(format string) string {
 	default:
 		return ""
 	}
+}
+
+type resumeOutputAction string
+
+const (
+	resumeOutputAppend    resumeOutputAction = "append"
+	resumeOutputOverwrite resumeOutputAction = "overwrite"
+	resumeOutputNew       resumeOutputAction = "new"
+)
+
+func resumeOutputOpenOptions(path string, now time.Time, stdin, stderr *os.File) (string, int, error) {
+	flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if path == "" {
+		return path, flags, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path, flags, nil
+		}
+		return "", 0, err
+	}
+	if info.IsDir() {
+		return "", 0, fmt.Errorf("output path %s is a directory", path)
+	}
+	action := resumeOutputAppend
+	if isTerminal(stdin) {
+		action = promptResumeOutputAction(stdin, stderr, path)
+	}
+	switch action {
+	case resumeOutputOverwrite:
+		return path, flags, nil
+	case resumeOutputNew:
+		return newResumeOutputPath(path, now), flags, nil
+	default:
+		return path, os.O_CREATE | os.O_WRONLY | os.O_APPEND, nil
+	}
+}
+
+func promptResumeOutputAction(stdin, stderr *os.File, path string) resumeOutputAction {
+	reader := bufio.NewReader(stdin)
+	for attempts := 0; attempts < 3; attempts++ {
+		fmt.Fprintf(stderr, "Output file %s already exists. Resume output: [A]ppend/[o]verwrite/[n]ew file? (default append): ", path)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return resumeOutputAppend
+		}
+		if action, ok := parseResumeOutputAction(line); ok {
+			return action
+		}
+		fmt.Fprintln(stderr, "Please enter append, overwrite, or new.")
+	}
+	return resumeOutputAppend
+}
+
+func parseResumeOutputAction(s string) (resumeOutputAction, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "a", "append":
+		return resumeOutputAppend, true
+	case "o", "overwrite", "w", "write":
+		return resumeOutputOverwrite, true
+	case "n", "new":
+		return resumeOutputNew, true
+	default:
+		return "", false
+	}
+}
+
+func newResumeOutputPath(path string, now time.Time) string {
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	return base + ".resume-" + now.Format("20060102-150405") + ext
+}
+
+func isTerminal(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 func isGitHubDiscovery(orgs, enterprise string, accessible bool) bool {

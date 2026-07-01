@@ -173,7 +173,7 @@ To retry only repositories that failed in the previous run:
   --scan-retry-failed
 ```
 
-When resuming or retrying with `--format jsonl`, the output file is appended to instead of truncated. Use the same discovery flags with the same job ID so the scanner can match discovered repositories to the saved job state.
+When resuming or retrying and the output file already exists, interactive runs prompt whether to append, overwrite, or create a timestamped new output file. Append is the default, and non-interactive runs default to append so automation does not block. Use the same discovery flags with the same job ID so the scanner can match discovered repositories to the saved job state.
 
 Human output:
 
