@@ -433,6 +433,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Platform.sh | App hosting and deployment | `api.platform.sh`, API token | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
 | Flightcontrol | AWS deployment platform | `app.flightcontrol.dev`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
 | Cleavr | Server provisioning and deployment | `cleavr.io`, API key | Provider context plus API/bearer token labels | Implemented SecretSniffer-only |
+| Neon | Serverless Postgres | `api.neon.tech`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Turso | Edge SQLite database | `api.turso.tech`, auth token | Provider host plus API/auth token labels | Implemented SecretSniffer-only |
+| Xata | Serverless database/search | `api.xata.io`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Cockroach Cloud | Distributed SQL database | `api.cockroachlabs.cloud`, API key | Provider host plus API/service-account secret labels | Implemented SecretSniffer-only |
+| Upstash | Redis/Kafka/QStash | `api.upstash.com`, REST token | Provider host plus REST/API token labels | Implemented SecretSniffer-only |
+| MotherDuck | DuckDB cloud data warehouse | `motherduck.com`, access token | Provider context plus token/API key labels | Implemented SecretSniffer-only |
+| Grafbase | GraphQL backend platform | `api.grafbase.com`, API key | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
+| SingleStore | Cloud database | `api.singlestore.com`, API key | Provider host plus API/management-token labels | Implemented SecretSniffer-only |
+| Timescale | Managed PostgreSQL/TimescaleDB | `api.timescale.com`, API key | Provider host plus API/token/password labels | Implemented SecretSniffer-only |
+| Convex | Backend/database platform | `api.convex.dev`, deploy key | Provider host plus deploy/admin key labels | Implemented SecretSniffer-only |
 | Cronitor | Monitoring and cron observability | `cronitor.io`, API key, telemetry key | Provider host plus API/telemetry key labels | Implemented SecretSniffer-only |
 | Greenhouse Harvest | Applicant tracking | `harvest.greenhouse.io`, Harvest API key | Provider API host plus Harvest/API key labels | Implemented SecretSniffer-only |
 | Lever | Applicant tracking | `api.lever.co`, API key, OAuth secret | Provider API host plus API/access-token labels | Implemented SecretSniffer-only |
