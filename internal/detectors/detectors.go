@@ -234,7 +234,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("harness-pat", "Harness Personal Access Token", "critical", []string{"harness"}, `\b(pat\.[A-Za-z0-9]{22}\.[0-9a-f]{24}\.[A-Za-z0-9]{20})\b`, 1, nil),
 		NewRegex("zoho-crm-token", "Zoho CRM Token", "critical", []string{"1000.", "zoho"}, `\b(1000\.[a-f0-9]{32}\.[a-f0-9]{32})\b`, 1, nil),
 		NewRegex("intercom-access-token", "Intercom Access Token", "critical", []string{"intercom", "dG9rO"}, `(?i)\bintercom.{0,40}['\"\s:=]+(dG9rO[A-Za-z0-9+/]{54}=)`, 1, nil),
-		NewRegex("front-api-token", "Front API Token", "critical", []string{"front", "frontapp"}, `(?i)\b(?:front(?:\b|[_-])|frontapp\.com|api2\.frontapp\.com|front[_-]?api)\b?[\s\S]{0,160}?(?:['\"\s:=]+|\b(?:api[_-]?token|access[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?)([0-9A-Za-z]{36}\.[0-9A-Za-z._-]{188,244}|[A-Za-z0-9._-]{32,256})\b`, 1, nil),
+		NewRegex("front-api-token", "Front API Token", "critical", []string{"front", "frontapp"}, `(?i)\b(?:front[_-]?token\b\s*[:=]\s*['\"]?|(?:front\b|frontapp\.com|api2\.frontapp\.com|front[_-]?api\b)[\s\S]{0,160}\b(?:api[_-]?token|access[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?)([0-9A-Za-z]{36}\.[0-9A-Za-z._-]{188,244}|[A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("segment-api-key", "Segment API Key", "high", []string{"segment"}, `(?i)\bsegment.{0,40}['\"\s:=]+([A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43})\b`, 1, nil),
 		NewRegex("posthog-personal-api-key", "PostHog Personal API Key", "critical", []string{"phx_", "posthog"}, `\b(phx_[A-Za-z0-9_]{43})\b`, 1, nil),
 		NewRegex("launchdarkly-key", "LaunchDarkly Key", "critical", []string{"api-", "sdk-", "launchdarkly"}, `\b((?:api|sdk)-[a-z0-9]{8}-[a-z0-9]{4}-4[a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{12})\b`, 1, nil),

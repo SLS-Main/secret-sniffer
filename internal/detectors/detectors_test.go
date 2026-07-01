@@ -1180,6 +1180,26 @@ func TestGenericAssignedSecretRejectsMemberReferences(t *testing.T) {
 	}
 }
 
+func TestFrontAPITokenRejectsPropertyChains(t *testing.T) {
+	cases := []string{
+		`plot.plugins.bubbleRenderer.highlightLabel`,
+		`currentLine.ImportedPatientAccountId`,
+		`front renderer uses plot.plugins.bubbleRenderer.highlightLabel`,
+		`front import currentLine.ImportedPatientAccountId`,
+	}
+	for _, tc := range cases {
+		t.Run(tc, func(t *testing.T) {
+			for _, d := range DefaultRegistry() {
+				for _, c := range d.Detect([]byte(tc)) {
+					if c.DetectorID == "front-api-token" {
+						t.Fatalf("expected property chain to be ignored, got %q from %q", c.Secret, tc)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestLoadCustomFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "detectors.json")
