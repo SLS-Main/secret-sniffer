@@ -384,6 +384,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | BigCommerce | Ecommerce platform | `api.bigcommerce.com`, `x-auth-token` | Provider host/header plus API/access token labels | Implemented SecretSniffer-only |
 | Saleor | Composable commerce | `saleor.cloud`, app token, webhook secret | Provider context plus API/app token labels | Implemented SecretSniffer-only |
 | Medusa | Commerce backend | `medusajs`, admin API token, JWT secret | Provider context plus admin token/secret labels | Implemented SecretSniffer-only |
+| Bunny.net | CDN and object storage | `api.bunny.net`, `storage.bunnycdn.com`, access key | Provider host plus API/storage key labels | Implemented SecretSniffer-only |
+| imgix | Image CDN and optimization | `api.imgix.com`, secure URL token | Provider host plus API/secure-token labels | Implemented SecretSniffer-only |
+| Akamai EdgeGrid | CDN and edge platform | `.edgerc`, EdgeGrid client secret | Akamai/EdgeGrid context plus client-secret labels | Implemented SecretSniffer-only |
+| KeyCDN | CDN | `api.keycdn.com`, API key/token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Filestack | File upload and CDN | `cdn.filestackcontent.com`, API key, app secret | Provider host plus API/secret labels | Implemented SecretSniffer-only |
+| Bytescale | File upload and media processing | `api.bytescale.com`, API key | Provider host plus API/secret labels | Implemented SecretSniffer-only |
+| Transloadit | Media encoding and uploads | `api2.transloadit.com`, auth key/secret | Provider host plus auth/API key labels | Implemented SecretSniffer-only |
+| Gumlet | Image/video optimization CDN | `api.gumlet.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| ImageEngine | Image CDN | `control-api.imageengine.io`, API token | Provider host plus API/delivery token labels | Implemented SecretSniffer-only |
+| TinyPNG/Tinify | Image compression API | `api.tinify.com`, API key | Provider host plus API key labels | Implemented SecretSniffer-only |
 | incident.io | Incident management | `api.incident.io`, API key, bearer token | Provider host plus API/token labels | Implemented SecretSniffer-only |
 | FireHydrant | Incident management and service catalog | `api.firehydrant.io`, service token, API key | Provider host plus API/service-token labels | Implemented SecretSniffer-only |
 | Squadcast | Incident response and on-call | `api.squadcast.com`, API token | Provider host plus API/token labels | Implemented SecretSniffer-only |
