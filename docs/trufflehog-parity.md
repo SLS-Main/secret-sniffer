@@ -342,6 +342,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Pendo | Product analytics and guides | `api.pendo.io`, integration key, metadata key | Provider host plus integration/API key labels | Implemented SecretSniffer-only |
 | Heap | Product analytics | `api.heap.io`, API key, env/app ID | Provider host plus API/token/secret labels | Implemented SecretSniffer-only |
 | Contentsquare | Digital experience analytics | `api.contentsquare.com`, API key, client secret | Provider host plus API/client-secret labels | Implemented SecretSniffer-only |
+| Gorgias | Ecommerce support desk | `api.gorgias.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Kustomer | Customer support CRM | `api.kustomerapp.com`, API token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Crisp | Customer messaging | `api.crisp.chat`, API token | Provider host plus API/identifier token labels | Implemented SecretSniffer-only |
+| Userpilot | Product adoption platform | `api.userpilot.io`, API key/server key | Provider host plus API/server key labels | Implemented SecretSniffer-only |
+| Chameleon | Product adoption platform | `api.chameleon.io`, API/secret key | Provider host plus API/secret labels | Implemented SecretSniffer-only |
+| Productboard | Product management | `api.productboard.com`, API token | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| UserVoice | Product feedback | `api.uservoice.com`, API token/client secret | Provider host plus API/OAuth secret labels | Implemented SecretSniffer-only |
+| Product Fruits | Product onboarding | `api.productfruits.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Vitally | Customer success platform | `api.vitally.io`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Planhat | Customer success platform | `api.planhat.com`, API token | Provider host plus API/token labels | Implemented SecretSniffer-only |
 | Attio | CRM and customer data | `api.attio.com`, API key, access token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
 | Affinity | Relationship intelligence CRM | `api.affinity.co`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
 | Height | Project management | `api.height.app`, API key, bearer token | Provider host plus API/token labels | Implemented SecretSniffer-only |
