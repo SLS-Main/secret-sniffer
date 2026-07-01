@@ -354,6 +354,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Smartlead | Outbound email automation | `api.smartlead.ai`, API key, client secret | Provider host plus API/client-secret labels | Implemented SecretSniffer-only |
 | Salesforce Pardot | Marketing automation | `pi.pardot.com`, client secret, refresh token | Pardot host/context plus OAuth secret labels | Implemented SecretSniffer-only beyond generic Salesforce mappings |
 | Front | Shared inbox and customer operations | `api2.frontapp.com`, API token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
+| Inngest | Durable workflow execution | `api.inngest.com`, `signkey-`, signing key | Provider host/prefix plus signing/API key labels | Implemented SecretSniffer-only |
+| Trigger.dev | Background jobs and workflow automation | `api.trigger.dev`, `tr_dev_`, `tr_prod_` | Provider host/prefix plus API/token labels | Implemented SecretSniffer-only |
+| Temporal Cloud | Durable workflow platform | `cloud.temporal.io`, API key, client secret | Provider host plus API/OAuth secret labels | Implemented SecretSniffer-only |
+| Windmill | Workflow automation and internal tools | `app.windmill.dev`, API token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| n8n | Workflow automation | `n8n.io`, API key/token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Workato | Enterprise automation/iPaaS | `apim.workato.com`, API token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Tray.io | Enterprise automation/iPaaS | `api.tray.io`, API token | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Airbyte | ELT/data integration | `api.airbyte.com`, API token, client secret | Provider host plus API/OAuth secret labels | Implemented SecretSniffer-only |
+| Fivetran | ELT/data integration | `api.fivetran.com`, API secret | Provider host plus API key/secret labels | Implemented SecretSniffer-only |
+| Hightouch | Reverse ETL/CDP activation | `api.hightouch.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
 | incident.io | Incident management | `api.incident.io`, API key, bearer token | Provider host plus API/token labels | Implemented SecretSniffer-only |
 | FireHydrant | Incident management and service catalog | `api.firehydrant.io`, service token, API key | Provider host plus API/service-token labels | Implemented SecretSniffer-only |
 | Squadcast | Incident response and on-call | `api.squadcast.com`, API token | Provider host plus API/token labels | Implemented SecretSniffer-only |
