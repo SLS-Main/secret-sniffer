@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"secret-sniffer/internal/detectors"
@@ -194,6 +195,35 @@ func TestScannerSkipsOversizedArchiveEntry(t *testing.T) {
 	}
 }
 
+func TestDetectorPlanSkipsMissingKeywords(t *testing.T) {
+	var calls int32
+	d := countingDetector{id: "counting", keywords: []string{"needle"}, calls: &calls}
+	s := New(Config{Workers: 1, MaxFileBytes: 1024}, []detectors.Detector{d})
+	if got := s.scanBytes("config.txt", "", []byte("ordinary content")); len(got) != 0 {
+		t.Fatalf("unexpected findings without keyword: %#v", got)
+	}
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Fatalf("detector called without keyword: %d", got)
+	}
+	s.scanBytes("config.txt", "", []byte("needle content"))
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("detector calls=%d, want 1", got)
+	}
+}
+
+func TestScannerAllowedRelPathAppliesGitHistoryFilters(t *testing.T) {
+	s := New(Config{Include: []string{"*.txt"}, Exclude: []string{"ignored.*"}}, nil)
+	if !s.allowedRelPath("config.txt") {
+		t.Fatal("expected included txt path")
+	}
+	if s.allowedRelPath("ignored.txt") {
+		t.Fatal("expected excluded path to be rejected")
+	}
+	if s.allowedRelPath("image.png") {
+		t.Fatal("expected default excluded binary path to be rejected")
+	}
+}
+
 func TestScannerFindsSecretInGitHistoryArchive(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -340,6 +370,21 @@ func runGitOutput(t *testing.T, dir string, args ...string) []byte {
 		t.Fatalf("git %v failed: %v: %s", args, err, string(out))
 	}
 	return out
+}
+
+type countingDetector struct {
+	id       string
+	keywords []string
+	calls    *int32
+}
+
+func (d countingDetector) Detect([]byte) []detectors.Candidate {
+	atomic.AddInt32(d.calls, 1)
+	return nil
+}
+
+func (d countingDetector) Info() detectors.Info {
+	return detectors.Info{ID: d.id, Keywords: d.keywords}
 }
 
 func TestGitHubCloneURLInjectsToken(t *testing.T) {

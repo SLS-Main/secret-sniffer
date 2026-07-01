@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,9 +49,71 @@ type Config struct {
 type Scanner struct {
 	cfg       Config
 	detectors []detectors.Detector
+	plan      detectorPlan
 }
 
-func New(cfg Config, ds []detectors.Detector) *Scanner { return &Scanner{cfg: cfg, detectors: ds} }
+func New(cfg Config, ds []detectors.Detector) *Scanner {
+	return &Scanner{cfg: cfg, detectors: ds, plan: newDetectorPlan(ds)}
+}
+
+type detectorPlan struct {
+	always  []detectors.Detector
+	keyword map[string][]detectors.Detector
+}
+
+func newDetectorPlan(ds []detectors.Detector) detectorPlan {
+	plan := detectorPlan{keyword: map[string][]detectors.Detector{}}
+	for _, d := range ds {
+		info := d.Info()
+		if len(info.Keywords) == 0 {
+			plan.always = append(plan.always, d)
+			continue
+		}
+		seenKeywords := map[string]struct{}{}
+		for _, kw := range info.Keywords {
+			kw = strings.ToLower(strings.TrimSpace(kw))
+			if kw == "" {
+				continue
+			}
+			if _, ok := seenKeywords[kw]; ok {
+				continue
+			}
+			seenKeywords[kw] = struct{}{}
+			plan.keyword[kw] = append(plan.keyword[kw], d)
+		}
+		if len(seenKeywords) == 0 {
+			plan.always = append(plan.always, d)
+		}
+	}
+	return plan
+}
+
+func (p detectorPlan) selectDetectors(b []byte) []detectors.Detector {
+	if len(p.keyword) == 0 {
+		return p.always
+	}
+	low := strings.ToLower(string(b))
+	out := make([]detectors.Detector, 0, len(p.always)+8)
+	out = append(out, p.always...)
+	seen := map[string]struct{}{}
+	for _, d := range p.always {
+		seen[d.Info().ID] = struct{}{}
+	}
+	for kw, ds := range p.keyword {
+		if !strings.Contains(low, kw) {
+			continue
+		}
+		for _, d := range ds {
+			id := d.Info().ID
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, d)
+		}
+	}
+	return out
+}
 
 func (s *Scanner) Scan(ctx context.Context) ([]detectors.Finding, error) {
 	target := s.cfg.Target
@@ -193,8 +256,12 @@ func (s *Scanner) allowedPath(root, path string) bool {
 	if err != nil {
 		rel = path
 	}
+	return s.allowedRelPath(rel)
+}
+
+func (s *Scanner) allowedRelPath(rel string) bool {
 	rel = filepath.ToSlash(rel)
-	base := filepath.Base(path)
+	base := path.Base(rel)
 
 	if len(s.cfg.Include) > 0 && !matchAny(s.cfg.Include, rel, base) {
 		return false
@@ -257,7 +324,7 @@ func (s *Scanner) scanBytes(file, commit string, b []byte) []detectors.Finding {
 
 func (s *Scanner) scanByteView(file, commit string, source, view []byte, seen map[string]struct{}) []detectors.Finding {
 	var findings []detectors.Finding
-	for _, d := range s.detectors {
+	for _, d := range s.plan.selectDetectors(view) {
 		for _, c := range d.Detect(view) {
 			f := detectors.ToFinding(c, file, commit, source, s.cfg.Verify)
 			key := f.DetectorID + "\x00" + f.Secret + "\x00" + f.File + "\x00" + f.Commit
@@ -289,7 +356,7 @@ func (s *Scanner) scanDecodedBase64(file, commit string, b []byte, seen map[stri
 			continue
 		}
 		decodedSeen[decodedKey] = struct{}{}
-		for _, d := range s.detectors {
+		for _, d := range s.plan.selectDetectors(decoded) {
 			for _, c := range d.Detect(decoded) {
 				// Report the source line/column of the encoded blob while preserving
 				// the decoded secret value for remediation.
@@ -348,11 +415,16 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			batch, err := newGitBatchReader(ctx, repo)
+			if err != nil {
+				return
+			}
+			defer batch.close()
 			for f := range jobs {
 				if f.commit == "" || f.path == "" {
 					continue
 				}
-				b, err := gitBlobAtCommit(ctx, repo, f.commit, f.path, s.cfg.MaxFileBytes)
+				b, err := batch.blob(f.commit+":"+f.path, s.cfg.MaxFileBytes)
 				if err == nil {
 					out <- s.scanBlob(ctx, f.path, f.commit, b, 0)
 				}
@@ -375,6 +447,9 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 				continue
 			}
 			for _, p := range paths {
+				if !s.allowedRelPath(p) {
+					continue
+				}
 				key := commit + "\x00" + p
 				if _, ok := seen[key]; ok {
 					continue
@@ -403,7 +478,7 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 }
 
 func gitChangedPaths(ctx context.Context, repo, commit string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", repo, "diff-tree", "--root", "-r", "--no-commit-id", "--name-only", "--diff-filter=AM", commit)
+	cmd := exec.CommandContext(ctx, "git", "-C", repo, "diff-tree", "--root", "-r", "--no-commit-id", "--name-only", "--diff-filter=AMR", commit)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -419,25 +494,84 @@ func gitChangedPaths(ctx context.Context, repo, commit string) ([]string, error)
 	return paths, scan.Err()
 }
 
-func gitBlobAtCommit(ctx context.Context, repo, commit, file string, max int64) ([]byte, error) {
-	rev := commit + ":" + file
-	typeCmd := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "-t", rev)
-	t, err := typeCmd.Output()
-	if err != nil || strings.TrimSpace(string(t)) != "blob" {
-		return nil, errors.New("not blob")
-	}
-	sizeCmd := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "-s", rev)
-	szOut, err := sizeCmd.Output()
+type gitBatchReader struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *bufio.Reader
+}
+
+func newGitBatchReader(ctx context.Context, repo string) (*gitBatchReader, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "--batch")
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
 	}
-	var size int64
-	_, _ = fmt.Sscanf(string(szOut), "%d", &size)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		stdin.Close()
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		stdin.Close()
+		return nil, err
+	}
+	return &gitBatchReader{cmd: cmd, stdin: stdin, stdout: bufio.NewReader(stdout)}, nil
+}
+
+func (r *gitBatchReader) blob(rev string, max int64) ([]byte, error) {
+	if _, err := fmt.Fprintln(r.stdin, rev); err != nil {
+		return nil, err
+	}
+	header, err := r.stdout.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	fields := strings.Fields(strings.TrimSpace(header))
+	if len(fields) == 2 && fields[1] == "missing" {
+		return nil, errors.New("missing object")
+	}
+	if len(fields) != 3 {
+		return nil, fmt.Errorf("unexpected cat-file header: %s", strings.TrimSpace(header))
+	}
+	size, err := strconv.ParseInt(fields[2], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if fields[1] != "blob" {
+		if err := discardBatchObject(r.stdout, size); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("not blob")
+	}
 	if size > max {
+		if err := discardBatchObject(r.stdout, size); err != nil {
+			return nil, err
+		}
 		return nil, errors.New("blob too large")
 	}
-	cat := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "-p", rev)
-	return cat.Output()
+	b := make([]byte, size)
+	if _, err := io.ReadFull(r.stdout, b); err != nil {
+		return nil, err
+	}
+	if err := discardBatchObject(r.stdout, 0); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func discardBatchObject(r *bufio.Reader, size int64) error {
+	if size > 0 {
+		if _, err := io.CopyN(io.Discard, r, size); err != nil {
+			return err
+		}
+	}
+	_, err := r.ReadByte()
+	return err
+}
+
+func (r *gitBatchReader) close() {
+	_ = r.stdin.Close()
+	_ = r.cmd.Wait()
 }
 
 func (s *Scanner) scanBlob(ctx context.Context, file, commit string, b []byte, depth int) []detectors.Finding {
