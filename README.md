@@ -84,7 +84,7 @@ GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-histor
 --baseline            Path to accepted-finding baseline JSON.
 --write-baseline      Write current finding fingerprints to baseline JSON.
 --summary-output      Write GitHub discovery and scan summary JSON to this path.
---scan-job-id         Persist per-repository scan state under this job ID.
+--scan-job-id         Persist per-repository scan state under this job ID. Generated automatically when omitted.
 --scan-job-path       Path to scan job state JSON. Default: .secret-sniffer-jobs/<job-id>.json.
 --scan-resume         With --scan-job-id, skip repositories already completed in the job state.
 --scan-retry-failed   With --scan-job-id, scan only repositories marked failed in the job state.
@@ -131,7 +131,9 @@ When `--format jsonl` is used, findings are streamed to the output file and stdo
 
 ## Resuming Large Scans
 
-Use `--scan-job-id` for long GitHub org, enterprise, or accessible-repository scans. The scanner writes per-repository progress to `.secret-sniffer-jobs/<job-id>.json` after every repo starts, completes, or fails.
+Every normal scan gets a scan job ID, even when `--scan-job-id` is omitted. Generated IDs include the scan scope plus random digits, such as `org-acme-12345678` or `enterprise-prod-12345678`. The scanner writes per-repository progress to `.secret-sniffer-jobs/<job-id>.json` after every repo starts, completes, or fails.
+
+The generated job ID and state file path are printed in the progress logs. Keep that ID if you may need to resume the scan later.
 
 ```bash
 ./secret-sniffer \
@@ -140,8 +142,7 @@ Use `--scan-job-id` for long GitHub org, enterprise, or accessible-repository sc
   --repo-concurrency 4 \
   --workers 32 \
   --format jsonl \
-  --output org.findings.jsonl \
-  --scan-job-id org-nightly
+  --output org.findings.jsonl
 ```
 
 If the proxy or network fails during a long run, fix the proxy and resume unfinished repositories:

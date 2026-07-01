@@ -3,9 +3,11 @@ package main
 import (
 	"cmp"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math/big"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -155,9 +157,15 @@ func main() {
 	if scanResume && scanRetryFailed {
 		fatal(fmt.Errorf("--scan-resume and --scan-retry-failed cannot be used together"))
 	}
-	if scanJobID != "" || scanJobPath != "" || scanResume || scanRetryFailed {
+	if !summaryOnly && scanJobID == "" && !scanResume && !scanRetryFailed {
+		scanJobID, err = defaultScanJobID(scanJobPrefix(cfg.Target, githubOrgs, githubEnterprise, githubAccessible))
+		if err != nil {
+			fatal(err)
+		}
+	}
+	if !summaryOnly && (scanJobID != "" || scanJobPath != "" || scanResume || scanRetryFailed) {
 		if scanJobID == "" {
-			fatal(fmt.Errorf("--scan-job-id is required when using scan job resume/retry options"))
+			fatal(fmt.Errorf("--scan-job-id is required when using --scan-resume or --scan-retry-failed"))
 		}
 		jobPath = scanJobStatePath(scanJobID, scanJobPath)
 		jobState, err = loadOrCreateScanJobState(jobPath, scanJobID, start)
@@ -910,6 +918,72 @@ func scanJobStatePath(jobID, explicitPath string) string {
 		return explicitPath
 	}
 	return filepath.Join(".secret-sniffer-jobs", jobID+".json")
+}
+
+func defaultScanJobID(prefix string) (string, error) {
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(100000000))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s-%08d", prefix, n.Int64()), nil
+}
+
+func scanJobPrefix(target, orgs, enterprise string, accessible bool) string {
+	switch {
+	case enterprise != "":
+		return sanitizeScanJobPrefix("enterprise-" + enterprise)
+	case orgs != "":
+		return sanitizeScanJobPrefix("org-" + strings.Join(splitCSV(orgs), "-"))
+	case accessible:
+		return "accessible"
+	case isGitHubCloneTarget(target):
+		return sanitizeScanJobPrefix("repo-" + strings.TrimSuffix(strings.Trim(strings.TrimPrefix(githubPath(target), "/"), "/"), ".git"))
+	default:
+		name := filepath.Base(target)
+		if name == "." || name == string(filepath.Separator) {
+			if wd, err := os.Getwd(); err == nil {
+				name = filepath.Base(wd)
+			}
+		}
+		return sanitizeScanJobPrefix("target-" + name)
+	}
+}
+
+func githubPath(target string) string {
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	return u.Path
+}
+
+func sanitizeScanJobPrefix(s string) string {
+	s = strings.ToLower(s)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range s {
+		valid := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if valid {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "scan"
+	}
+	if len(out) > 60 {
+		out = strings.Trim(out[:60], "-")
+		if out == "" {
+			return "scan"
+		}
+	}
+	return out
 }
 
 func loadOrCreateScanJobState(path, jobID string, now time.Time) (*scanJobState, error) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -108,6 +109,49 @@ func TestScanJobStatePath(t *testing.T) {
 	}
 	if got := scanJobStatePath("nightly", "/tmp/job.json"); got != "/tmp/job.json" {
 		t.Fatalf("explicit path not honored: %q", got)
+	}
+}
+
+func TestScanJobPrefix(t *testing.T) {
+	cases := []struct {
+		name       string
+		target     string
+		orgs       string
+		enterprise string
+		accessible bool
+		want       string
+	}{
+		{name: "enterprise", enterprise: "Prod Enterprise", want: "enterprise-prod-enterprise"},
+		{name: "org", orgs: "Acme, Example Org", want: "org-acme-example-org"},
+		{name: "accessible", accessible: true, want: "accessible"},
+		{name: "github target", target: "https://github.com/Acme/Repo.git", want: "repo-acme-repo"},
+		{name: "local target", target: "/tmp/My Repo", want: "target-my-repo"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := scanJobPrefix(tc.target, tc.orgs, tc.enterprise, tc.accessible); got != tc.want {
+				t.Fatalf("scanJobPrefix()=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDefaultScanJobID(t *testing.T) {
+	jobID, err := defaultScanJobID("org-acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(jobID, "org-acme-") {
+		t.Fatalf("job ID %q missing prefix", jobID)
+	}
+	digits := strings.TrimPrefix(jobID, "org-acme-")
+	if len(digits) != 8 {
+		t.Fatalf("job ID random suffix %q length=%d, want 8", digits, len(digits))
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			t.Fatalf("job ID random suffix contains non-digit: %q", digits)
+		}
 	}
 }
 
