@@ -308,6 +308,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Fireworks AI | LLM inference platform | `api.fireworks.ai`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
 | Voyage AI | Embeddings and reranking | `api.voyageai.com`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
 | Perplexity | LLM API/search | `api.perplexity.ai`, `pplx-` | Provider host/prefix plus API/bearer token labels | Implemented SecretSniffer-only |
+| OpenRouter | LLM routing API | `openrouter.ai`, `sk-or-` | Provider host/prefix plus API/bearer token labels | Implemented SecretSniffer-only |
+| AI21 | LLM API | `api.ai21.com`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Cerebras | LLM inference API | `api.cerebras.ai`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Baseten | Model serving platform | `model-apis.baseten.co`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Runpod | GPU and serverless inference | `api.runpod.ai`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Modal | Serverless compute and inference | `api.modal.com`, token secret | Provider host plus token/API secret labels | Implemented SecretSniffer-only |
+| fal.ai | Generative media inference | `api.fal.ai`, `fal_key` | Provider host/label plus API/bearer token labels | Implemented SecretSniffer-only |
+| Novita AI | Model inference API | `api.novita.ai`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| Predibase | Fine-tuning and model serving | `serving.app.predibase.com`, API token | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
+| OctoAI | Model serving API | `api.octoai.cloud`, API token | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
 | Qdrant Cloud | Vector database | `cloud.qdrant.io`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
 | Weaviate Cloud | Vector database | `weaviate.cloud`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
 | Zilliz Cloud | Vector database | `api.cloud.zilliz.com`, API key | Provider host plus API/bearer token labels | Implemented SecretSniffer-only |
