@@ -331,7 +331,7 @@ func decodeBase64Candidate(b []byte) ([]byte, bool) {
 }
 
 func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.Finding, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", repo, "rev-list", "--objects", "--all")
+	cmd := exec.CommandContext(ctx, "git", "-C", repo, "rev-list", "--all")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -340,21 +340,21 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 		return nil, err
 	}
 
-	type obj struct{ hash, path string }
-	jobs := make(chan obj)
+	type changedFile struct{ commit, path string }
+	jobs := make(chan changedFile)
 	out := make(chan []detectors.Finding)
 	var wg sync.WaitGroup
 	for i := 0; i < s.cfg.Workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for o := range jobs {
-				if o.path == "" {
+			for f := range jobs {
+				if f.commit == "" || f.path == "" {
 					continue
 				}
-				b, err := gitBlob(ctx, repo, o.hash, s.cfg.MaxFileBytes)
+				b, err := gitBlobAtCommit(ctx, repo, f.commit, f.path, s.cfg.MaxFileBytes)
 				if err == nil {
-					out <- s.scanBlob(ctx, o.path, o.hash, b, 0)
+					out <- s.scanBlob(ctx, f.path, f.commit, b, 0)
 				}
 			}
 		}()
@@ -362,21 +362,28 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 	go func() { wg.Wait(); close(out) }()
 
 	scan := bufio.NewScanner(stdout)
-	seenObjects := map[string]struct{}{}
+	seen := map[string]struct{}{}
 	go func() {
 		defer close(jobs)
 		for scan.Scan() {
-			line := scan.Text()
-			parts := strings.SplitN(line, " ", 2)
-			if len(parts) == 2 {
-				if _, ok := seenObjects[parts[0]]; ok {
+			commit := strings.TrimSpace(scan.Text())
+			if commit == "" {
+				continue
+			}
+			paths, err := gitChangedPaths(ctx, repo, commit)
+			if err != nil {
+				continue
+			}
+			for _, p := range paths {
+				key := commit + "\x00" + p
+				if _, ok := seen[key]; ok {
 					continue
 				}
-				seenObjects[parts[0]] = struct{}{}
+				seen[key] = struct{}{}
 				select {
 				case <-ctx.Done():
 					return
-				case jobs <- obj{parts[0], parts[1]}:
+				case jobs <- changedFile{commit: commit, path: p}:
 				}
 			}
 		}
@@ -395,13 +402,31 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 	return dedupe(findings), nil
 }
 
-func gitBlob(ctx context.Context, repo, hash string, max int64) ([]byte, error) {
-	typeCmd := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "-t", hash)
+func gitChangedPaths(ctx context.Context, repo, commit string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", repo, "diff-tree", "--root", "-r", "--no-commit-id", "--name-only", "--diff-filter=AM", commit)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	scan := bufio.NewScanner(bytes.NewReader(out))
+	for scan.Scan() {
+		p := strings.TrimSpace(scan.Text())
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, scan.Err()
+}
+
+func gitBlobAtCommit(ctx context.Context, repo, commit, file string, max int64) ([]byte, error) {
+	rev := commit + ":" + file
+	typeCmd := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "-t", rev)
 	t, err := typeCmd.Output()
 	if err != nil || strings.TrimSpace(string(t)) != "blob" {
 		return nil, errors.New("not blob")
 	}
-	sizeCmd := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "-s", hash)
+	sizeCmd := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "-s", rev)
 	szOut, err := sizeCmd.Output()
 	if err != nil {
 		return nil, err
@@ -411,7 +436,7 @@ func gitBlob(ctx context.Context, repo, hash string, max int64) ([]byte, error) 
 	if size > max {
 		return nil, errors.New("blob too large")
 	}
-	cat := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "-p", hash)
+	cat := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "-p", rev)
 	return cat.Output()
 }
 

@@ -225,6 +225,35 @@ func TestScannerFindsSecretInGitHistoryArchive(t *testing.T) {
 	}
 }
 
+func TestGitChangedPathsOnlyIncludesFilesChangedInCommit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(dir, "unchanged.txt"), []byte("OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "unchanged.txt")
+	runGit(t, dir, "commit", "-m", "add unchanged file")
+	if err := os.WriteFile(filepath.Join(dir, "changed.txt"), []byte("ordinary content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "changed.txt")
+	runGit(t, dir, "commit", "-m", "change another file")
+	commit := strings.TrimSpace(string(runGitOutput(t, dir, "rev-parse", "HEAD")))
+
+	paths, err := gitChangedPaths(context.Background(), dir, commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "changed.txt" {
+		t.Fatalf("expected only changed.txt for latest commit, got %#v", paths)
+	}
+}
+
 func hasFinding(findings []detectors.Finding, detectorID, secret string) bool {
 	for _, f := range findings {
 		if f.DetectorID == detectorID && f.Secret == secret {
@@ -301,6 +330,16 @@ func runGit(t *testing.T, dir string, args ...string) {
 	if err != nil {
 		t.Fatalf("git %v failed: %v: %s", args, err, string(out))
 	}
+}
+
+func runGitOutput(t *testing.T, dir string, args ...string) []byte {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v: %s", args, err, string(out))
+	}
+	return out
 }
 
 func TestGitHubCloneURLInjectsToken(t *testing.T) {

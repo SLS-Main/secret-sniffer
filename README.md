@@ -43,7 +43,7 @@ Scan a GitHub repository URL:
 ./secret-sniffer --target https://github.com/OWNER/REPO --workers 24 --format json
 ```
 
-Scan full git object history:
+Scan changed file versions from git history:
 
 ```bash
 ./secret-sniffer --target https://github.com/OWNER/REPO --git-history --workers 32 --format jsonl > findings.jsonl
@@ -72,7 +72,7 @@ GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-histor
 --max-archive-entries Maximum entries to inspect per archive. Default: 10000.
 --max-archive-bytes   Maximum expanded bytes to inspect per archive. Default: 262144000.
 --max-expanded-file-bytes  Maximum decompressed archive entry size to scan. Default: 26214400.
---git-history         Scan every reachable git blob in addition to the worktree.
+--git-history         Scan added/modified file versions from git history in addition to the worktree.
 --verify              Attempt live provider verification for supported detectors.
 --format              Output format: human, json, jsonl, sarif.
 --output              Write findings to this file. JSONL streams during scanning.
