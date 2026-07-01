@@ -394,6 +394,16 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Gumlet | Image/video optimization CDN | `api.gumlet.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
 | ImageEngine | Image CDN | `control-api.imageengine.io`, API token | Provider host plus API/delivery token labels | Implemented SecretSniffer-only |
 | TinyPNG/Tinify | Image compression API | `api.tinify.com`, API key | Provider host plus API key labels | Implemented SecretSniffer-only |
+| OpenPhone | Business phone and messaging | `api.openphone.com`, API key | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
+| Aircall | Cloud phone system | `api.aircall.io`, API token/id | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| Dialpad | Business communications | `dialpad.com`, API key | Provider context plus API/access-token labels | Implemented SecretSniffer-only |
+| Five9 | Contact center | `five9.com`, client secret | Provider context plus client/API secret labels | Implemented SecretSniffer-only |
+| Genesys Cloud | Contact center | `mypurecloud.com`, client secret | Provider host plus OAuth/client-secret labels | Implemented SecretSniffer-only |
+| Talkdesk | Contact center | `api.talkdeskapp.com`, API token | Provider host plus API/OAuth token labels | Implemented SecretSniffer-only |
+| Ringover | Business phone system | `api.ringover.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| JustCall | Cloud phone system | `api.justcall.io`, API key/secret | Provider host plus API/secret labels | Implemented SecretSniffer-only |
+| CallRail | Call tracking | `api.callrail.com`, API key | Provider host plus API/token labels | Implemented SecretSniffer-only |
+| CallTrackingMetrics | Call tracking | `api.calltrackingmetrics.com`, API key/secret | Provider host plus API/secret labels | Implemented SecretSniffer-only |
 | incident.io | Incident management | `api.incident.io`, API key, bearer token | Provider host plus API/token labels | Implemented SecretSniffer-only |
 | FireHydrant | Incident management and service catalog | `api.firehydrant.io`, service token, API key | Provider host plus API/service-token labels | Implemented SecretSniffer-only |
 | Squadcast | Incident response and on-call | `api.squadcast.com`, API token | Provider host plus API/token labels | Implemented SecretSniffer-only |
