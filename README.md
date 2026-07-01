@@ -133,7 +133,7 @@ When `--format jsonl` is used, findings are streamed to the output file and stdo
 
 Every normal scan gets a scan job ID, even when `--scan-job-id` is omitted. Generated IDs include the scan scope plus random digits, such as `org-acme-12345678` or `enterprise-prod-12345678`. The scanner writes per-repository progress to `.secret-sniffer-jobs/<job-id>.json` after every repo starts, completes, or fails.
 
-The generated job ID and state file path are printed in the progress logs. Keep that ID if you may need to resume the scan later.
+The generated job ID and state file path are printed in the progress logs. Keep that ID if you may need to resume the scan later. On resume or retry, the logs show the discovered repo count, already-completed count, and selected repo count so it is clear how much prior work is being reused.
 
 ```bash
 ./secret-sniffer \

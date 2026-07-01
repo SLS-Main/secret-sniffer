@@ -176,10 +176,11 @@ func main() {
 		if err := writeScanJobState(jobPath, jobState); err != nil {
 			fatal(err)
 		}
-		originalTargets := len(targets)
+		counts := scanJobCounts(targets, jobState)
 		targets = filterScanJobTargets(targets, jobState, scanResume, scanRetryFailed)
+		counts.Selected = len(targets)
 		summary.TotalRepositories = len(targets)
-		console.info("Scan job %s state=%s selected_repos=%d discovered_repos=%d", scanJobID, jobPath, len(targets), originalTargets)
+		console.info("Scan job %s state=%s discovered_repos=%d already_completed=%d selected_repos=%d failed=%d running=%d pending=%d", scanJobID, jobPath, counts.Discovered, counts.Completed, counts.Selected, counts.Failed, counts.Running, counts.Pending)
 	}
 	if summaryOutputPath == "" && isGitHubDiscovery(githubOrgs, githubEnterprise, githubAccessible) {
 		summaryOutputPath = "secret-sniffer-summary.json"
@@ -460,6 +461,15 @@ const (
 	scanJobCompleted = "completed"
 	scanJobFailed    = "failed"
 )
+
+type scanJobStatusCounts struct {
+	Discovered int
+	Selected   int
+	Pending    int
+	Running    int
+	Completed  int
+	Failed     int
+}
 
 func githubClients(ctx context.Context, token, appID, privateKeyPath, installationIDRaw string, allInstallations bool, orgsRaw string) ([]githubClient, error) {
 	if appID == "" && privateKeyPath == "" {
@@ -1099,6 +1109,27 @@ func filterScanJobTargets(targets []string, state *scanJobState, resume, retryFa
 		}
 	}
 	return out
+}
+
+func scanJobCounts(targets []string, state *scanJobState) scanJobStatusCounts {
+	counts := scanJobStatusCounts{Discovered: len(targets)}
+	if state == nil {
+		counts.Pending = len(targets)
+		return counts
+	}
+	for _, target := range targets {
+		switch state.Targets[target].Status {
+		case scanJobCompleted:
+			counts.Completed++
+		case scanJobFailed:
+			counts.Failed++
+		case scanJobRunning:
+			counts.Running++
+		default:
+			counts.Pending++
+		}
+	}
+	return counts
 }
 
 func writeSummary(path string, summary discoverySummary) error {

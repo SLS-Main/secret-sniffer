@@ -201,6 +201,21 @@ func TestFilterScanJobTargets(t *testing.T) {
 	}
 }
 
+func TestScanJobCounts(t *testing.T) {
+	targets := []string{"completed", "failed", "running", "pending", "missing"}
+	state := &scanJobState{Targets: map[string]scanJobTarget{
+		"completed": {Status: scanJobCompleted},
+		"failed":    {Status: scanJobFailed},
+		"running":   {Status: scanJobRunning},
+		"pending":   {Status: scanJobPending},
+	}}
+
+	counts := scanJobCounts(targets, state)
+	if counts.Discovered != 5 || counts.Completed != 1 || counts.Failed != 1 || counts.Running != 1 || counts.Pending != 2 {
+		t.Fatalf("unexpected counts: %#v", counts)
+	}
+}
+
 func TestWriteAndLoadScanJobState(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "jobs", "nightly.json")
