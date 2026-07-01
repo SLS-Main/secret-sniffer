@@ -1236,6 +1236,9 @@ func plausibleSecret(s string) bool {
 	if looksLikeVariableReference(s) {
 		return false
 	}
+	if containsSensitivePlaceholderAssignment(s) {
+		return false
+	}
 	if looksLikeRegexFragment(s) {
 		return false
 	}
@@ -1243,6 +1246,7 @@ func plausibleSecret(s string) bool {
 }
 
 var variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$`)
+var sensitiveAssignmentPattern = regexp.MustCompile(`(?i)(?:^|[;\s])(?:password|passwd|pwd|secret|token|api[_-]?key|client[_-]?secret|credential|credentials)\s*=\s*("[^"]*"|'[^']*'|[^;\s]+)`)
 
 func looksLikeVariableReference(s string) bool {
 	t := strings.Trim(strings.TrimSpace(s), `'"`)
@@ -1282,6 +1286,20 @@ func looksLikeVariableReference(s string) bool {
 	variableTerms := []string{"api", "key", "secret", "token", "password", "passwd", "pwd", "credential", "credentials", "client"}
 	for _, term := range variableTerms {
 		if strings.Contains(lower, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSensitivePlaceholderAssignment(s string) bool {
+	matches := sensitiveAssignmentPattern.FindAllStringSubmatch(s, -1)
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(match[1]), `"'`)
+		if looksLikeVariableReference(value) {
 			return true
 		}
 	}

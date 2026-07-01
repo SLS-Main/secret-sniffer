@@ -1140,11 +1140,14 @@ func TestAssignedSecretRejectsVariableReferences(t *testing.T) {
 		`password=$SENDGRID_API_KEY`,
 		`password=sendgrid_api_key_value`,
 		`password=PROD_DB_PASSWORD`,
+		`Server=tcp:db.example.com;User ID=app;Password=${ConnectionStrings.DSN_Remits.Password};`,
+		`Server=tcp:db.example.com;User ID=app;Password=${ConnectionStrings.DSN_CueballRead.Password};`,
+		`Server=tcp:db.example.com;User ID=app;Password="${ConnectionStrings.DSN_General.Password}";`,
 	}
 
 	for _, tc := range cases {
 		t.Run(tc, func(t *testing.T) {
-			if registryFinds("generic-assigned-secret", tc, "sendgrid_api_key_value") || registryFinds("generic-assigned-secret", tc, "PROD_DB_PASSWORD") {
+			if plausibleSecret(tc) {
 				t.Fatalf("expected assigned variable reference to be ignored: %q", tc)
 			}
 		})
