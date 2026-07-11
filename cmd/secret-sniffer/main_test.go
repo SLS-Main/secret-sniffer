@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"secret-sniffer/internal/detectors"
 )
 
 func TestShouldRefreshToken(t *testing.T) {
@@ -88,6 +90,48 @@ func TestResumeOutputOpenOptionsDefaultsToAppendNonInteractive(t *testing.T) {
 	}
 	if flags&os.O_APPEND == 0 || flags&os.O_TRUNC != 0 {
 		t.Fatalf("expected append flags, got %#x", flags)
+	}
+}
+
+func TestAsyncJSONLWriterWritesAndRedacts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "findings.jsonl")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := newAsyncJSONLWriter(file, false, 1)
+	writer.Write(detectors.Finding{DetectorID: "test", Secret: "supersecret", Redacted: "supe***cret"})
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "supersecret") || !strings.Contains(string(b), "supe***cret") {
+		t.Fatalf("unexpected JSONL output: %s", b)
+	}
+}
+
+func TestAsyncJSONLWriterReportsWriteFailureAtFlush(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "findings.jsonl")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := newAsyncJSONLWriter(file, true, 25)
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writer.Write(detectors.Finding{DetectorID: "test", Secret: "supersecret"})
+	if err := writer.Flush(); err == nil {
+		t.Fatal("expected closed output file error")
+	}
+	if err := writer.Close(); err == nil {
+		t.Fatal("expected close to retain output error")
 	}
 }
 

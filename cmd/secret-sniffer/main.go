@@ -203,6 +203,7 @@ func main() {
 		outputPath = defaultOutputPath(format)
 	}
 	var outputFile *os.File
+	var streamWriter *asyncJSONLWriter
 	if outputPath != "" {
 		outputFlags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 		if jobState != nil && (scanResume || scanRetryFailed) {
@@ -217,6 +218,7 @@ func main() {
 		}
 		defer outputFile.Close()
 		if format == "jsonl" {
+			streamWriter = newAsyncJSONLWriter(outputFile, includeSecrets, outputFlushFindings)
 			console.info("Streaming findings to %s", outputPath)
 		} else {
 			console.info("Writing %s output to %s", format, outputPath)
@@ -239,7 +241,6 @@ func main() {
 	var findings []detectors.Finding
 	totalBeforeBaseline := 0
 	totalAfterBaseline := 0
-	streamedSinceSync := 0
 	var mu sync.Mutex
 	var tokenMu sync.Mutex
 	jobs := make(chan int)
@@ -316,6 +317,17 @@ func main() {
 				mu.Lock()
 				totalAfterBaseline += len(targetFindings)
 				mu.Unlock()
+				for _, finding := range targetFindings {
+					console.finding(finding)
+					if streamWriter != nil {
+						streamWriter.Write(finding)
+					}
+				}
+				if streamWriter != nil {
+					if err := streamWriter.Flush(); err != nil {
+						fatal(err)
+					}
+				}
 				console.repoDone(i+1, len(targets), target, len(targetFindings))
 				mu.Lock()
 				summary.addScanResult(target, len(targetFindings))
@@ -325,34 +337,6 @@ func main() {
 						mu.Unlock()
 						fatal(err)
 					}
-				}
-				mu.Unlock()
-				for _, finding := range targetFindings {
-					console.finding(finding)
-					if outputFile != nil && format == "jsonl" {
-						mu.Lock()
-						if err := output.WriteFindingJSONL(outputFile, finding, includeSecrets); err != nil {
-							mu.Unlock()
-							fatal(err)
-						}
-						streamedSinceSync++
-						if outputFlushFindings < 1 || streamedSinceSync >= outputFlushFindings {
-							if err := outputFile.Sync(); err != nil {
-								mu.Unlock()
-								fatal(err)
-							}
-							streamedSinceSync = 0
-						}
-						mu.Unlock()
-					}
-				}
-				mu.Lock()
-				if outputFile != nil && format == "jsonl" && streamedSinceSync > 0 {
-					if err := outputFile.Sync(); err != nil {
-						mu.Unlock()
-						fatal(err)
-					}
-					streamedSinceSync = 0
 				}
 				if outputFile == nil || format != "jsonl" || writeBaselinePath != "" {
 					findings = append(findings, targetFindings...)
@@ -366,6 +350,11 @@ func main() {
 	}
 	close(jobs)
 	wg.Wait()
+	if streamWriter != nil {
+		if err := streamWriter.Close(); err != nil {
+			fatal(err)
+		}
+	}
 	if writeBaselinePath != "" {
 		if err := baseline.Write(writeBaselinePath, findings); err != nil {
 			fatal(err)
@@ -628,6 +617,75 @@ func scanTargets(ctx context.Context, target, orgs, enterprise string, accessibl
 type console struct {
 	quiet bool
 	color bool
+}
+
+type asyncJSONLWriter struct {
+	messages chan asyncJSONLMessage
+	done     chan error
+}
+
+type asyncJSONLMessage struct {
+	finding *detectors.Finding
+	flush   chan error
+}
+
+func newAsyncJSONLWriter(file *os.File, includeSecrets bool, flushEvery int) *asyncJSONLWriter {
+	w := &asyncJSONLWriter{messages: make(chan asyncJSONLMessage, 256), done: make(chan error, 1)}
+	go func() {
+		writer := output.NewJSONLWriter(file, includeSecrets)
+		writtenSinceSync := 0
+		var firstErr error
+		for message := range w.messages {
+			if message.flush != nil {
+				if firstErr == nil && writtenSinceSync > 0 {
+					firstErr = file.Sync()
+					writtenSinceSync = 0
+				}
+				message.flush <- firstErr
+				continue
+			}
+			if firstErr != nil || message.finding == nil {
+				continue
+			}
+			if err := writer.Write(*message.finding); err != nil {
+				firstErr = err
+				continue
+			}
+			writtenSinceSync++
+			if flushEvery < 1 || writtenSinceSync >= flushEvery {
+				if err := file.Sync(); err != nil {
+					firstErr = err
+					continue
+				}
+				writtenSinceSync = 0
+			}
+		}
+		if firstErr == nil && writtenSinceSync > 0 {
+			firstErr = file.Sync()
+		}
+		w.done <- firstErr
+	}()
+	return w
+}
+
+func (w *asyncJSONLWriter) Write(finding detectors.Finding) {
+	w.messages <- asyncJSONLMessage{finding: &finding}
+}
+
+func (w *asyncJSONLWriter) Flush() error {
+	flushed := make(chan error, 1)
+	w.messages <- asyncJSONLMessage{flush: flushed}
+	return <-flushed
+}
+
+func (w *asyncJSONLWriter) Close() error {
+	if err := w.Flush(); err != nil {
+		close(w.messages)
+		<-w.done
+		return err
+	}
+	close(w.messages)
+	return <-w.done
 }
 
 const (

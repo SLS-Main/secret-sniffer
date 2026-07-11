@@ -44,6 +44,11 @@ type Detector interface {
 	Info() Info
 }
 
+type PrefilteredDetector interface {
+	Detector
+	DetectPrefiltered([]byte) []Candidate
+}
+
 type Info struct {
 	ID         string   `json:"id"`
 	Name       string   `json:"name"`
@@ -53,13 +58,14 @@ type Info struct {
 }
 
 type RegexDetector struct {
-	ID          string
-	Name        string
-	Severity    string
-	Keywords    []string
-	Regex       *regexp.Regexp
-	SecretGroup int
-	Verifier    Verifier
+	ID           string
+	Name         string
+	Severity     string
+	Keywords     []string
+	Regex        *regexp.Regexp
+	SecretGroup  int
+	Verifier     Verifier
+	BroadContext bool
 }
 
 func (d RegexDetector) Detect(b []byte) []Candidate {
@@ -77,7 +83,14 @@ func (d RegexDetector) Detect(b []byte) []Candidate {
 			return nil
 		}
 	}
+	return d.detectContent(content)
+}
 
+func (d RegexDetector) DetectPrefiltered(b []byte) []Candidate {
+	return d.detectContent(string(b))
+}
+
+func (d RegexDetector) detectContent(content string) []Candidate {
 	matches := d.Regex.FindAllStringSubmatchIndex(content, -1)
 	out := make([]Candidate, 0, len(matches))
 	for _, m := range matches {
@@ -87,7 +100,10 @@ func (d RegexDetector) Detect(b []byte) []Candidate {
 		}
 		start, end := m[group*2], m[group*2+1]
 		secret := content[start:end]
-		if plausibleSecret(secret) {
+		if d.BroadContext && hasContextBoundary(content[m[0]:start]) {
+			continue
+		}
+		if plausibleSecret(secret) && !(d.ID == "generic-assigned-secret" && looksLikeAssignedReference(content, start)) {
 			out = append(out, Candidate{DetectorID: d.ID, Name: d.Name, Severity: d.Severity, Secret: secret, Start: start, End: end, Verifier: d.Verifier})
 		}
 	}
@@ -107,7 +123,7 @@ func RegistryInfo(ds []Detector) []Info {
 }
 
 func NewRegex(id, name, severity string, keywords []string, expr string, group int, verifier Verifier) Detector {
-	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: group, Verifier: verifier}
+	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: group, Verifier: verifier, BroadContext: strings.Contains(expr, `[\s\S]{0,`)}
 }
 
 func DefaultRegistry() []Detector {
@@ -1208,15 +1224,37 @@ func DefaultRegistry() []Detector {
 
 func ToFinding(c Candidate, file, commit string, b []byte, verify bool) Finding {
 	line, col := lineColumn(b, c.Start)
+	return ToFindingAt(c, file, commit, line, col, verify)
+}
+
+func ToFindingAt(c Candidate, file, commit string, line, col int, verify bool) Finding {
 	f := Finding{DetectorID: c.DetectorID, Name: c.Name, Severity: c.Severity, File: file, Commit: commit, Line: line, Column: col, Secret: c.Secret, Redacted: Redact(c.Secret)}
-	h := sha256.Sum256([]byte(c.DetectorID + "\x00" + c.Secret + "\x00" + file + "\x00" + commit))
-	f.Fingerprint = hex.EncodeToString(h[:])
+	f.Fingerprint = findingFingerprint(c.DetectorID, c.Secret, file, commit)
 	if verify && c.Verifier != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		f.Verified = c.Verifier(ctx, c.Secret)
 	}
 	return f
+}
+
+func ReidentifyFinding(f Finding, file, commit string) Finding {
+	f.File = file
+	f.Commit = commit
+	f.Fingerprint = findingFingerprint(f.DetectorID, f.Secret, file, commit)
+	return f
+}
+
+func findingFingerprint(detectorID, secret, file, commit string) string {
+	h := sha256.New()
+	_, _ = h.Write([]byte(detectorID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(secret))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(file))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(commit))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func Redact(s string) string {
@@ -1247,6 +1285,8 @@ func plausibleSecret(s string) bool {
 
 var variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$`)
 var sensitiveAssignmentPattern = regexp.MustCompile(`(?i)(?:^|[;\s])(?:password|passwd|pwd|secret|token|api[_-]?key|client[_-]?secret|credential|credentials)\s*=\s*("[^"]*"|'[^']*'|[^;\s]+)`)
+var memberReferencePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+(?:\s*\[[^\]\r\n]{1,200}\])?(?:\s*\([^;\r\n]{0,200}\))?`)
+var accessorReferencePattern = regexp.MustCompile(`(?i)^(?:os\.getenv|os\.environ|process\.env|env\.fetch|config(?:uration)?\.get|settings\.get|vault\.read|secrets?\.get)\s*(?:\.|\[|\()`)
 
 func looksLikeVariableReference(s string) bool {
 	t := strings.Trim(strings.TrimSpace(s), `'"`)
@@ -1266,6 +1306,25 @@ func looksLikeVariableReference(s string) bool {
 	if strings.HasPrefix(t, "$(") && strings.HasSuffix(t, ")") {
 		return true
 	}
+	if strings.HasPrefix(t, "$") && strings.HasPrefix(strings.TrimPrefix(t, "$"), "[") && strings.HasSuffix(t, "]") {
+		return true
+	}
+	if strings.HasPrefix(t, "%") && strings.HasSuffix(t, "%") && variableNamePattern.MatchString(strings.TrimSuffix(strings.TrimPrefix(t, "%"), "%")) {
+		return true
+	}
+	if strings.HasPrefix(t, "!") && strings.HasSuffix(t, "!") && variableNamePattern.MatchString(strings.TrimSuffix(strings.TrimPrefix(t, "!"), "!")) {
+		return true
+	}
+	lower := strings.ToLower(t)
+	if strings.HasPrefix(lower, "enc[") && strings.HasSuffix(t, "]") {
+		return true
+	}
+	if strings.HasPrefix(lower, "vault://") || strings.HasPrefix(lower, "ref+vault://") {
+		return true
+	}
+	if accessorReferencePattern.MatchString(t) {
+		return true
+	}
 	if strings.HasPrefix(t, "$") && variableNamePattern.MatchString(strings.TrimPrefix(t, "$")) {
 		return true
 	}
@@ -1273,7 +1332,6 @@ func looksLikeVariableReference(s string) bool {
 	if !variableNamePattern.MatchString(t) {
 		return false
 	}
-	lower := strings.ToLower(t)
 	variableTerms := []string{"api", "key", "secret", "token", "password", "passwd", "pwd", "credential", "credentials", "client"}
 	containsVariableTerm := false
 	for _, term := range variableTerms {
@@ -1286,6 +1344,10 @@ func looksLikeVariableReference(s string) bool {
 		return false
 	}
 	if strings.Contains(t, ".") {
+		root, _, _ := strings.Cut(strings.TrimPrefix(t, "_"), ".")
+		if !knownReferenceRoot(root) {
+			return false
+		}
 		for _, part := range strings.FieldsFunc(t, func(r rune) bool { return r == '_' || r == '.' }) {
 			if len(part) >= 32 {
 				return false
@@ -1302,6 +1364,64 @@ func looksLikeVariableReference(s string) bool {
 		}
 	}
 	return true
+}
+
+func looksLikeAssignedReference(content string, start int) bool {
+	if start < 0 || start >= len(content) {
+		return false
+	}
+	end := start
+	for end < len(content) && content[end] != '\n' && content[end] != '\r' && content[end] != ';' {
+		end++
+	}
+	expr := strings.TrimSpace(content[start:end])
+	expr = strings.TrimRight(expr, `,>/`)
+	expr = strings.TrimSpace(strings.Trim(expr, `"'`))
+	if expr == "" {
+		return false
+	}
+	if looksLikeVariableReference(expr) {
+		return true
+	}
+	if start > 0 && (content[start-1] == '"' || content[start-1] == '\'') {
+		return false
+	}
+	match := memberReferencePattern.FindString(expr)
+	if match == "" {
+		return false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(expr, match))
+	return rest == ""
+}
+
+func knownReferenceRoot(root string) bool {
+	switch strings.ToLower(root) {
+	case "config", "configuration", "connectionstrings", "credentials", "data", "env", "environment", "local", "module", "os", "process", "secret", "secrets", "settings", "var", "variables", "vault":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasContextBoundary(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\n' {
+			continue
+		}
+		for i++; i < len(s); i++ {
+			switch s[i] {
+			case ' ', '\t', '\r':
+				continue
+			case '\n':
+				return true
+			default:
+				i--
+				break
+			}
+			break
+		}
+	}
+	return false
 }
 
 func containsSensitivePlaceholderAssignment(s string) bool {
@@ -1379,7 +1499,9 @@ func LoadCustomFile(path string) ([]Detector, error) {
 		if sev == "" {
 			sev = "medium"
 		}
-		out = append(out, NewRegex(d.ID, name, sev, d.Keywords, d.Regex, d.SecretGroup, nil))
+		detector := NewRegex(d.ID, name, sev, d.Keywords, d.Regex, d.SecretGroup, nil).(RegexDetector)
+		detector.BroadContext = false
+		out = append(out, detector)
 	}
 	return out, nil
 }

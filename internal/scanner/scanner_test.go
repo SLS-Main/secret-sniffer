@@ -197,17 +197,54 @@ func TestScannerSkipsOversizedArchiveEntry(t *testing.T) {
 
 func TestDetectorPlanSkipsMissingKeywords(t *testing.T) {
 	var calls int32
-	d := countingDetector{id: "counting", keywords: []string{"needle"}, calls: &calls}
+	var prefilteredCalls int32
+	d := countingDetector{id: "counting", keywords: []string{"needle"}, calls: &calls, prefilteredCalls: &prefilteredCalls}
 	s := New(Config{Workers: 1, MaxFileBytes: 1024}, []detectors.Detector{d})
-	if got := s.scanBytes("config.txt", "", []byte("ordinary content")); len(got) != 0 {
+	if got := s.scanBytes(context.Background(), "config.txt", "", []byte("ordinary content")); len(got) != 0 {
 		t.Fatalf("unexpected findings without keyword: %#v", got)
 	}
 	if got := atomic.LoadInt32(&calls); got != 0 {
 		t.Fatalf("detector called without keyword: %d", got)
 	}
-	s.scanBytes("config.txt", "", []byte("needle content"))
+	s.scanBytes(context.Background(), "config.txt", "", []byte("needle content"))
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Fatalf("regular detector calls=%d, want 0", got)
+	}
+	if got := atomic.LoadInt32(&prefilteredCalls); got != 1 {
+		t.Fatalf("prefiltered detector calls=%d, want 1", got)
+	}
+}
+
+func TestVerificationCacheDeduplicatesAndUsesScanContext(t *testing.T) {
+	cache := newVerificationCache()
+	var calls int32
+	candidate := detectors.Candidate{DetectorID: "test", Secret: "same-secret", Verifier: func(context.Context, string) bool {
+		atomic.AddInt32(&calls, 1)
+		return true
+	}}
+	if !cache.verify(context.Background(), candidate) || !cache.verify(context.Background(), candidate) {
+		t.Fatal("expected cached verification result")
+	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Fatalf("detector calls=%d, want 1", got)
+		t.Fatalf("verifier calls=%d, want 1", got)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	candidate.Secret = "canceled-secret"
+	var canceledCalls int32
+	candidate.Verifier = func(ctx context.Context, _ string) bool {
+		atomic.AddInt32(&canceledCalls, 1)
+		return ctx.Err() == nil
+	}
+	if cache.verify(canceled, candidate) {
+		t.Fatal("expected canceled verification to fail")
+	}
+	if !cache.verify(context.Background(), candidate) {
+		t.Fatal("expected failed canceled result to be retried")
+	}
+	if got := atomic.LoadInt32(&canceledCalls); got != 2 {
+		t.Fatalf("canceled verifier calls=%d, want 2", got)
 	}
 }
 
@@ -255,7 +292,7 @@ func TestScannerFindsSecretInGitHistoryArchive(t *testing.T) {
 	}
 }
 
-func TestGitChangedPathsOnlyIncludesFilesChangedInCommit(t *testing.T) {
+func TestGitHistoryLogOnlyIncludesFilesChangedInCommit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -275,12 +312,43 @@ func TestGitChangedPathsOnlyIncludesFilesChangedInCommit(t *testing.T) {
 	runGit(t, dir, "commit", "-m", "change another file")
 	commit := strings.TrimSpace(string(runGitOutput(t, dir, "rev-parse", "HEAD")))
 
-	paths, err := gitChangedPaths(context.Background(), dir, commit)
-	if err != nil {
-		t.Fatal(err)
+	out := runGitOutput(t, dir, "log", commit+"^!", "--root", "-z", "--format=commit:%H", "--name-only", "--diff-filter=AMR")
+	currentCommit := ""
+	var paths []string
+	for _, record := range bytes.Split(out, []byte{0}) {
+		parsedCommit, file, ok := parseGitHistoryRecord(string(record), currentCommit)
+		if parsedCommit != "" {
+			currentCommit = parsedCommit
+		}
+		if ok {
+			paths = append(paths, file)
+		}
 	}
 	if len(paths) != 1 || paths[0] != "changed.txt" {
 		t.Fatalf("expected only changed.txt for latest commit, got %#v", paths)
+	}
+}
+
+func TestHistoryBlobCacheReusesAnalysisAndPreservesIdentity(t *testing.T) {
+	cache := newHistoryBlobCache()
+	var scans int
+	scan := func() []detectors.Finding {
+		scans++
+		return []detectors.Finding{{DetectorID: "test", Secret: "secret-value", File: "old.env", Commit: "commit-one", Fingerprint: "old"}}
+	}
+	first := cache.findings(context.Background(), "blob-id", "old.env", "commit-one", scan)
+	second := cache.findings(context.Background(), "blob-id", "new.env", "commit-two", scan)
+	if scans != 1 {
+		t.Fatalf("analysis ran %d times, want 1", scans)
+	}
+	if len(first) != 1 || first[0].File != "old.env" || first[0].Commit != "commit-one" {
+		t.Fatalf("unexpected first findings: %#v", first)
+	}
+	if len(second) != 1 || second[0].File != "new.env" || second[0].Commit != "commit-two" {
+		t.Fatalf("unexpected reidentified findings: %#v", second)
+	}
+	if second[0].Fingerprint == "old" {
+		t.Fatal("expected fingerprint to be recomputed")
 	}
 }
 
@@ -373,13 +441,19 @@ func runGitOutput(t *testing.T, dir string, args ...string) []byte {
 }
 
 type countingDetector struct {
-	id       string
-	keywords []string
-	calls    *int32
+	id               string
+	keywords         []string
+	calls            *int32
+	prefilteredCalls *int32
 }
 
 func (d countingDetector) Detect([]byte) []detectors.Candidate {
 	atomic.AddInt32(d.calls, 1)
+	return nil
+}
+
+func (d countingDetector) DetectPrefiltered([]byte) []detectors.Candidate {
+	atomic.AddInt32(d.prefilteredCalls, 1)
 	return nil
 }
 

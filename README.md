@@ -4,6 +4,8 @@ High-concurrency GitHub and filesystem secret scanner written in Go.
 
 `secret-sniffer` is designed around provider-specific detectors, keyword prefilters, format validation, deduplication, optional verification, and remediation-focused raw-secret output by default. It is intended for large servers with many CPU cores and enough memory to scan large repositories aggressively.
 
+Detector keywords are indexed once per scanner so only relevant detectors run for each blob. Git history uses a streaming change list, batched object reads, and blob-analysis caching while preserving distinct commit/path findings. JSONL output is written through a bounded single-writer queue so repository workers do not block on encoding or `fsync` under shared scan-state locks.
+
 During scans, likely base64 and base64url substrings are decoded and scanned with the same detector registry. Decoded findings are reported against the source file and source line/column of the encoded blob while preserving the decoded secret value for remediation.
 
 Archive scanning is available with `--scan-archives` for `.zip`, `.tar`, `.tar.gz`, `.tgz`, and single-file `.gz`. Archive contents are expanded in memory with safety limits, never written to disk, and findings are reported with virtual paths such as `backup.zip!/config/.env`.
@@ -11,6 +13,8 @@ Archive scanning is available with `--scan-archives` for `.zip`, `.tar`, `.tar.g
 This project does not use TruffleHog's discovery algorithm. The scanner is detector-first and is being built toward TruffleHog feature parity through an explicit parity map. Current tracked parity covers 875 mappings, including 807 implemented mappings from the pinned detector catalog snapshot.
 
 ## Build
+
+Go 1.24 or newer is required.
 
 ```bash
 go build -o secret-sniffer ./cmd/secret-sniffer
@@ -128,6 +132,8 @@ Findings are also printed to stderr as they are discovered. For long scans, use 
 ```
 
 When `--format jsonl` is used, findings are streamed to the output file and stdout receives only the final completion line. This prevents large multi-repository scans from retaining every finding in memory just to render final output.
+
+The scanner suppresses recognized variable and placeholder expressions in ambiguous assignment/context detectors, including common shell, CI, environment accessor, Vault, encrypted-value, and member-reference forms. Exact-format provider tokens remain governed by their provider-specific detector patterns.
 
 ## Resuming Large Scans
 

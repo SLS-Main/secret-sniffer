@@ -1120,9 +1120,18 @@ func TestPlausibleSecretRejectsVariableReferences(t *testing.T) {
 		`$SENDGRID_API_KEY`,
 		`{{ sendgrid_api_key }}`,
 		`$(SENDGRID_API_KEY)`,
+		`$[variables.SENDGRID_API_KEY]`,
+		`%SENDGRID_API_KEY%`,
+		`!SENDGRID_API_KEY!`,
+		`process.env.SENDGRID_API_KEY`,
+		`os.Getenv("SENDGRID_API_KEY")`,
+		`os.environ["SENDGRID_API_KEY"]`,
+		`ENV.fetch("SENDGRID_API_KEY")`,
+		`config.get("SENDGRID_API_KEY")`,
+		`vault.read("secret/sendgrid")`,
+		`ref+vault://secret/sendgrid`,
+		`ENC[AES256_GCM,data:placeholder]`,
 		`secrets.SENDGRID_API_KEY`,
-		`Bcrypt.HashPassword`,
-		`_profileEditor.ChangePassword.ProfileData.Password`,
 		`sendgrid_api_key`,
 		`PROD_DB_PASSWORD`,
 	}
@@ -1133,6 +1142,9 @@ func TestPlausibleSecretRejectsVariableReferences(t *testing.T) {
 				t.Fatalf("expected variable reference to be rejected: %q", tc)
 			}
 		})
+	}
+	if !plausibleSecret(`production.AbCdEfGhIjKlMnOpQrStUvWx`) {
+		t.Fatal("expected quoted-looking dotted literal to remain plausible")
 	}
 }
 
@@ -1160,12 +1172,19 @@ func TestAssignedSecretRejectsVariableReferences(t *testing.T) {
 	if !registryFinds("generic-assigned-secret", literal, strings.Repeat("a", 24)) {
 		t.Fatalf("expected literal assigned secret to be detected: %q", literal)
 	}
+	dottedLiteral := `production.AbCdEfGhIjKlMnOpQrStUvWx`
+	if !registryFinds("generic-assigned-secret", `password="`+dottedLiteral+`"`, dottedLiteral) {
+		t.Fatalf("expected quoted dotted literal to be detected: %q", dottedLiteral)
+	}
 }
 
 func TestGenericAssignedSecretRejectsMemberReferences(t *testing.T) {
 	cases := []string{
 		`password = Bcrypt.HashPassword(userPassword);`,
 		`password = _profileEditor.ChangePassword.ProfileData.Password;`,
+		`password = settings.productionValue;`,
+		`password = configuration.get("DATABASE_PASSWORD");`,
+		`token: environmentVariables.currentValue;`,
 	}
 	for _, tc := range cases {
 		t.Run(tc, func(t *testing.T) {
@@ -1197,6 +1216,18 @@ func TestFrontAPITokenRejectsPropertyChains(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBroadProviderContextStopsAtBlankLine(t *testing.T) {
+	secret := strings.Repeat("A", 48)
+	input := "cohere documentation\n\napi_key=\"" + secret + "\""
+	if registryFinds("cohere-api-key", input, secret) {
+		t.Fatal("expected blank line to separate provider context from assignment")
+	}
+	input = "cohere api_key=\"" + secret + "\""
+	if !registryFinds("cohere-api-key", input, secret) {
+		t.Fatal("expected same-line provider context to remain detectable")
 	}
 }
 

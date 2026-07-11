@@ -16,6 +16,22 @@ type Meta struct {
 	Findings  int           `json:"findings"`
 }
 
+type JSONLWriter struct {
+	encoder        *json.Encoder
+	includeSecrets bool
+}
+
+func NewJSONLWriter(w io.Writer, includeSecrets bool) *JSONLWriter {
+	return &JSONLWriter{encoder: json.NewEncoder(w), includeSecrets: includeSecrets}
+}
+
+func (w *JSONLWriter) Write(finding detectors.Finding) error {
+	if !w.includeSecrets {
+		finding.Secret = ""
+	}
+	return w.encoder.Encode(finding)
+}
+
 func Write(w io.Writer, format string, findings []detectors.Finding, meta Meta, includeSecrets bool) error {
 	findings = prepareFindings(findings, includeSecrets)
 	switch format {
@@ -62,8 +78,7 @@ func WriteJSON(w io.Writer, v any) error {
 }
 
 func WriteFindingJSONL(w io.Writer, finding detectors.Finding, includeSecrets bool) error {
-	findings := prepareFindings([]detectors.Finding{finding}, includeSecrets)
-	return json.NewEncoder(w).Encode(findings[0])
+	return NewJSONLWriter(w, includeSecrets).Write(finding)
 }
 
 func WriteFindingHuman(w io.Writer, finding detectors.Finding) error {
