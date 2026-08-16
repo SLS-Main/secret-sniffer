@@ -243,6 +243,20 @@ func TestDiscoverySummaryAddScanFailure(t *testing.T) {
 	}
 }
 
+func TestDiscoverySummaryAddScanResultCountsSuccess(t *testing.T) {
+	var summary discoverySummary
+	summary.addScanResult("https://github.com/acme/repo", 3)
+	if summary.SuccessfulScans != 1 {
+		t.Fatalf("successful scans=%d, want 1", summary.SuccessfulScans)
+	}
+	if summary.FindingsBeforeBaseline != 3 {
+		t.Fatalf("findings before baseline=%d, want 3", summary.FindingsBeforeBaseline)
+	}
+	if len(summary.Orgs) != 1 || summary.Orgs[0].Name != "acme" || summary.Orgs[0].Findings != 3 {
+		t.Fatalf("unexpected org summary: %#v", summary.Orgs)
+	}
+}
+
 func TestTargetOwner(t *testing.T) {
 	if got := targetOwner("https://github.com/acme/repo.git"); got != "acme" {
 		t.Fatalf("targetOwner github=%q, want acme", got)

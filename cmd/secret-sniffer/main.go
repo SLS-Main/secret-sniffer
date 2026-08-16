@@ -364,7 +364,7 @@ func main() {
 	}
 	summary.FindingsBeforeBaseline = totalBeforeBaseline
 	summary.FindingsAfterBaseline = totalAfterBaseline
-	console.scanSummary(summary)
+	console.scanSummary(summary, outputPath, time.Since(start).Round(time.Millisecond))
 	if summaryOutputPath != "" {
 		if err := writeSummary(summaryOutputPath, summary); err != nil {
 			fatal(err)
@@ -408,6 +408,7 @@ type discoverySummary struct {
 	RequestedOrgs          []string              `json:"requested_orgs,omitempty"`
 	Accessible             bool                  `json:"accessible"`
 	TotalRepositories      int                   `json:"total_repositories"`
+	SuccessfulScans        int                   `json:"successful_scans,omitempty"`
 	FailedScans            int                   `json:"failed_scans,omitempty"`
 	ScanFailures           []scanFailureSummary  `json:"scan_failures,omitempty"`
 	FindingsBeforeBaseline int                   `json:"findings_before_baseline"`
@@ -834,13 +835,30 @@ func (c console) discoverySummary(summary discoverySummary) {
 	}
 }
 
-func (c console) scanSummary(summary discoverySummary) {
+func (c console) scanSummary(summary discoverySummary, outputPath string, duration time.Duration) {
 	if c.quiet || summary.TotalRepositories == 0 {
 		return
 	}
-	c.printf("SUMMARY", colorBold, "repos=%d failed=%d findings_before_baseline=%d findings_after_baseline=%d", summary.TotalRepositories, summary.FailedScans, summary.FindingsBeforeBaseline, summary.FindingsAfterBaseline)
+	findingsColor := colorGreen
+	findingsText := "No secrets found"
+	if summary.FindingsAfterBaseline > 0 {
+		findingsColor = colorRed
+		findingsText = fmt.Sprintf("Secrets found: %d", summary.FindingsAfterBaseline)
+	}
+	c.printf("SUMMARY", findingsColor, "%s", findingsText)
+	c.printf("SUMMARY", colorBold, "Repositories: successful=%d failed=%d total=%d", summary.SuccessfulScans, summary.FailedScans, summary.TotalRepositories)
+	if summary.FindingsBeforeBaseline != summary.FindingsAfterBaseline {
+		c.printf("SUMMARY", colorBold, "Findings before baseline=%d after_baseline=%d filtered=%d", summary.FindingsBeforeBaseline, summary.FindingsAfterBaseline, summary.FindingsBeforeBaseline-summary.FindingsAfterBaseline)
+	}
+	if outputPath != "" {
+		c.printf("SUMMARY", colorBold, "Output: %s", outputPath)
+	}
+	c.printf("SUMMARY", colorBold, "Duration: %s", duration)
 	for _, org := range summary.Orgs {
 		c.printf("ORG", colorCyan, "%s repos=%d findings=%d", org.Name, org.Repositories, org.Findings)
+	}
+	for _, failure := range summary.ScanFailures {
+		c.printf("FAILED", colorYellow, "%s: %s", failure.Target, failure.Error)
 	}
 }
 
@@ -1051,6 +1069,7 @@ func (s *discoverySummary) addInstallation(gc githubClient, repos int) {
 }
 
 func (s *discoverySummary) addScanResult(target string, findings int) {
+	s.SuccessfulScans++
 	s.FindingsBeforeBaseline += findings
 	owner := targetOwner(target)
 	for i := range s.Orgs {
