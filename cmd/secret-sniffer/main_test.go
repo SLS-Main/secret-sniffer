@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -178,6 +179,59 @@ func TestIsGitHubCloneTarget(t *testing.T) {
 	}
 }
 
+func TestReadRepoList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "repos.txt")
+	contents := strings.Join([]string{
+		"# production repositories",
+		"",
+		"https://github.com/acme/one",
+		"  https://github.com/acme/two.git  ",
+		"https://github.com/acme/one",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := readRepoList(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"https://github.com/acme/one", "https://github.com/acme/two.git"}; !equalStrings(targets, want) {
+		t.Fatalf("targets=%v, want %v", targets, want)
+	}
+}
+
+func TestScanTargetsRepoList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "repos.txt")
+	if err := os.WriteFile(path, []byte("https://github.com/acme/one\nhttps://github.com/acme/two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, tokens, _, installations, summary, err := scanTargets(context.Background(), ".", path, "", "", false, []githubClient{{token: "token", installationID: 42}}, newConsole(true, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"https://github.com/acme/one", "https://github.com/acme/two"}; !equalStrings(targets, want) {
+		t.Fatalf("targets=%v, want %v", targets, want)
+	}
+	if tokens[targets[0]] != "token" || installations[targets[1]] != 42 {
+		t.Fatalf("repo-list targets did not receive client metadata: tokens=%v installations=%v", tokens, installations)
+	}
+	if summary.TotalRepositories != 2 {
+		t.Fatalf("summary.TotalRepositories=%d, want 2", summary.TotalRepositories)
+	}
+}
+
+func TestScanTargetsRepoListRejectsDiscoveryFlags(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "repos.txt")
+	if err := os.WriteFile(path, []byte("https://github.com/acme/one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, err := scanTargets(context.Background(), ".", path, "acme", "", false, nil, newConsole(true, true)); err == nil {
+		t.Fatal("expected --repo-list with discovery flags to fail")
+	}
+}
+
 func TestDiscoverySummaryAddScanFailure(t *testing.T) {
 	var summary discoverySummary
 	summary.addScanFailure("https://github.com/acme/repo", errors.New("temporary clone failure"))
@@ -212,22 +266,24 @@ func TestScanJobStatePath(t *testing.T) {
 
 func TestScanJobPrefix(t *testing.T) {
 	cases := []struct {
-		name       string
-		target     string
-		orgs       string
-		enterprise string
-		accessible bool
-		want       string
+		name         string
+		target       string
+		repoListPath string
+		orgs         string
+		enterprise   string
+		accessible   bool
+		want         string
 	}{
 		{name: "enterprise", enterprise: "Prod Enterprise", want: "enterprise-prod-enterprise"},
 		{name: "org", orgs: "Acme, Example Org", want: "org-acme-example-org"},
 		{name: "accessible", accessible: true, want: "accessible"},
+		{name: "repo list", target: ".", repoListPath: "/tmp/repos.txt", want: "repo-list-repos"},
 		{name: "github target", target: "https://github.com/Acme/Repo.git", want: "repo-acme-repo"},
 		{name: "local target", target: "/tmp/My Repo", want: "target-my-repo"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := scanJobPrefix(tc.target, tc.orgs, tc.enterprise, tc.accessible); got != tc.want {
+			if got := scanJobPrefix(tc.target, tc.repoListPath, tc.orgs, tc.enterprise, tc.accessible); got != tc.want {
 				t.Fatalf("scanJobPrefix()=%q, want %q", got, tc.want)
 			}
 		})

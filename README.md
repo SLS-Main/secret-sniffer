@@ -65,6 +65,12 @@ Scan every repository accessible to a GitHub App installation token or PAT:
 GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-history --workers 32 --format jsonl > accessible.findings.jsonl
 ```
 
+Scan repositories listed in a text file:
+
+```bash
+./secret-sniffer --repo-list repos.txt --git-history --repo-concurrency 4 --workers 12 --format jsonl --output findings.jsonl
+```
+
 ## Common Options
 
 ```text
@@ -81,7 +87,8 @@ GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-histor
 --format              Output format: human, json, jsonl, sarif.
 --output              Write findings to this file. JSONL streams during scanning.
 --output-flush-findings  Fsync streamed output after this many findings. Default: 25.
---repo-concurrency    Number of repositories to scan concurrently for GitHub org/enterprise/access scans.
+--repo-concurrency    Number of repositories to scan concurrently for repo-list and GitHub org/enterprise/access scans.
+--repo-list           Text file containing repository targets to scan, one per line.
 --include             Comma-separated glob patterns to include.
 --exclude             Comma-separated glob patterns to exclude.
 --custom-detectors    Path to custom detector JSON.
@@ -432,32 +439,44 @@ done > repos.txt
 
 ### Scan Repository List
 
-```bash
-mkdir -p results
+Use `--repo-list` to scan a text file of repository targets directly. Each non-empty line is treated as a target. Lines beginning with `#` are ignored.
 
-while read -r repo; do
-  name=$(printf '%s' "$repo" | sed 's#https://github.com/##; s#/#_#g')
-  ./secret-sniffer \
-    --target "$repo" \
-    --git-history \
-    --workers 32 \
-    --format jsonl \
-    > "results/${name}.jsonl"
-done < repos.txt
+Example `repos.txt`:
+
+```text
+# GitHub repositories
+https://github.com/ORG/service-api
+https://github.com/ORG/web-app.git
+
+# Local repositories are also supported
+/data/repos/internal-tool
 ```
+
+Run the scan:
+
+```bash
+./secret-sniffer \
+  --repo-list repos.txt \
+  --git-history \
+  --repo-concurrency 4 \
+  --workers 12 \
+  --format jsonl \
+  --output findings.jsonl
+```
+
+Use `--github-token`, `GITHUB_TOKEN`, or GitHub App options when the list contains private GitHub repositories.
 
 For CI-style failure on any unbaselined finding:
 
 ```bash
-while read -r repo; do
-  ./secret-sniffer \
-    --target "$repo" \
-    --git-history \
-    --workers 32 \
-    --baseline .secret-sniffer-baseline.json \
-    --fail-on-findings \
-    --format jsonl
-done < repos.txt
+./secret-sniffer \
+  --repo-list repos.txt \
+  --git-history \
+  --repo-concurrency 4 \
+  --workers 12 \
+  --baseline .secret-sniffer-baseline.json \
+  --fail-on-findings \
+  --format jsonl
 ```
 
 ### Discovery Summary And Summary-Only Mode

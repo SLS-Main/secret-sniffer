@@ -34,6 +34,7 @@ func main() {
 	var outputPath string
 	var outputFlushFindings int
 	var repoConcurrency int
+	var repoListPath string
 	var include string
 	var exclude string
 	var baselinePath string
@@ -75,7 +76,8 @@ func main() {
 	flag.StringVar(&format, "format", "human", "output format: human, json, jsonl, sarif")
 	flag.StringVar(&outputPath, "output", "", "stream findings to this JSONL file as they are discovered")
 	flag.IntVar(&outputFlushFindings, "output-flush-findings", 25, "fsync streamed output after this many findings")
-	flag.IntVar(&repoConcurrency, "repo-concurrency", 1, "number of repositories to scan concurrently for GitHub org/enterprise/access scans")
+	flag.IntVar(&repoConcurrency, "repo-concurrency", 1, "number of repositories to scan concurrently for repo-list and GitHub org/enterprise/access scans")
+	flag.StringVar(&repoListPath, "repo-list", "", "path to text file containing repository targets to scan, one per line")
 	flag.StringVar(&customPath, "custom-detectors", "", "path to custom detector JSON")
 	flag.StringVar(&baselinePath, "baseline", "", "path to baseline JSON of accepted fingerprints")
 	flag.StringVar(&writeBaselinePath, "write-baseline", "", "write finding fingerprints to baseline JSON")
@@ -148,7 +150,7 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	targets, tokenByTarget, _, installationByTarget, summary, err := scanTargets(ctx, cfg.Target, githubOrgs, githubEnterprise, githubAccessible, githubClients, console)
+	targets, tokenByTarget, _, installationByTarget, summary, err := scanTargets(ctx, cfg.Target, repoListPath, githubOrgs, githubEnterprise, githubAccessible, githubClients, console)
 	if err != nil {
 		fatal(err)
 	}
@@ -159,7 +161,7 @@ func main() {
 		fatal(fmt.Errorf("--scan-resume and --scan-retry-failed cannot be used together"))
 	}
 	if !summaryOnly && scanJobID == "" && !scanResume && !scanRetryFailed {
-		scanJobID, err = defaultScanJobID(scanJobPrefix(cfg.Target, githubOrgs, githubEnterprise, githubAccessible))
+		scanJobID, err = defaultScanJobID(scanJobPrefix(cfg.Target, repoListPath, githubOrgs, githubEnterprise, githubAccessible))
 		if err != nil {
 			fatal(err)
 		}
@@ -547,12 +549,30 @@ func githubClients(ctx context.Context, token, appID, privateKeyPath, installati
 	return []githubClient{{client: githubapi.New(installationToken.Token), token: installationToken.Token, tokenExpiresAt: installationToken.ExpiresAt, installationID: installationID, account: account, accountType: accountType}}, nil
 }
 
-func scanTargets(ctx context.Context, target, orgs, enterprise string, accessible bool, clients []githubClient, console console) ([]string, map[string]string, map[string]time.Time, map[string]int64, discoverySummary, error) {
+func scanTargets(ctx context.Context, target, repoListPath, orgs, enterprise string, accessible bool, clients []githubClient, console console) ([]string, map[string]string, map[string]time.Time, map[string]int64, discoverySummary, error) {
 	var targets []string
 	tokens := map[string]string{}
 	expires := map[string]time.Time{}
 	installations := map[string]int64{}
 	summary := discoverySummary{Enterprise: enterprise, RequestedOrgs: splitCSV(orgs), Accessible: accessible, Orgs: []orgSummary{}}
+	if repoListPath != "" {
+		if isGitHubDiscovery(orgs, enterprise, accessible) {
+			return nil, nil, nil, nil, summary, fmt.Errorf("--repo-list cannot be combined with GitHub discovery flags")
+		}
+		listTargets, err := readRepoList(repoListPath)
+		if err != nil {
+			return nil, nil, nil, nil, summary, err
+		}
+		console.info("Loaded %d repository target(s) from %s", len(listTargets), repoListPath)
+		for _, listTarget := range listTargets {
+			targets = append(targets, listTarget)
+			if len(clients) > 0 {
+				tokens[listTarget] = clients[0].token
+				expires[listTarget] = clients[0].tokenExpiresAt
+				installations[listTarget] = clients[0].installationID
+			}
+		}
+	}
 	for _, org := range splitCSV(orgs) {
 		console.info("Discovering repositories for GitHub org %s", org)
 		for _, gc := range clients {
@@ -612,6 +632,32 @@ func scanTargets(ctx context.Context, target, orgs, enterprise string, accessibl
 	summary.sortOrgs()
 	summary.sortInstallations()
 	return targets, tokens, expires, installations, summary, nil
+}
+
+func readRepoList(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read repo list %s: %w", path, err)
+	}
+	defer file.Close()
+
+	var targets []string
+	scan := bufio.NewScanner(file)
+	for scan.Scan() {
+		line := strings.TrimSpace(scan.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		targets = append(targets, line)
+	}
+	if err := scan.Err(); err != nil {
+		return nil, fmt.Errorf("read repo list %s: %w", path, err)
+	}
+	targets = dedupeStrings(targets)
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("repo list %s did not contain any targets", path)
+	}
+	return targets, nil
 }
 
 type console struct {
@@ -1083,7 +1129,7 @@ func defaultScanJobID(prefix string) (string, error) {
 	return fmt.Sprintf("%s-%08d", prefix, n.Int64()), nil
 }
 
-func scanJobPrefix(target, orgs, enterprise string, accessible bool) string {
+func scanJobPrefix(target, repoListPath, orgs, enterprise string, accessible bool) string {
 	switch {
 	case enterprise != "":
 		return sanitizeScanJobPrefix("enterprise-" + enterprise)
@@ -1091,6 +1137,8 @@ func scanJobPrefix(target, orgs, enterprise string, accessible bool) string {
 		return sanitizeScanJobPrefix("org-" + strings.Join(splitCSV(orgs), "-"))
 	case accessible:
 		return "accessible"
+	case repoListPath != "":
+		return sanitizeScanJobPrefix("repo-list-" + strings.TrimSuffix(filepath.Base(repoListPath), filepath.Ext(repoListPath)))
 	case isGitHubCloneTarget(target):
 		return sanitizeScanJobPrefix("repo-" + strings.TrimSuffix(strings.Trim(strings.TrimPrefix(githubPath(target), "/"), "/"), ".git"))
 	default:
