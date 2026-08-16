@@ -366,6 +366,13 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 | Front | Shared inbox and customer operations | `api2.frontapp.com`, API token | Provider host plus API/access-token labels | Implemented SecretSniffer-only |
 | Inngest | Durable workflow execution | `api.inngest.com`, `signkey-`, signing key | Provider host/prefix plus signing/API key labels | Implemented SecretSniffer-only |
 | Trigger.dev | Background jobs and workflow automation | `api.trigger.dev`, `tr_dev_`, `tr_prod_` | Provider host/prefix plus API/token labels | Implemented SecretSniffer-only |
+| Resend | Transactional email API | `RESEND_API_KEY`, `api.resend.com`, `re_` | Exact provider label/host plus Resend key prefix | Implemented SecretSniffer-only |
+| Clerk | Authentication and user management | `CLERK_SECRET_KEY`, `clerk.com`, `sk_live_`, `sk_test_` | Require Clerk secret-key context because the prefix is shared | Implemented SecretSniffer-only |
+| WorkOS | Enterprise identity and directory sync | `WORKOS_API_KEY`, `api.workos.com`, `sk_live_`, `sk_test_` | Require WorkOS API-key context because the prefix is shared | Implemented SecretSniffer-only |
+| Liveblocks | Collaborative application infrastructure | `LIVEBLOCKS_SECRET_KEY`, `sk_prod_`, `sk_test_` | Require Liveblocks secret-key context because the prefix is shared | Implemented SecretSniffer-only |
+| Polar | Billing and digital products | `polar_oat_`, `polar_pat_` | Distinct organization/personal access-token prefixes | Implemented SecretSniffer-only |
+| Supabase secret keys | Backend API authorization | `sb_secret_` | Distinct modern Supabase secret-key prefix; complements JWT and management-token coverage | Implemented SecretSniffer-only |
+| Webhook signing secrets | Webhook signature verification | `whsec_` | Distinct signing-secret prefix used by webhook providers | Implemented SecretSniffer-only |
 | Temporal Cloud | Durable workflow platform | `cloud.temporal.io`, API key, client secret | Provider host plus API/OAuth secret labels | Implemented SecretSniffer-only |
 | Windmill | Workflow automation and internal tools | `app.windmill.dev`, API token | Provider host plus API/token labels | Implemented SecretSniffer-only |
 | n8n | Workflow automation | `n8n.io`, API key/token | Provider host plus API/token labels | Implemented SecretSniffer-only |

@@ -110,6 +110,13 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"chroma-cloud-api-key", "api.trychroma.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"voiceflow-api-key", "VF.DM." + strings.Repeat("a", 24) + "." + strings.Repeat("A", 16), "VF.DM." + strings.Repeat("a", 24) + "." + strings.Repeat("A", 16)},
 		{"harness-pat", "harness pat." + strings.Repeat("A", 22) + "." + strings.Repeat("a", 24) + "." + strings.Repeat("B", 20), "pat." + strings.Repeat("A", 22) + "." + strings.Repeat("a", 24) + "." + strings.Repeat("B", 20)},
+		{"resend-api-key", "RESEND_API_KEY=\"re_" + strings.Repeat("A", 32) + "\"", "re_" + strings.Repeat("A", 32)},
+		{"clerk-secret-key", "CLERK_SECRET_KEY=\"sk_live_" + strings.Repeat("A", 32) + "\"", "sk_live_" + strings.Repeat("A", 32)},
+		{"workos-api-key", "WORKOS_API_KEY=\"sk_test_" + strings.Repeat("B", 32) + "\"", "sk_test_" + strings.Repeat("B", 32)},
+		{"liveblocks-secret-key", "LIVEBLOCKS_SECRET_KEY=\"sk_prod_" + strings.Repeat("C", 32) + "\"", "sk_prod_" + strings.Repeat("C", 32)},
+		{"polar-access-token", "polar_oat_" + strings.Repeat("D", 32), "polar_oat_" + strings.Repeat("D", 32)},
+		{"supabase-secret-key", "sb_secret_" + strings.Repeat("E", 32), "sb_secret_" + strings.Repeat("E", 32)},
+		{"webhook-signing-secret", "whsec_" + strings.Repeat("F", 32), "whsec_" + strings.Repeat("F", 32)},
 		{"zoho-crm-token", "1000." + strings.Repeat("a", 32) + "." + strings.Repeat("b", 32), "1000." + strings.Repeat("a", 32) + "." + strings.Repeat("b", 32)},
 		{"intercom-access-token", "intercom_token=\"dG9rO" + strings.Repeat("A", 54) + "=\"", "dG9rO" + strings.Repeat("A", 54) + "="},
 		{"front-api-token", "front_token=\"" + strings.Repeat("A", 36) + "." + strings.Repeat("B", 188) + "\"", strings.Repeat("A", 36) + "." + strings.Repeat("B", 188)},
@@ -1228,6 +1235,29 @@ func TestBroadProviderContextStopsAtBlankLine(t *testing.T) {
 	input = "cohere api_key=\"" + secret + "\""
 	if !registryFinds("cohere-api-key", input, secret) {
 		t.Fatal("expected same-line provider context to remain detectable")
+	}
+}
+
+func TestSharedPrefixDetectorsRequireProviderContext(t *testing.T) {
+	cases := []struct {
+		id    string
+		input string
+	}{
+		{"clerk-secret-key", "STRIPE_SECRET_KEY=sk_live_" + strings.Repeat("A", 32)},
+		{"workos-api-key", "OTHER_API_KEY=sk_test_" + strings.Repeat("B", 32)},
+		{"liveblocks-secret-key", "OTHER_SECRET=sk_prod_" + strings.Repeat("C", 32)},
+		{"resend-api-key", "cache_value=re_" + strings.Repeat("D", 32)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			for _, d := range DefaultRegistry() {
+				for _, candidate := range d.Detect([]byte(tc.input)) {
+					if candidate.DetectorID == tc.id {
+						t.Fatalf("unexpected %s finding for %q", tc.id, tc.input)
+					}
+				}
+			}
+		})
 	}
 }
 
