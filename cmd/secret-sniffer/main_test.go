@@ -40,6 +40,52 @@ func TestDefaultOutputPath(t *testing.T) {
 	}
 }
 
+func TestExtensionExcludePatterns(t *testing.T) {
+	patterns, err := extensionExcludePatterns("png, .JPG,png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"*.png", "*.jpg"}; !equalStrings(patterns, want) {
+		t.Fatalf("patterns=%v, want %v", patterns, want)
+	}
+	if _, err := extensionExcludePatterns("*.png"); err == nil {
+		t.Fatal("expected glob to be rejected as an extension")
+	}
+}
+
+func TestRepairFindingJournalTruncatesIncompleteRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "findings.jsonl")
+	valid := `{"detector_id":"one","fingerprint":"first"}` + "\n"
+	if err := os.WriteFile(path, []byte(valid+`{"detector_id":"two"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := repairFindingJournal(path); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != valid {
+		t.Fatalf("journal=%q, want %q", b, valid)
+	}
+}
+
+func TestCountFindingJournalDeduplicatesReplay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "findings.jsonl")
+	contents := `{"detector_id":"one","fingerprint":"same"}` + "\n" + `{"detector_id":"one","fingerprint":"same"}` + "\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	count, err := countFindingJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("count=%d, want 1", count)
+	}
+}
+
 func TestParseResumeOutputAction(t *testing.T) {
 	cases := map[string]resumeOutputAction{
 		"":          resumeOutputAppend,

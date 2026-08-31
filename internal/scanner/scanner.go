@@ -6,9 +6,12 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +22,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,14 +37,15 @@ var base64CandidateRe = regexp.MustCompile(`\b[A-Za-z0-9+/_-]{20,}={0,2}\b`)
 const maxBase64CandidateBytes = 8192
 
 type Config struct {
-	Target       string
-	Workers      int
-	MaxFileBytes int64
-	GitHistory   bool
-	Verify       bool
-	Include      []string
-	Exclude      []string
-	GitHubToken  string
+	Target            string
+	Workers           int
+	MaxFileBytes      int64
+	GitHistory        bool
+	Verify            bool
+	Include           []string
+	Exclude           []string
+	ExcludeExtensions []string
+	GitHubToken       string
 
 	ScanArchives         bool
 	MaxArchiveDepth      int
@@ -57,6 +62,16 @@ type Scanner struct {
 
 func New(cfg Config, ds []detectors.Detector) *Scanner {
 	return &Scanner{cfg: cfg, plan: newDetectorPlan(ds), verification: newVerificationCache()}
+}
+
+// ScanContent applies the configured detector pipeline to content from a remote source.
+func (s *Scanner) ScanContent(ctx context.Context, name string, content []byte) []detectors.Finding {
+	return dedupe(s.scanBlob(ctx, name, "", content, 0))
+}
+
+// AllowsRemotePath reports whether a remote object key passes the configured path filters.
+func (s *Scanner) AllowsRemotePath(name string) bool {
+	return s.allowedRelPath(name)
 }
 
 type plannedDetector struct {
@@ -331,11 +346,15 @@ func (s *Scanner) allowedPath(root, path string) bool {
 func (s *Scanner) allowedRelPath(rel string) bool {
 	rel = filepath.ToSlash(rel)
 	base := path.Base(rel)
+	extension := strings.TrimPrefix(strings.ToLower(path.Ext(base)), ".")
+	if slices.Contains(s.cfg.ExcludeExtensions, extension) {
+		return false
+	}
 
 	if len(s.cfg.Include) > 0 && !matchAny(s.cfg.Include, rel, base) {
 		return false
 	}
-	defaultExcludes := []string{"*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.ico", "*.pdf", "*.7z", "*.exe", "*.dll", "*.so", "*.dylib"}
+	defaultExcludes := []string{"*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.ico", "*.7z", "*.exe", "*.dll", "*.so", "*.dylib"}
 	if !s.cfg.ScanArchives {
 		defaultExcludes = append(defaultExcludes, "*.zip", "*.tar", "*.gz", "*.tgz")
 	}
@@ -764,6 +783,9 @@ func (s *Scanner) scanBlob(ctx context.Context, file, commit string, b []byte, d
 	if s.cfg.ScanArchives && depth <= s.maxArchiveDepth() && archiveKind(file) != "" {
 		return s.scanArchiveBytes(ctx, file, commit, b, depth)
 	}
+	if text, ok := extractDocumentText(file, b, s.maxExpandedFileBytes()); ok {
+		return s.scanBytes(ctx, file, commit, text)
+	}
 	if isBinary(b) {
 		return nil
 	}
@@ -896,6 +918,271 @@ func archiveKind(file string) string {
 	default:
 		return ""
 	}
+}
+
+func extractDocumentText(file string, b []byte, maxBytes int64) ([]byte, bool) {
+	ext := documentExt(file)
+	switch ext {
+	case ".pdf":
+		return extractPDFText(b), true
+	case ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp":
+		text, ok := extractZipDocumentText(b, maxBytes)
+		return text, ok
+	case ".doc", ".xls", ".ppt":
+		var text bytes.Buffer
+		appendPrintableRuns(&text, b)
+		return text.Bytes(), true
+	case ".rtf":
+		return extractRTFText(b), true
+	default:
+		return nil, false
+	}
+}
+
+func documentExt(file string) string {
+	if i := strings.LastIndex(file, "!/"); i >= 0 {
+		file = file[i+2:]
+	}
+	return strings.ToLower(filepath.Ext(file))
+}
+
+func extractZipDocumentText(b []byte, maxBytes int64) ([]byte, bool) {
+	zr, err := zip.NewReader(bytes.NewReader(b), int64(len(b)))
+	if err != nil {
+		return nil, false
+	}
+	var out bytes.Buffer
+	for _, entry := range zr.File {
+		if entry.FileInfo().IsDir() || !documentXMLPath(entry.Name) || entry.UncompressedSize64 > uint64(maxBytes) {
+			continue
+		}
+		r, err := entry.Open()
+		if err != nil {
+			continue
+		}
+		content, ok := readLimited(r, maxBytes)
+		_ = r.Close()
+		if !ok {
+			continue
+		}
+		appendXMLText(&out, content)
+		if int64(out.Len()) > maxBytes {
+			break
+		}
+	}
+	return out.Bytes(), out.Len() > 0
+}
+
+func documentXMLPath(name string) bool {
+	name = strings.ToLower(strings.ReplaceAll(name, "\\", "/"))
+	if !strings.HasSuffix(name, ".xml") {
+		return false
+	}
+	return strings.HasPrefix(name, "word/") || strings.HasPrefix(name, "xl/") || strings.HasPrefix(name, "ppt/") || name == "content.xml"
+}
+
+func appendXMLText(out *bytes.Buffer, b []byte) {
+	dec := xml.NewDecoder(bytes.NewReader(b))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return
+		}
+		if chars, ok := tok.(xml.CharData); ok {
+			text := strings.TrimSpace(string(chars))
+			if text != "" {
+				out.WriteString(text)
+				out.WriteByte('\n')
+			}
+		}
+	}
+}
+
+func extractPDFText(b []byte) []byte {
+	var out bytes.Buffer
+	appendPDFLiteralStrings(&out, b)
+	appendPDFHexStrings(&out, b)
+	appendPDFStreams(&out, b)
+	appendPrintableRuns(&out, b)
+	return out.Bytes()
+}
+
+func appendPDFStreams(out *bytes.Buffer, b []byte) {
+	for offset := 0; offset < len(b); {
+		streamAt := bytes.Index(b[offset:], []byte("stream"))
+		if streamAt < 0 {
+			return
+		}
+		streamAt += offset
+		contentStart := streamAt + len("stream")
+		if contentStart < len(b) && b[contentStart] == '\r' {
+			contentStart++
+		}
+		if contentStart < len(b) && b[contentStart] == '\n' {
+			contentStart++
+		}
+		endRel := bytes.Index(b[contentStart:], []byte("endstream"))
+		if endRel < 0 {
+			return
+		}
+		contentEnd := contentStart + endRel
+		stream := bytes.TrimRight(b[contentStart:contentEnd], "\r\n")
+		if bytes.Contains(b[max(0, streamAt-256):streamAt], []byte("/FlateDecode")) {
+			zr, err := zlib.NewReader(bytes.NewReader(stream))
+			if err == nil {
+				decoded, readOK := readLimited(zr, int64(len(b))*8+1)
+				_ = zr.Close()
+				if readOK {
+					appendPDFLiteralStrings(out, decoded)
+					appendPDFHexStrings(out, decoded)
+					appendPrintableRuns(out, decoded)
+				}
+			}
+		} else {
+			appendPrintableRuns(out, stream)
+		}
+		offset = contentEnd + len("endstream")
+	}
+}
+
+func appendPDFLiteralStrings(out *bytes.Buffer, b []byte) {
+	for i := 0; i < len(b); i++ {
+		if b[i] != '(' {
+			continue
+		}
+		var text bytes.Buffer
+		escaped := false
+		depth := 1
+		for j := i + 1; j < len(b); j++ {
+			c := b[j]
+			if escaped {
+				switch c {
+				case 'n':
+					text.WriteByte('\n')
+				case 'r':
+					text.WriteByte('\r')
+				case 't':
+					text.WriteByte('\t')
+				case 'b':
+					text.WriteByte('\b')
+				case 'f':
+					text.WriteByte('\f')
+				default:
+					text.WriteByte(c)
+				}
+				escaped = false
+				continue
+			}
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == '(' {
+				depth++
+			}
+			if c == ')' {
+				depth--
+				if depth == 0 {
+					if text.Len() > 0 {
+						out.Write(text.Bytes())
+						out.WriteByte('\n')
+					}
+					i = j
+					break
+				}
+			}
+			text.WriteByte(c)
+		}
+	}
+}
+
+func appendPDFHexStrings(out *bytes.Buffer, b []byte) {
+	for i := 0; i < len(b); i++ {
+		if b[i] != '<' || i+1 < len(b) && b[i+1] == '<' {
+			continue
+		}
+		end := bytes.IndexByte(b[i+1:], '>')
+		if end < 0 {
+			continue
+		}
+		raw := b[i+1 : i+1+end]
+		compact := make([]byte, 0, len(raw))
+		for _, c := range raw {
+			if isHexByte(c) {
+				compact = append(compact, c)
+			} else if c != ' ' && c != '\n' && c != '\r' && c != '\t' {
+				compact = compact[:0]
+				break
+			}
+		}
+		if len(compact) >= 2 {
+			if len(compact)%2 == 1 {
+				compact = append(compact, '0')
+			}
+			decoded := make([]byte, hex.DecodedLen(len(compact)))
+			if _, err := hex.Decode(decoded, compact); err == nil && !isBinary(decoded) {
+				out.Write(decoded)
+				out.WriteByte('\n')
+			}
+		}
+		i += end + 1
+	}
+}
+
+func appendPrintableRuns(out *bytes.Buffer, b []byte) {
+	start := -1
+	for i, c := range b {
+		printable := c == '\n' || c == '\r' || c == '\t' || c >= 32 && c <= 126
+		if printable {
+			if start < 0 {
+				start = i
+			}
+			continue
+		}
+		if start >= 0 && i-start >= 8 {
+			out.Write(b[start:i])
+			out.WriteByte('\n')
+		}
+		start = -1
+	}
+	if start >= 0 && len(b)-start >= 8 {
+		out.Write(b[start:])
+		out.WriteByte('\n')
+	}
+}
+
+func extractRTFText(b []byte) []byte {
+	var out bytes.Buffer
+	for i := 0; i < len(b); i++ {
+		switch b[i] {
+		case '{', '}':
+			out.WriteByte(' ')
+		case '\\':
+			i++
+			if i >= len(b) {
+				break
+			}
+			if b[i] == '\\' || b[i] == '{' || b[i] == '}' {
+				out.WriteByte(b[i])
+				continue
+			}
+			for i < len(b) && (b[i] >= 'a' && b[i] <= 'z' || b[i] >= 'A' && b[i] <= 'Z' || b[i] == '-' || b[i] >= '0' && b[i] <= '9') {
+				i++
+			}
+			if i < len(b) && b[i] != ' ' {
+				i--
+			}
+		case '\r', '\n':
+			out.WriteByte('\n')
+		default:
+			out.WriteByte(b[i])
+		}
+	}
+	return out.Bytes()
+}
+
+func isHexByte(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
 func safeArchivePath(name string) (string, bool) {

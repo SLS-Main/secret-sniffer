@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"encoding/base64"
 	"io"
@@ -159,6 +160,79 @@ func TestScannerFindsSecretInNestedArchive(t *testing.T) {
 	}
 }
 
+func TestScannerFindsSecretInPDFDocument(t *testing.T) {
+	dir := t.TempDir()
+	secret := "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef"
+	stream := zlibBytes(t, []byte("BT ("+secret+") Tj ET"))
+	pdf := append([]byte("%PDF-1.4\n1 0 obj<</Type/Page/Contents 2 0 R>>endobj\n2 0 obj<</Filter/FlateDecode/Length 80>>stream\n"), stream...)
+	pdf = append(pdf, []byte("\nendstream\nendobj\n%%EOF")...)
+	if err := os.WriteFile(filepath.Join(dir, "runbook.pdf"), []byte(pdf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{Target: dir, Workers: 2, MaxFileBytes: 1024 * 1024}, detectors.DefaultRegistry())
+	findings, err := s.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(findings, "openai-key", "sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef") {
+		t.Fatalf("expected PDF document finding, got %#v", findings)
+	}
+}
+
+func TestScannerFindsSecretInXLSXDocument(t *testing.T) {
+	dir := t.TempDir()
+	secret := "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef"
+	xlsx := zipBytes(t, map[string]string{"xl/sharedStrings.xml": `<?xml version="1.0"?><sst><si><t>` + secret + `</t></si></sst>`})
+	if err := os.WriteFile(filepath.Join(dir, "inventory.xlsx"), xlsx, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{Target: dir, Workers: 2, MaxFileBytes: 1024 * 1024}, detectors.DefaultRegistry())
+	findings, err := s.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(findings, "openai-key", "sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef") {
+		t.Fatalf("expected XLSX document finding, got %#v", findings)
+	}
+}
+
+func TestScannerFindsSecretInDocxDocument(t *testing.T) {
+	dir := t.TempDir()
+	secret := "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef"
+	docx := zipBytes(t, map[string]string{"word/document.xml": `<?xml version="1.0"?><w:document><w:body><w:p><w:r><w:t>` + secret + `</w:t></w:r></w:p></w:body></w:document>`})
+	if err := os.WriteFile(filepath.Join(dir, "handoff.docx"), docx, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{Target: dir, Workers: 2, MaxFileBytes: 1024 * 1024}, detectors.DefaultRegistry())
+	findings, err := s.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(findings, "openai-key", "sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef") {
+		t.Fatalf("expected DOCX document finding, got %#v", findings)
+	}
+}
+
+func TestScannerFindsSecretInRTFDocument(t *testing.T) {
+	dir := t.TempDir()
+	secret := "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef"
+	if err := os.WriteFile(filepath.Join(dir, "notes.rtf"), []byte(`{\rtf1\ansi `+secret+`}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{Target: dir, Workers: 2, MaxFileBytes: 1024 * 1024}, detectors.DefaultRegistry())
+	findings, err := s.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(findings, "openai-key", "sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef") {
+		t.Fatalf("expected RTF document finding, got %#v", findings)
+	}
+}
+
 func TestScannerSkipsUnsafeArchivePath(t *testing.T) {
 	dir := t.TempDir()
 	secret := "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef"
@@ -174,6 +248,16 @@ func TestScannerSkipsUnsafeArchivePath(t *testing.T) {
 	}
 	if hasFinding(findings, "openai-key", "sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef") {
 		t.Fatalf("did not expect finding from unsafe archive path, got %#v", findings)
+	}
+}
+
+func TestAllowsRemotePathExcludesExtensionCaseInsensitively(t *testing.T) {
+	s := New(Config{ExcludeExtensions: []string{"png", "jpg"}}, nil)
+	if s.AllowsRemotePath("assets/LOGO.PNG") {
+		t.Fatal("expected uppercase PNG extension to be excluded")
+	}
+	if !s.AllowsRemotePath("config/production.env") {
+		t.Fatal("expected env file to be allowed")
 	}
 }
 
@@ -416,6 +500,19 @@ func tarGzBytes(t *testing.T, files map[string]string) []byte {
 		t.Fatal(err)
 	}
 	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+func zlibBytes(t *testing.T, content []byte) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	zw := zlib.NewWriter(&b)
+	if _, err := zw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return b.Bytes()

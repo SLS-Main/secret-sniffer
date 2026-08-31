@@ -6,3 +6,4 @@ secret-sniffer-findings.json
 secret-sniffer-summary.json
 *.sarif
 .secret-sniffer-baseline.json
+.secret-sniffer-jobs/

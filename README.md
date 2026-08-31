@@ -1,12 +1,14 @@
 # secret-sniffer
 
-High-concurrency GitHub and filesystem secret scanner written in Go.
+High-concurrency GitHub, S3, and filesystem secret scanner written in Go.
 
 `secret-sniffer` is designed around provider-specific detectors, keyword prefilters, format validation, deduplication, optional verification, and remediation-focused raw-secret output by default. It is intended for large servers with many CPU cores and enough memory to scan large repositories aggressively.
 
 Detector keywords are indexed once per scanner so only relevant detectors run for each blob. Git history uses a streaming change list, batched object reads, and blob-analysis caching while preserving distinct commit/path findings. JSONL output is written through a bounded single-writer queue so repository workers do not block on encoding or `fsync` under shared scan-state locks.
 
 During scans, likely base64 and base64url substrings are decoded and scanned with the same detector registry. Decoded findings are reported against the source file and source line/column of the encoded blob while preserving the decoded secret value for remediation.
+
+Local directory scans also inspect common document formats that may contain pasted credentials, including PDF, Word `.docx` and legacy `.doc`, Excel `.xlsx` and legacy `.xls`, PowerPoint `.pptx` and legacy `.ppt`, OpenDocument `.odt`/`.ods`/`.odp`, and RTF files. Point `--target` at a folder and the scanner recursively scans supported documents inside it along with normal source and text files.
 
 Archive scanning is available with `--scan-archives` for `.zip`, `.tar`, `.tar.gz`, `.tgz`, and single-file `.gz`. Archive contents are expanded in memory with safety limits, never written to disk, and findings are reported with virtual paths such as `backup.zip!/config/.env`.
 
@@ -41,6 +43,12 @@ Scan a local repository with JSON output:
 ./secret-sniffer --target /path/to/repo --format json
 ```
 
+Scan a local folder containing documents such as PDFs and Word files:
+
+```bash
+./secret-sniffer --target /path/to/documents --format jsonl --output document-findings.jsonl
+```
+
 Scan a GitHub repository URL:
 
 ```bash
@@ -71,6 +79,18 @@ Scan repositories listed in a text file:
 ./secret-sniffer --repo-list repos.txt --git-history --repo-concurrency 4 --workers 12 --format jsonl --output findings.jsonl
 ```
 
+Scan several S3 buckets concurrently without downloading excluded file types:
+
+```bash
+./secret-sniffer \
+  --s3-buckets app-config,backups,artifacts \
+  --s3-bucket-concurrency 3 \
+  --s3-object-concurrency 16 \
+  --exclude-extensions png,jpg,jpeg,gif,mp4 \
+  --format jsonl \
+  --output s3-findings.jsonl
+```
+
 ## Common Options
 
 ```text
@@ -91,6 +111,7 @@ Scan repositories listed in a text file:
 --repo-list           Text file containing repository targets to scan, one per line.
 --include             Comma-separated glob patterns to include.
 --exclude             Comma-separated glob patterns to exclude.
+--exclude-extensions  Comma-separated file extensions to skip before reading/downloading.
 --custom-detectors    Path to custom detector JSON.
 --baseline            Path to accepted-finding baseline JSON.
 --write-baseline      Write current finding fingerprints to baseline JSON.
@@ -114,7 +135,108 @@ Scan repositories listed in a text file:
 --no-color            Disable colored console output.
 --list-detectors      Print built-in detector metadata as JSON.
 --trufflehog-parity   Print tracked TruffleHog detector parity mappings as JSON.
+--s3-buckets          Comma-separated S3 bucket names to scan concurrently.
+--s3-all-buckets      Discover and scan all buckets owned by the authenticated AWS account.
+--s3-prefix           Only scan objects under this key prefix.
+--s3-bucket-concurrency  Number of buckets to scan concurrently. Default: 4.
+--s3-object-concurrency  Concurrent object downloads/scans per bucket. Default: --workers.
+--s3-job-id           Stable S3 job ID used to validate resumable state.
+--s3-state            S3 checkpoint file. Default: .secret-sniffer-jobs/<job-id>-s3.json.
+--s3-resume           Resume incomplete buckets from durable page checkpoints.
+--aws-profile         AWS shared config/credentials profile. Defaults to AWS_PROFILE.
+--aws-region          AWS region. Defaults to AWS_REGION/profile, then us-east-1.
+--aws-access-key-id   Explicit access key ID (environment/profile credentials preferred).
+--aws-secret-access-key  Explicit secret access key.
+--aws-session-token   Session token for temporary explicit AWS credentials.
+--aws-sso-device-auth Start IAM Identity Center device authorization for --aws-profile.
 ```
+
+## S3 Scanning
+
+S3 scans parallelize at two levels: multiple bucket workers run simultaneously, and each bucket has its own pool of object download/scanner workers. Bucket regions are resolved concurrently before scanning, so one job can scan buckets spread across AWS regions. Objects larger than `--max-file-bytes`, objects rejected by `--include` or `--exclude`, and objects whose extension appears in `--exclude-extensions` are skipped from listing metadata before `GetObject` is called. Extension matching is case-insensitive.
+
+Scan every bucket owned by the authenticated account:
+
+```bash
+./secret-sniffer \
+  --s3-all-buckets \
+  --s3-bucket-concurrency 8 \
+  --s3-object-concurrency 12 \
+  --exclude-extensions png,jpg,jpeg,gif,webp,mp4,zip \
+  --format jsonl \
+  --output s3-findings.jsonl
+```
+
+Limit a scan to a prefix:
+
+```bash
+./secret-sniffer --s3-buckets production-config --s3-prefix releases/2026/ --format jsonl
+```
+
+### AWS Authentication
+
+The normal AWS SDK credential chain is supported. This includes `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for long-term keys; `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` for temporary credentials; shared credentials/config profiles; ECS and EC2 role credentials; web identity; and credential processes.
+
+Long-term or temporary environment credentials:
+
+```bash
+export AWS_ACCESS_KEY_ID='...'
+export AWS_SECRET_ACCESS_KEY='...'
+# Set this as well for temporary STS credentials:
+export AWS_SESSION_TOKEN='...'
+
+./secret-sniffer --s3-buckets bucket-one,bucket-two --aws-region us-east-1 --format jsonl
+```
+
+Shared profile credentials, including an already authenticated IAM Identity Center profile:
+
+```bash
+./secret-sniffer --aws-profile security-audit --s3-all-buckets --format jsonl
+```
+
+To perform IAM Identity Center device authentication directly in the scanner, select an SSO profile and enable the device flow. The scanner prints the AWS verification URL and one-time code, polls until authorization completes, obtains temporary role credentials, and refreshes them during a long scan while the SSO refresh token remains valid:
+
+```bash
+./secret-sniffer \
+  --aws-profile security-audit \
+  --aws-sso-device-auth \
+  --s3-all-buckets \
+  --format jsonl \
+  --output s3-findings.jsonl
+```
+
+The profile may use current `sso_session` configuration or legacy inline SSO fields. It must resolve `sso_start_url`, `sso_region`, `sso_account_id`, and `sso_role_name`.
+
+Explicit credential flags are available for controlled automation, including `--aws-session-token` for temporary credentials. Environment variables or protected profile files are safer because command-line secrets can be visible in process listings.
+
+### S3 Resume And Reliability
+
+Each S3 job writes an atomic JSON state file after a bucket starts and after every fully processed `ListObjectsV2` page. State records each bucket as `pending`, `running`, `completed`, or `failed`, together with attempts, the last committed continuation token, scanned/skipped object counts, findings, timestamps, and errors. State writes fsync the replacement file and its directory. A process lock prevents two scanner processes from mutating the same job state and journal concurrently. For non-JSONL formats, a permission-restricted JSONL finding journal is retained beside the state file, allowing resumed or repeated completed runs to reconstruct output without retaining all findings in memory.
+
+Use a stable job ID for a scan that may need to resume:
+
+```bash
+./secret-sniffer \
+  --s3-all-buckets \
+  --s3-job-id quarterly-s3-audit \
+  --format jsonl \
+  --output s3-findings.jsonl
+```
+
+After interruption, repeat the same scan configuration and add `--s3-resume`:
+
+```bash
+./secret-sniffer \
+  --s3-all-buckets \
+  --s3-job-id quarterly-s3-audit \
+  --s3-resume \
+  --format jsonl \
+  --output s3-findings.jsonl
+```
+
+Completed buckets are skipped. Running or failed buckets continue from their last committed page. Resumed JSONL output always appends because overwriting or switching files would omit findings from pages that the checkpoint correctly skips; JSON, SARIF, and human output are reconstructed from the durable finding journal. A page checkpoint is committed only after every object in the page has either been scanned or intentionally excluded and all page findings have been flushed to output. Object reads use the ETag returned by the listing as an `If-Match` condition, so an object changed between listing and download fails the page and is retried rather than being silently scanned as a different version.
+
+This ordering provides at-least-once recovery: interruption cannot cause a checkpoint to skip findings that were not durably flushed. Before resume, an incomplete trailing journal record is removed so its uncheckpointed page can be replayed cleanly. If termination occurs after findings are flushed but before the corresponding state checkpoint is renamed, that final page is scanned again and its findings can be duplicated when appending JSONL output. The state file is bound to a hash of the exact bucket set/discovery mode, output format/journal path, prefix, size/archive limits, path filters, excluded extensions, verification/redaction settings, baseline contents, and detector configuration; resume is rejected if those accuracy-affecting options change or if a progressed job's journal is missing.
 
 ## Output Formats
 

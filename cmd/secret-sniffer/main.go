@@ -11,12 +11,14 @@ import (
 	"math/big"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"secret-sniffer/internal/baseline"
@@ -37,6 +39,7 @@ func main() {
 	var repoListPath string
 	var include string
 	var exclude string
+	var excludeExtensions string
 	var baselinePath string
 	var writeBaselinePath string
 	var summaryOutputPath string
@@ -60,6 +63,20 @@ func main() {
 	var noRedact bool
 	var quiet bool
 	var noColor bool
+	var s3Buckets string
+	var s3Prefix string
+	var s3StatePath string
+	var s3JobID string
+	var awsProfile string
+	var awsRegion string
+	var awsAccessKeyID string
+	var awsSecretAccessKey string
+	var awsSessionToken string
+	var s3BucketConcurrency int
+	var s3ObjectConcurrency int
+	var s3AllBuckets bool
+	var s3Resume bool
+	var awsSSODeviceAuth bool
 
 	flag.StringVar(&cfg.Target, "target", ".", "local path or GitHub repository URL to scan")
 	flag.IntVar(&cfg.Workers, "workers", runtime.NumCPU(), "number of concurrent workers")
@@ -73,6 +90,7 @@ func main() {
 	flag.BoolVar(&cfg.Verify, "verify", false, "attempt live verification for supported detectors")
 	flag.StringVar(&include, "include", "", "comma-separated glob patterns to include")
 	flag.StringVar(&exclude, "exclude", "", "comma-separated glob patterns to exclude")
+	flag.StringVar(&excludeExtensions, "exclude-extensions", "", "comma-separated file extensions to skip before reading or downloading")
 	flag.StringVar(&format, "format", "human", "output format: human, json, jsonl, sarif")
 	flag.StringVar(&outputPath, "output", "", "stream findings to this JSONL file as they are discovered")
 	flag.IntVar(&outputFlushFindings, "output-flush-findings", 25, "fsync streamed output after this many findings")
@@ -101,6 +119,20 @@ func main() {
 	flag.BoolVar(&noRedact, "no-redact", true, "include raw secrets in machine-readable output; default true")
 	flag.BoolVar(&quiet, "quiet", false, "suppress progress logs on stderr")
 	flag.BoolVar(&noColor, "no-color", false, "disable colored console output")
+	flag.StringVar(&s3Buckets, "s3-buckets", "", "comma-separated S3 bucket names to scan concurrently")
+	flag.BoolVar(&s3AllBuckets, "s3-all-buckets", false, "discover and scan every S3 bucket owned by the authenticated AWS account")
+	flag.StringVar(&s3Prefix, "s3-prefix", "", "only scan S3 objects under this key prefix")
+	flag.IntVar(&s3BucketConcurrency, "s3-bucket-concurrency", 4, "number of S3 buckets to scan concurrently")
+	flag.IntVar(&s3ObjectConcurrency, "s3-object-concurrency", 0, "number of objects to download and scan concurrently per bucket; defaults to --workers")
+	flag.StringVar(&s3JobID, "s3-job-id", "", "S3 scan job ID used to validate resumable state")
+	flag.StringVar(&s3StatePath, "s3-state", "", "S3 checkpoint path; defaults to .secret-sniffer-jobs/<job-id>-s3.json")
+	flag.BoolVar(&s3Resume, "s3-resume", false, "resume incomplete S3 buckets from durable page checkpoints")
+	flag.StringVar(&awsProfile, "aws-profile", os.Getenv("AWS_PROFILE"), "AWS shared configuration profile")
+	flag.StringVar(&awsRegion, "aws-region", os.Getenv("AWS_REGION"), "AWS region; defaults to profile/environment then us-east-1")
+	flag.StringVar(&awsAccessKeyID, "aws-access-key-id", "", "explicit AWS access key ID; environment/profile credentials are preferred")
+	flag.StringVar(&awsSecretAccessKey, "aws-secret-access-key", "", "explicit AWS secret access key")
+	flag.StringVar(&awsSessionToken, "aws-session-token", "", "AWS session token for temporary explicit credentials")
+	flag.BoolVar(&awsSSODeviceAuth, "aws-sso-device-auth", false, "authenticate interactively using the selected AWS IAM Identity Center profile")
 	flag.BoolVar(&showVersion, "version", false, "print version")
 	flag.Parse()
 
@@ -138,14 +170,44 @@ func main() {
 	}
 	cfg.Include = splitCSV(include)
 	cfg.Exclude = splitCSV(exclude)
+	extensionPatterns, err := extensionExcludePatterns(excludeExtensions)
+	if err != nil {
+		fatal(err)
+	}
+	cfg.Exclude = append(cfg.Exclude, extensionPatterns...)
+	for _, pattern := range extensionPatterns {
+		cfg.ExcludeExtensions = append(cfg.ExcludeExtensions, strings.TrimPrefix(pattern, "*."))
+	}
 	runtime.GOMAXPROCS(cfg.Workers)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	start := time.Now()
 	console := newConsole(quiet, noColor)
 	console.step("Starting scan")
+	if s3Buckets != "" || s3AllBuckets {
+		if s3ObjectConcurrency < 1 {
+			s3ObjectConcurrency = cfg.Workers
+		}
+		findings, err := runS3Scan(ctx, s3RunOptions{
+			ScannerConfig: cfg, Registry: registry, Buckets: splitCSV(s3Buckets), AllBuckets: s3AllBuckets,
+			Prefix: s3Prefix, BucketConcurrency: s3BucketConcurrency, ObjectConcurrency: s3ObjectConcurrency,
+			JobID: s3JobID, StatePath: s3StatePath, Resume: s3Resume, AWSProfile: awsProfile, AWSRegion: awsRegion,
+			AWSAccessKeyID: awsAccessKeyID, AWSSecretAccessKey: awsSecretAccessKey, AWSSessionToken: awsSessionToken,
+			SSODeviceAuth: awsSSODeviceAuth, Format: format, OutputPath: outputPath, OutputFlushFindings: outputFlushFindings,
+			IncludeSecrets: noRedact && !redact, BaselinePath: baselinePath, WriteBaselinePath: writeBaselinePath,
+			CustomDetectorsPath: customPath, Console: console, StartedAt: start,
+		})
+		if err != nil {
+			fatal(err)
+		}
+		console.done(findings, time.Since(start).Round(time.Millisecond))
+		if failOnFindings && findings > 0 {
+			os.Exit(2)
+		}
+		return
+	}
 	githubClients, err := githubClients(ctx, githubToken, githubAppID, githubAppPrivateKey, githubInstallationID, githubAccessible, githubOrgs)
 	if err != nil {
 		fatal(err)
