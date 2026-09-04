@@ -29,6 +29,8 @@ import (
 	"secret-sniffer/internal/scanner"
 )
 
+var version = "dev"
+
 func main() {
 	var cfg scanner.Config
 	var customPath string
@@ -137,7 +139,7 @@ func main() {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Println("secret-sniffer dev")
+		fmt.Println("secret-sniffer " + version)
 		return
 	}
 

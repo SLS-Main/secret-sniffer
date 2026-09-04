@@ -1,0 +1,47 @@
+name: Release Linux binary
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  linux-amd64:
+    name: Build Linux amd64
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build release binary
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath \
+            -ldflags="-s -w -X main.version=${RELEASE_TAG}" \
+            -o dist/secret-sniffer-linux-amd64 \
+            ./cmd/secret-sniffer
+          sha256sum dist/secret-sniffer-linux-amd64 > dist/secret-sniffer-linux-amd64.sha256
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "${RELEASE_TAG}" \
+            dist/secret-sniffer-linux-amd64 \
+            dist/secret-sniffer-linux-amd64.sha256 \
+            --clobber
