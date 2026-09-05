@@ -25,6 +25,7 @@ import (
 	"secret-sniffer/internal/baseline"
 	"secret-sniffer/internal/detectors"
 	"secret-sniffer/internal/output"
+	"secret-sniffer/internal/progress"
 	"secret-sniffer/internal/s3scan"
 	"secret-sniffer/internal/scanner"
 )
@@ -73,6 +74,9 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 	}
 	client := s3.NewFromConfig(awsCfg)
 	if opts.AllBuckets {
+		if opts.ScannerConfig.Progress != nil {
+			opts.ScannerConfig.Progress.SetPhase(progress.PhaseDiscovering)
+		}
 		opts.Console.info("Discovering S3 buckets owned by the authenticated account")
 		opts.Buckets, err = s3scan.DiscoverBuckets(ctx, client)
 		if err != nil {
@@ -82,6 +86,9 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 	opts.Buckets = dedupeStrings(opts.Buckets)
 	if len(opts.Buckets) == 0 {
 		return 0, errors.New("no S3 buckets selected")
+	}
+	if opts.ScannerConfig.Progress != nil {
+		opts.ScannerConfig.Progress.SetPhase(progress.PhaseDiscovering)
 	}
 	regionalClient := resolveS3BucketClients(ctx, awsCfg, client, opts.Buckets, opts.BucketConcurrency, opts.Console)
 	format := strings.ToLower(opts.Format)
@@ -197,12 +204,16 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 	s3Scanner, err := s3scan.New(regionalClient, s3scan.Config{
 		Buckets: opts.Buckets, Prefix: opts.Prefix, Resume: opts.Resume, BucketConcurrency: opts.BucketConcurrency,
 		ObjectConcurrency: opts.ObjectConcurrency, MaxObjectBytes: opts.ScannerConfig.MaxFileBytes, Store: store,
-		AllowObject: runner.AllowsRemotePath, ScanObject: runner.ScanContent, CommitFindings: commit,
+		AllowObject: runner.AllowsRemotePath, SkipObjectReason: runner.RemotePathSkipReason,
+		ScanObject: runner.ScanContent, CommitFindings: commit, Progress: opts.ScannerConfig.Progress,
 	})
 	if err != nil {
 		return 0, err
 	}
 	result := s3Scanner.Scan(ctx)
+	if opts.ScannerConfig.Progress != nil {
+		opts.ScannerConfig.Progress.SetPhase(progress.PhaseFinalizing)
+	}
 	if streamWriter != nil {
 		if err := streamWriter.Close(); err != nil {
 			return 0, err

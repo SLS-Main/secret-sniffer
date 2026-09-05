@@ -8,15 +8,19 @@ import (
 	"compress/zlib"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"secret-sniffer/internal/detectors"
+	"secret-sniffer/internal/progress"
 )
 
 func TestScannerFindsSecretInFile(t *testing.T) {
@@ -259,6 +263,86 @@ func TestAllowsRemotePathExcludesExtensionCaseInsensitively(t *testing.T) {
 	if !s.AllowsRemotePath("config/production.env") {
 		t.Fatal("expected env file to be allowed")
 	}
+}
+
+func TestFilesystemProgressIncludesActivePath(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.env")
+	if err := os.WriteFile(file, []byte("ordinary content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reporter, statePath := testProgressReporter(t, "filesystem", dir)
+	detector := newBlockingDetector()
+	runner := New(Config{Target: dir, Workers: 1, MaxFileBytes: 1024, Progress: reporter}, []detectors.Detector{detector})
+	done := make(chan error, 1)
+	go func() { _, err := runner.Scan(context.Background()); done <- err }()
+	<-detector.started
+	state := waitProgressState(t, statePath, func(state progress.State) bool {
+		return len(state.ActiveItems) == 1 && state.ActiveItems[0].Path == file
+	})
+	if state.ActiveItems[0].Stage != progress.StageScanning {
+		t.Fatalf("active stage=%q, want scanning", state.ActiveItems[0].Stage)
+	}
+	close(detector.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	reporter.Close(progress.Final{Phase: progress.PhaseCompleted})
+}
+
+func TestArchiveProgressIncludesEntry(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "build.zip")
+	if err := os.WriteFile(archivePath, zipBytes(t, map[string]string{"dist/config.json": "ordinary content"}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reporter, statePath := testProgressReporter(t, "filesystem", dir)
+	detector := newBlockingDetector()
+	runner := New(Config{Target: dir, Workers: 1, MaxFileBytes: 1024 * 1024, ScanArchives: true, Progress: reporter}, []detectors.Detector{detector})
+	done := make(chan error, 1)
+	go func() { _, err := runner.Scan(context.Background()); done <- err }()
+	<-detector.started
+	state := waitProgressState(t, statePath, func(state progress.State) bool {
+		return len(state.ActiveItems) == 1 && state.ActiveItems[0].ArchiveEntry == "dist/config.json"
+	})
+	item := state.ActiveItems[0]
+	if item.Path != archivePath || item.ArchiveDepth != 1 || item.BytesRead != int64(len("ordinary content")) || item.BytesTotal != int64(len("ordinary content")) {
+		t.Fatalf("unexpected archive item: %#v", item)
+	}
+	close(detector.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	reporter.Close(progress.Final{Phase: progress.PhaseCompleted})
+}
+
+func TestGitHistoryProgressIncludesPathAndCommit(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(dir, "settings.py"), []byte("ordinary content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "settings.py")
+	runGit(t, dir, "commit", "-qm", "initial")
+	reporter, statePath := testProgressReporter(t, "git", dir)
+	detector := newBlockingDetector()
+	runner := New(Config{Target: dir, Workers: 1, MaxFileBytes: 1024, GitHistory: true, Progress: reporter}, []detectors.Detector{detector})
+	done := make(chan error, 1)
+	go func() { _, err := runner.Scan(context.Background()); done <- err }()
+	<-detector.started
+	state := waitProgressState(t, statePath, func(state progress.State) bool {
+		return len(state.ActiveItems) == 1 && state.ActiveItems[0].Commit != ""
+	})
+	if state.ActiveItems[0].Path != "settings.py" {
+		t.Fatalf("unexpected git item: %#v", state.ActiveItems[0])
+	}
+	close(detector.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	reporter.Close(progress.Final{Phase: progress.PhaseCompleted})
 }
 
 func TestScannerSkipsOversizedArchiveEntry(t *testing.T) {
@@ -542,6 +626,51 @@ type countingDetector struct {
 	keywords         []string
 	calls            *int32
 	prefilteredCalls *int32
+}
+
+type blockingDetector struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newBlockingDetector() *blockingDetector {
+	return &blockingDetector{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (d *blockingDetector) Detect([]byte) []detectors.Candidate {
+	d.once.Do(func() { close(d.started) })
+	<-d.release
+	return nil
+}
+
+func (d *blockingDetector) Info() detectors.Info { return detectors.Info{ID: "blocking"} }
+
+func testProgressReporter(t *testing.T, sourceType, target string) (*progress.Reporter, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "progress.json")
+	reporter, err := progress.New(path, 2*time.Millisecond, sourceType, target, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reporter, path
+}
+
+func waitProgressState(t *testing.T, path string, predicate func(progress.State) bool) progress.State {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(path)
+		if err == nil {
+			var state progress.State
+			if json.Unmarshal(b, &state) == nil && predicate(state) {
+				return state
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for progress state at %s", path)
+	return progress.State{}
 }
 
 func (d countingDetector) Detect([]byte) []detectors.Candidate {

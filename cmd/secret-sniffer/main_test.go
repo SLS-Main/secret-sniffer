@@ -197,6 +197,21 @@ func TestIsGitHubDiscovery(t *testing.T) {
 	}
 }
 
+func TestProgressSourceType(t *testing.T) {
+	if got := progressSourceType("bucket", false, "", "", false, "", false, "."); got != "s3" {
+		t.Fatalf("S3 source type=%q", got)
+	}
+	if got := progressSourceType("", false, "", "", false, "", true, "/tmp/repo"); got != "git" {
+		t.Fatalf("local history source type=%q", got)
+	}
+	if got := progressSourceType("", false, "acme", "", false, "", false, "."); got != "github" {
+		t.Fatalf("GitHub source type=%q", got)
+	}
+	if got := progressSourceType("", false, "", "", false, "", false, "/tmp/files"); got != "filesystem" {
+		t.Fatalf("filesystem source type=%q", got)
+	}
+}
+
 func TestDiscoverySummaryAddInstallation(t *testing.T) {
 	var summary discoverySummary
 	client := githubClient{installationID: 42, account: "acme", accountType: "Organization"}

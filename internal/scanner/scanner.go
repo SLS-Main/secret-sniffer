@@ -27,9 +27,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"secret-sniffer/internal/detectors"
+	"secret-sniffer/internal/progress"
 )
 
 var base64CandidateRe = regexp.MustCompile(`\b[A-Za-z0-9+/_-]{20,}={0,2}\b`)
@@ -46,6 +48,7 @@ type Config struct {
 	Exclude           []string
 	ExcludeExtensions []string
 	GitHubToken       string
+	Progress          progress.ProgressReporter
 
 	ScanArchives         bool
 	MaxArchiveDepth      int
@@ -58,10 +61,13 @@ type Scanner struct {
 	cfg          Config
 	plan         detectorPlan
 	verification *verificationCache
+	instanceID   uint64
 }
 
+var nextScannerID atomic.Uint64
+
 func New(cfg Config, ds []detectors.Detector) *Scanner {
-	return &Scanner{cfg: cfg, plan: newDetectorPlan(ds), verification: newVerificationCache()}
+	return &Scanner{cfg: cfg, plan: newDetectorPlan(ds), verification: newVerificationCache(), instanceID: nextScannerID.Add(1)}
 }
 
 // ScanContent applies the configured detector pipeline to content from a remote source.
@@ -72,6 +78,17 @@ func (s *Scanner) ScanContent(ctx context.Context, name string, content []byte) 
 // AllowsRemotePath reports whether a remote object key passes the configured path filters.
 func (s *Scanner) AllowsRemotePath(name string) bool {
 	return s.allowedRelPath(name)
+}
+
+func (s *Scanner) RemotePathSkipReason(name string) string {
+	extension := strings.TrimPrefix(strings.ToLower(path.Ext(name)), ".")
+	if slices.Contains(s.cfg.ExcludeExtensions, extension) {
+		return "extension_excluded"
+	}
+	if !s.allowedRelPath(name) {
+		return "path_excluded"
+	}
+	return ""
 }
 
 type plannedDetector struct {
@@ -203,6 +220,9 @@ func (s *Scanner) Scan(ctx context.Context) ([]detectors.Finding, error) {
 	target := s.cfg.Target
 	cleanup := func() {}
 	if isGitHubURL(target) {
+		if s.cfg.Progress != nil {
+			s.cfg.Progress.SetPhase(progress.PhaseCloning)
+		}
 		dir, err := os.MkdirTemp("", "secret-sniffer-*")
 		if err != nil {
 			return nil, err
@@ -220,20 +240,32 @@ func (s *Scanner) Scan(ctx context.Context) ([]detectors.Finding, error) {
 		return nil, err
 	}
 	if !info.IsDir() {
+		if s.cfg.Progress != nil {
+			s.cfg.Progress.SetPhase(progress.PhaseScanningWorktree)
+		}
 		return s.scanFiles(ctx, []string{target})
 	}
 
 	var findings []detectors.Finding
 	if s.cfg.GitHistory && isGitRepo(target) {
+		if s.cfg.Progress != nil {
+			s.cfg.Progress.SetPhase(progress.PhaseScanningHistory)
+		}
 		gitFindings, err := s.scanGitHistory(ctx, target)
 		if err != nil {
 			return nil, err
 		}
 		findings = append(findings, gitFindings...)
 	}
+	if s.cfg.Progress != nil {
+		s.cfg.Progress.SetPhase(progress.PhaseDiscovering)
+	}
 	files, err := s.collectFiles(target)
 	if err != nil {
 		return nil, err
+	}
+	if s.cfg.Progress != nil {
+		s.cfg.Progress.SetPhase(progress.PhaseScanningWorktree)
 	}
 	worktreeFindings, err := s.scanFiles(ctx, files)
 	if err != nil {
@@ -365,17 +397,43 @@ func (s *Scanner) allowedRelPath(rel string) bool {
 }
 
 func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Finding, error) {
-	jobs := make(chan string)
-	out := make(chan []detectors.Finding)
+	type result struct {
+		findings []detectors.Finding
+		err      error
+	}
+	jobs := make(chan string, s.cfg.Workers)
+	out := make(chan result)
 	var wg sync.WaitGroup
+	if s.cfg.Progress != nil {
+		s.cfg.Progress.DiscoverItems(int64(len(files)))
+	}
 	for i := 0; i < s.cfg.Workers; i++ {
+		slot := fmt.Sprintf("file-%d-%02d", s.instanceID, i+1)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for path := range jobs {
-				b, err := os.ReadFile(path)
+			for filePath := range jobs {
+				item := progress.Item{Stage: progress.StageScanning, Path: filePath}
+				if info, err := os.Stat(filePath); err == nil {
+					item.BytesTotal = info.Size()
+				}
+				if s.cfg.Progress != nil {
+					s.cfg.Progress.StartItem(slot, item)
+				}
+				b, err := os.ReadFile(filePath)
 				if err == nil {
-					out <- s.scanBlob(ctx, path, "", b, 0)
+					itemCtx := progress.WithSlot(ctx, slot)
+					findings := s.scanBlob(itemCtx, filePath, "", b, 0)
+					if s.cfg.Progress != nil {
+						s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
+						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b)), Findings: int64(len(findings))})
+					}
+					out <- result{findings: findings}
+				} else {
+					if s.cfg.Progress != nil {
+						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "read_error", Error: err.Error()})
+					}
+					out <- result{err: fmt.Errorf("read %s: %w", filePath, err)}
 				}
 			}
 		}()
@@ -384,8 +442,14 @@ func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Fi
 	go func() {
 		defer close(jobs)
 		for _, f := range files {
+			if s.cfg.Progress != nil {
+				s.cfg.Progress.QueueItems(1)
+			}
 			select {
 			case <-ctx.Done():
+				if s.cfg.Progress != nil {
+					s.cfg.Progress.QueueItems(-1)
+				}
 				return
 			case jobs <- f:
 			}
@@ -393,11 +457,16 @@ func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Fi
 	}()
 
 	var findings []detectors.Finding
-	for fs := range out {
-		findings = append(findings, fs...)
+	var scanErr error
+	for result := range out {
+		findings = append(findings, result.findings...)
+		scanErr = errors.Join(scanErr, result.err)
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	if scanErr != nil {
+		return nil, scanErr
 	}
 	return dedupe(findings), nil
 }
@@ -550,32 +619,68 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 	}
 
 	type changedFile struct{ commit, path string }
+	type result struct {
+		findings []detectors.Finding
+		err      error
+	}
 	jobs := make(chan changedFile)
-	out := make(chan []detectors.Finding)
+	out := make(chan result)
 	cache := newHistoryBlobCache()
+	batches := make([]*gitBatchReader, 0, s.cfg.Workers)
+	for range s.cfg.Workers {
+		batch, err := newGitBatchReader(ctx, repo)
+		if err != nil {
+			for _, opened := range batches {
+				opened.close()
+			}
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return nil, fmt.Errorf("start git history object reader: %w", err)
+		}
+		batches = append(batches, batch)
+	}
 	var wg sync.WaitGroup
-	for i := 0; i < s.cfg.Workers; i++ {
+	for i, batch := range batches {
+		slot := fmt.Sprintf("git-%d-%02d", s.instanceID, i+1)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			batch, err := newGitBatchReader(ctx, repo)
-			if err != nil {
-				return
-			}
 			defer batch.close()
 			for f := range jobs {
 				if f.commit == "" || f.path == "" {
 					continue
 				}
+				if s.cfg.Progress != nil {
+					s.cfg.Progress.StartItem(slot, progress.Item{Stage: progress.StageScanning, Path: f.path, Commit: f.commit})
+				}
 				b, oid, err := batch.blob(f.commit+":"+f.path, s.cfg.MaxFileBytes)
 				if err == nil {
+					if s.cfg.Progress != nil {
+						s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
+					}
 					cacheKey := oid
 					if s.cfg.ScanArchives {
 						cacheKey += "\x00" + archiveKind(f.path)
 					}
-					out <- cache.findings(ctx, cacheKey, f.path, f.commit, func() []detectors.Finding {
-						return s.scanBlob(ctx, f.path, f.commit, b, 0)
+					findings := cache.findings(ctx, cacheKey, f.path, f.commit, func() []detectors.Finding {
+						return s.scanBlob(progress.WithSlot(ctx, slot), f.path, f.commit, b, 0)
 					})
+					if s.cfg.Progress != nil {
+						s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
+						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b)), Findings: int64(len(findings))})
+					}
+					out <- result{findings: findings}
+				} else {
+					stage, reason := progress.StageFailed, "read_error"
+					if err.Error() == "blob too large" {
+						stage, reason = progress.StageSkipped, "object_too_large"
+					}
+					if s.cfg.Progress != nil {
+						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: stage, Reason: reason, Error: err.Error()})
+					}
+					if stage == progress.StageFailed {
+						out <- result{err: fmt.Errorf("read git blob %s:%s: %w", f.commit, f.path, err)}
+					}
 				}
 			}
 		}()
@@ -604,8 +709,15 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 				continue
 			}
 			seen[key] = struct{}{}
+			if s.cfg.Progress != nil {
+				s.cfg.Progress.DiscoverItems(1)
+				s.cfg.Progress.QueueItems(1)
+			}
 			select {
 			case <-ctx.Done():
+				if s.cfg.Progress != nil {
+					s.cfg.Progress.QueueItems(-1)
+				}
 				return
 			case jobs <- changedFile{commit: commit, path: file}:
 			}
@@ -613,14 +725,22 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 	}()
 
 	var findings []detectors.Finding
-	for fs := range out {
-		findings = append(findings, fs...)
+	var scanErr error
+	for result := range out {
+		findings = append(findings, result.findings...)
+		scanErr = errors.Join(scanErr, result.err)
 	}
 	if err := cmd.Wait(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	if scan.Err() != nil {
 		return nil, scan.Err()
+	}
+	if scanErr != nil {
+		return nil, scanErr
 	}
 	return dedupe(findings), nil
 }
@@ -812,15 +932,19 @@ func (s *Scanner) scanArchiveBytes(ctx context.Context, file, commit string, b [
 		}
 		defer zr.Close()
 		name := strings.TrimSuffix(file, ".gz")
+		entryName := path.Base(name)
 		if name == file {
 			name = file + "!/decompressed"
+			entryName = "decompressed"
 		} else {
-			name = file + "!/" + path.Base(name)
+			name = file + "!/" + entryName
 		}
+		s.updateArchiveProgress(ctx, progress.StageExtracting, entryName, depth+1, 0)
 		entry, ok := readLimited(zr, s.maxExpandedFileBytes())
 		if !ok {
 			return nil
 		}
+		s.updateArchiveProgress(ctx, progress.StageScanning, entryName, depth+1, int64(len(entry)))
 		return s.scanBlob(ctx, name, commit, entry, depth+1)
 	}
 	return nil
@@ -848,6 +972,7 @@ func (s *Scanner) scanZip(ctx context.Context, file, commit string, b []byte, de
 		if entry.UncompressedSize64 > uint64(s.maxExpandedFileBytes()) {
 			continue
 		}
+		s.updateArchiveProgress(ctx, progress.StageExtracting, name, depth+1, int64(entry.UncompressedSize64))
 		r, err := entry.Open()
 		if err != nil {
 			continue
@@ -862,6 +987,7 @@ func (s *Scanner) scanZip(ctx context.Context, file, commit string, b []byte, de
 		}
 		expanded += int64(len(content))
 		entries++
+		s.updateArchiveProgress(ctx, progress.StageScanning, name, depth+1, int64(len(content)))
 		findings = append(findings, s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)...)
 	}
 	return findings
@@ -890,6 +1016,7 @@ func (s *Scanner) scanTar(ctx context.Context, file, commit string, r io.Reader,
 		if !ok || h.Size > s.maxExpandedFileBytes() {
 			continue
 		}
+		s.updateArchiveProgress(ctx, progress.StageExtracting, name, depth+1, h.Size)
 		content, ok := readLimited(tr, s.maxExpandedFileBytes())
 		if !ok {
 			continue
@@ -899,9 +1026,26 @@ func (s *Scanner) scanTar(ctx context.Context, file, commit string, r io.Reader,
 		}
 		expanded += int64(len(content))
 		entries++
+		s.updateArchiveProgress(ctx, progress.StageScanning, name, depth+1, int64(len(content)))
 		findings = append(findings, s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)...)
 	}
 	return findings
+}
+
+func (s *Scanner) updateArchiveProgress(ctx context.Context, stage, entry string, depth int, size int64) {
+	if s.cfg.Progress == nil {
+		return
+	}
+	if slot := progress.Slot(ctx); slot != "" {
+		update := progress.ItemUpdate{Stage: stage, ArchiveEntry: entry, ArchiveDepth: depth, BytesTotal: size}
+		if stage == progress.StageExtracting {
+			update.ResetBytes = true
+			update.DisableByteCounting = true
+		} else if stage == progress.StageScanning {
+			update.BytesRead = size
+		}
+		s.cfg.Progress.UpdateItem(slot, update)
+	}
 }
 
 func archiveKind(file string) string {

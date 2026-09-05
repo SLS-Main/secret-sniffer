@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -14,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"secret-sniffer/internal/detectors"
+	"secret-sniffer/internal/progress"
 )
 
 type S3API interface {
@@ -33,7 +35,9 @@ type Config struct {
 	Store             *Store
 	ScanObject        func(context.Context, string, []byte) []detectors.Finding
 	AllowObject       func(string) bool
+	SkipObjectReason  func(string) string
 	CommitFindings    func([]detectors.Finding) error
+	Progress          progress.ProgressReporter
 }
 
 type Result struct {
@@ -46,8 +50,9 @@ type Result struct {
 }
 
 type Scanner struct {
-	client S3API
-	cfg    Config
+	client     S3API
+	cfg        Config
+	nextSlotID atomic.Uint64
 }
 
 func New(client S3API, cfg Config) (*Scanner, error) {
@@ -143,6 +148,9 @@ func (s *Scanner) scanBucket(ctx context.Context, bucket string) (bucketStats, e
 	continuation := s.cfg.Store.Bucket(bucket).ContinuationToken
 	var total bucketStats
 	for {
+		if s.cfg.Progress != nil {
+			s.cfg.Progress.SetPhase(progress.PhaseListing)
+		}
 		input := &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(s.cfg.Prefix)}
 		if continuation != "" {
 			input.ContinuationToken = aws.String(continuation)
@@ -150,6 +158,10 @@ func (s *Scanner) scanBucket(ctx context.Context, bucket string) (bucketStats, e
 		page, err := s.client.ListObjectsV2(ctx, input)
 		if err != nil {
 			return total, s.fail(bucket, fmt.Errorf("list s3://%s: %w", bucket, err))
+		}
+		if s.cfg.Progress != nil {
+			s.cfg.Progress.DiscoverItems(int64(len(page.Contents)))
+			s.cfg.Progress.SetPhase(progress.PhaseDownloading)
 		}
 		pageStats, findings, err := s.scanPage(ctx, bucket, page.Contents)
 		if err != nil {
@@ -185,23 +197,30 @@ type objectResult struct {
 }
 
 func (s *Scanner) scanPage(ctx context.Context, bucket string, objects []types.Object) (bucketStats, []detectors.Finding, error) {
-	jobs := make(chan types.Object)
+	jobs := make(chan types.Object, s.cfg.ObjectConcurrency)
 	results := make(chan objectResult)
 	var wg sync.WaitGroup
 	for range s.cfg.ObjectConcurrency {
+		slot := fmt.Sprintf("s3-object-%02d", s.nextSlotID.Add(1))
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for object := range jobs {
-				results <- s.scanObject(ctx, bucket, object)
+				results <- s.scanObject(ctx, slot, bucket, object)
 			}
 		}()
 	}
 	go func() {
 		defer close(jobs)
 		for _, object := range objects {
+			if s.cfg.Progress != nil {
+				s.cfg.Progress.QueueItems(1)
+			}
 			select {
 			case <-ctx.Done():
+				if s.cfg.Progress != nil {
+					s.cfg.Progress.QueueItems(-1)
+				}
 				return
 			case jobs <- object:
 			}
@@ -230,11 +249,36 @@ func (s *Scanner) scanPage(ctx context.Context, bucket string, objects []types.O
 	return stats, findings, pageErr
 }
 
-func (s *Scanner) scanObject(ctx context.Context, bucket string, object types.Object) objectResult {
+func (s *Scanner) scanObject(ctx context.Context, slot, bucket string, object types.Object) objectResult {
 	key := aws.ToString(object.Key)
 	virtualPath := "s3://" + bucket + "/" + key
-	if key == "" || s.cfg.MaxObjectBytes > 0 && object.Size != nil && *object.Size > s.cfg.MaxObjectBytes || s.cfg.AllowObject != nil && !s.cfg.AllowObject(key) {
+	item := progress.Item{Stage: progress.StageDownloading, Bucket: bucket, Path: key, CountBytes: true}
+	if object.Size != nil {
+		item.BytesTotal = *object.Size
+	}
+	skipReason := ""
+	switch {
+	case key == "":
+		skipReason = "path_excluded"
+	case s.cfg.MaxObjectBytes > 0 && object.Size != nil && *object.Size > s.cfg.MaxObjectBytes:
+		skipReason = "object_too_large"
+	case object.StorageClass == types.ObjectStorageClassGlacier || object.StorageClass == types.ObjectStorageClassDeepArchive:
+		skipReason = "unsupported_storage_class"
+	case s.cfg.SkipObjectReason != nil:
+		skipReason = s.cfg.SkipObjectReason(key)
+	case s.cfg.AllowObject != nil && !s.cfg.AllowObject(key):
+		skipReason = "path_excluded"
+	}
+	if skipReason != "" {
+		if s.cfg.Progress != nil {
+			item.Stage = progress.StageSkipped
+			s.cfg.Progress.StartItem(slot, item)
+			s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageSkipped, Reason: skipReason})
+		}
 		return objectResult{skipped: true}
+	}
+	if s.cfg.Progress != nil {
+		s.cfg.Progress.StartItem(slot, item)
 	}
 	input := &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)}
 	if object.ETag != nil {
@@ -242,21 +286,57 @@ func (s *Scanner) scanObject(ctx context.Context, bucket string, object types.Ob
 	}
 	out, err := s.client.GetObject(ctx, input)
 	if err != nil {
+		if s.cfg.Progress != nil {
+			s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "read_error", Error: err.Error()})
+		}
 		return objectResult{err: fmt.Errorf("get %s: %w", virtualPath, err)}
 	}
 	defer out.Body.Close()
 	reader := io.Reader(out.Body)
+	counter := &progressReader{reader: reader, reporter: s.cfg.Progress, slot: slot}
+	reader = counter
 	if s.cfg.MaxObjectBytes > 0 {
-		reader = io.LimitReader(out.Body, s.cfg.MaxObjectBytes+1)
+		reader = io.LimitReader(counter, s.cfg.MaxObjectBytes+1)
 	}
 	b, err := io.ReadAll(reader)
 	if err != nil {
+		if s.cfg.Progress != nil {
+			s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "read_error", Error: err.Error(), BytesRead: counter.read})
+		}
 		return objectResult{err: fmt.Errorf("read %s: %w", virtualPath, err)}
 	}
 	if s.cfg.MaxObjectBytes > 0 && int64(len(b)) > s.cfg.MaxObjectBytes {
+		if s.cfg.Progress != nil {
+			s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageSkipped, Reason: "object_too_large", BytesRead: int64(len(b))})
+		}
 		return objectResult{skipped: true}
 	}
-	return objectResult{findings: s.cfg.ScanObject(ctx, virtualPath, b)}
+	if s.cfg.Progress != nil {
+		s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageDownloaded, ClearArchive: true, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
+		s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
+		s.cfg.Progress.SetPhase(progress.PhaseScanning)
+	}
+	findings := s.cfg.ScanObject(progress.WithSlot(ctx, slot), virtualPath, b)
+	if s.cfg.Progress != nil {
+		s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b)), Findings: int64(len(findings))})
+	}
+	return objectResult{findings: findings}
+}
+
+type progressReader struct {
+	reader   io.Reader
+	reporter progress.ProgressReporter
+	slot     string
+	read     int64
+}
+
+func (r *progressReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.read += int64(n)
+	if n > 0 && r.reporter != nil {
+		r.reporter.UpdateItem(r.slot, progress.ItemUpdate{BytesRead: r.read})
+	}
+	return n, err
 }
 
 func (s *Scanner) fail(bucket string, err error) error {

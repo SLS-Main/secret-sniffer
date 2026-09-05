@@ -6,6 +6,7 @@ import (
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"math/big"
@@ -26,10 +27,17 @@ import (
 	"secret-sniffer/internal/githubapi"
 	"secret-sniffer/internal/output"
 	"secret-sniffer/internal/parity"
+	"secret-sniffer/internal/progress"
 	"secret-sniffer/internal/scanner"
 )
 
 var version = "dev"
+
+var activeProgress struct {
+	sync.Mutex
+	reporter progress.ProgressReporter
+	closing  chan struct{}
+}
 
 func main() {
 	var cfg scanner.Config
@@ -79,6 +87,8 @@ func main() {
 	var s3AllBuckets bool
 	var s3Resume bool
 	var awsSSODeviceAuth bool
+	var progressStatePath string
+	var progressInterval time.Duration
 
 	flag.StringVar(&cfg.Target, "target", ".", "local path or GitHub repository URL to scan")
 	flag.IntVar(&cfg.Workers, "workers", runtime.NumCPU(), "number of concurrent workers")
@@ -135,12 +145,34 @@ func main() {
 	flag.StringVar(&awsSecretAccessKey, "aws-secret-access-key", "", "explicit AWS secret access key")
 	flag.StringVar(&awsSessionToken, "aws-session-token", "", "AWS session token for temporary explicit credentials")
 	flag.BoolVar(&awsSSODeviceAuth, "aws-sso-device-auth", false, "authenticate interactively using the selected AWS IAM Identity Center profile")
+	flag.StringVar(&progressStatePath, "progress-state", "", "write atomic machine-readable scan progress to this path")
+	flag.DurationVar(&progressInterval, "progress-interval", 500*time.Millisecond, "interval for active-item progress snapshots")
 	flag.BoolVar(&showVersion, "version", false, "print version")
 	flag.Parse()
 
 	if showVersion {
 		fmt.Println("secret-sniffer " + version)
 		return
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	start := time.Now()
+	console := newConsole(quiet, noColor)
+	if progressStatePath != "" && !listDetectors && !truffleHogParity {
+		reporter, err := progress.New(progressStatePath, progressInterval, progressSourceType(s3Buckets, s3AllBuckets, githubOrgs, githubEnterprise, githubAccessible, repoListPath, cfg.GitHistory, cfg.Target), progressTarget(s3Buckets, s3AllBuckets, githubOrgs, githubEnterprise, githubAccessible, repoListPath, cfg.Target), func(err error) {
+			console.warning("Progress state write failed: %v", err)
+		})
+		if err != nil {
+			fatal(err)
+		}
+		activeProgress.Lock()
+		activeProgress.reporter = reporter
+		activeProgress.closing = nil
+		activeProgress.Unlock()
+		cfg.Progress = reporter
+		if ctx.Err() != nil {
+			fatal(ctx.Err())
+		}
 	}
 
 	registry := detectors.DefaultRegistry()
@@ -182,11 +214,6 @@ func main() {
 	}
 	runtime.GOMAXPROCS(cfg.Workers)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	start := time.Now()
-	console := newConsole(quiet, noColor)
 	console.step("Starting scan")
 	if s3Buckets != "" || s3AllBuckets {
 		if s3ObjectConcurrency < 1 {
@@ -202,8 +229,15 @@ func main() {
 			CustomDetectorsPath: customPath, Console: console, StartedAt: start,
 		})
 		if err != nil {
+			if ctx.Err() != nil {
+				fatal(ctx.Err())
+			}
 			fatal(err)
 		}
+		if ctx.Err() != nil {
+			fatal(ctx.Err())
+		}
+		finishProgress(nil)
 		console.done(findings, time.Since(start).Round(time.Millisecond))
 		if failOnFindings && findings > 0 {
 			os.Exit(2)
@@ -213,6 +247,9 @@ func main() {
 	githubClients, err := githubClients(ctx, githubToken, githubAppID, githubAppPrivateKey, githubInstallationID, githubAccessible, githubOrgs)
 	if err != nil {
 		fatal(err)
+	}
+	if cfg.Progress != nil {
+		cfg.Progress.SetPhase(progress.PhaseDiscovering)
 	}
 	targets, tokenByTarget, _, installationByTarget, summary, err := scanTargets(ctx, cfg.Target, repoListPath, githubOrgs, githubEnterprise, githubAccessible, githubClients, console)
 	if err != nil {
@@ -259,6 +296,7 @@ func main() {
 		console.info("Wrote discovery summary to %s", summaryOutputPath)
 	}
 	if summaryOnly {
+		finishProgress(nil)
 		console.done(0, time.Since(start).Round(time.Millisecond))
 		return
 	}
@@ -416,6 +454,12 @@ func main() {
 	}
 	close(jobs)
 	wg.Wait()
+	if ctx.Err() != nil {
+		fatal(ctx.Err())
+	}
+	if cfg.Progress != nil {
+		cfg.Progress.SetPhase(progress.PhaseFinalizing)
+	}
 	if streamWriter != nil {
 		if err := streamWriter.Close(); err != nil {
 			fatal(err)
@@ -453,6 +497,11 @@ func main() {
 		fmt.Fprintf(os.Stdout, "scan complete: %d findings in %s, output=%s\n", summary.FindingsAfterBaseline, time.Since(start).Round(time.Millisecond), outputPath)
 	}
 	console.done(totalAfterBaseline, time.Since(start).Round(time.Millisecond))
+	if summary.FailedScans > 0 {
+		finishProgress(fmt.Errorf("%d repository scans failed", summary.FailedScans))
+	} else {
+		finishProgress(nil)
+	}
 	if failOnFindings && totalAfterBaseline > 0 {
 		os.Exit(2)
 	}
@@ -827,6 +876,13 @@ func (c console) printf(label, color, format string, args ...any) {
 
 func (c console) step(msg string, args ...any) { c.printf("START", colorBlue, msg, args...) }
 func (c console) info(msg string, args ...any) { c.printf("INFO", colorCyan, msg, args...) }
+func (c console) warning(msg string, args ...any) {
+	if c.color {
+		fmt.Fprintf(os.Stderr, "%s%-9s%s %s\n", colorYellow, "WARN", colorReset, fmt.Sprintf(msg, args...))
+		return
+	}
+	fmt.Fprintf(os.Stderr, "%-9s %s\n", "WARN", fmt.Sprintf(msg, args...))
+}
 func (c console) done(findings int, duration time.Duration) {
 	c.printf("DONE", colorGreen, "findings=%d duration=%s", findings, duration)
 }
@@ -1418,8 +1474,68 @@ func writeSummary(path string, summary discoverySummary) error {
 }
 
 func fatal(err error) {
+	finishProgress(err)
 	fmt.Fprintf(os.Stderr, "secret-sniffer: %v\n", err)
 	os.Exit(1)
+}
+
+func finishProgress(err error) {
+	activeProgress.Lock()
+	reporter := activeProgress.reporter
+	if reporter == nil {
+		closing := activeProgress.closing
+		activeProgress.Unlock()
+		if closing != nil {
+			<-closing
+		}
+		return
+	}
+	closing := make(chan struct{})
+	activeProgress.reporter = nil
+	activeProgress.closing = closing
+	activeProgress.Unlock()
+	final := progress.Final{Phase: progress.PhaseCompleted}
+	if err != nil {
+		final.Phase = progress.PhaseFailed
+		final.Error = err.Error()
+		if errors.Is(err, context.Canceled) {
+			final.Phase = progress.PhaseCancelled
+		}
+	}
+	reporter.Close(final)
+	close(closing)
+}
+
+func progressSourceType(s3Buckets string, s3AllBuckets bool, orgs, enterprise string, accessible bool, repoListPath string, gitHistory bool, target string) string {
+	if s3Buckets != "" || s3AllBuckets {
+		return "s3"
+	}
+	if isGitHubDiscovery(orgs, enterprise, accessible) || repoListPath != "" || isGitHubCloneTarget(target) {
+		return "github"
+	}
+	if gitHistory {
+		return "git"
+	}
+	return "filesystem"
+}
+
+func progressTarget(s3Buckets string, s3AllBuckets bool, orgs, enterprise string, accessible bool, repoListPath, target string) string {
+	switch {
+	case s3Buckets != "":
+		return strings.Join(splitCSV(s3Buckets), ",")
+	case s3AllBuckets:
+		return "all-owned-buckets"
+	case enterprise != "":
+		return enterprise
+	case orgs != "":
+		return orgs
+	case accessible:
+		return "all-accessible-repositories"
+	case repoListPath != "":
+		return repoListPath
+	default:
+		return target
+	}
 }
 
 func splitCSV(s string) []string {

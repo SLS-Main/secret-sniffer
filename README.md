@@ -149,7 +149,29 @@ Scan several S3 buckets concurrently without downloading excluded file types:
 --aws-secret-access-key  Explicit secret access key.
 --aws-session-token   Session token for temporary explicit AWS credentials.
 --aws-sso-device-auth Start IAM Identity Center device authorization for --aws-profile.
+--progress-state      Write atomic machine-readable scan progress to this path.
+--progress-interval   Active-item snapshot interval. Default: 500ms.
 ```
+
+## Machine-Readable Progress
+
+Use `--progress-state` when an orchestrator or UI needs stable progress without parsing console output. No progress file is written unless the flag is supplied. `--progress-interval` controls publication of active worker changes and defaults to `500ms`:
+
+```bash
+./secret-sniffer \
+  --s3-buckets tools-prod-us-west-2 \
+  --progress-state run/progress.json \
+  --progress-interval 500ms \
+  --format jsonl
+```
+
+The schema is versioned and includes a monotonically increasing sequence, source and target metadata, aggregate counters, one entry per active worker slot, and the most recently completed item. S3 entries include bucket, object path, download bytes, and download/scan stage. Filesystem entries include the active path, archive entries include the outer path plus entry/depth, and Git-history entries include path and commit.
+
+Stable phases are `initializing`, `discovering`, `listing`, `cloning`, `scanning_worktree`, `scanning_history`, `downloading`, `extracting`, `scanning`, `finalizing`, `completed`, `failed`, and `cancelled`. Stable item stages are `queued`, `downloading`, `downloaded`, `extracting`, `scanning`, `completed`, `skipped`, and `failed`.
+
+Snapshots use a mode-`0600` temporary file, file and directory `fsync`, and atomic rename. The initial snapshot is written synchronously, so an invalid or unwritable configured path fails startup. Later writes run behind a bounded coalescing notification channel; slow or failed storage cannot block scanner workers, and later write failures produce warnings. The terminal `completed`, `failed`, or `cancelled` snapshot is left in place.
+
+Progress files never contain finding secrets, credentials, authorization headers, signed URL query strings, AWS continuation tokens, or output payloads. Paths are included intentionally for operational visibility.
 
 ## S3 Scanning
 
