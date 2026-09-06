@@ -1,11 +1,81 @@
 package detectors
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestVerificationStatusesAndFiltering(t *testing.T) {
+	candidate := Candidate{DetectorID: "test", Name: "Test", Secret: "secret-value"}
+	if got := ToFindingAt(candidate, "file", "", 1, 1, false).Verification.Status; got != VerificationNotAttempted {
+		t.Fatalf("disabled verification status=%q", got)
+	}
+	if got := ToFindingAt(candidate, "file", "", 1, 1, true).Verification.Status; got != VerificationUnsupported {
+		t.Fatalf("unsupported verification status=%q", got)
+	}
+	statuses := []VerificationStatus{VerificationVerified, VerificationUnverified, VerificationUnknown, VerificationNotAttempted, VerificationUnsupported}
+	findings := make([]Finding, 0, len(statuses))
+	for _, status := range statuses {
+		findings = append(findings, Finding{DetectorID: string(status), Verification: VerificationResult{Status: status}})
+	}
+	allowed, err := ParseVerificationStatuses("verified,unknown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	filtered := FilterVerification(findings, allowed)
+	if len(filtered) != 2 || filtered[0].Verification.Status != VerificationVerified || filtered[1].Verification.Status != VerificationUnknown {
+		t.Fatalf("unexpected filtered findings: %#v", filtered)
+	}
+	for _, status := range statuses {
+		allowed, err := ParseVerificationStatuses(string(status))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := FilterVerification(findings, allowed); len(got) != 1 || got[0].Verification.Status != status {
+			t.Fatalf("filter %q returned %#v", status, got)
+		}
+	}
+	if _, err := ParseVerificationStatuses("invalid"); err == nil {
+		t.Fatal("expected invalid verification status error")
+	}
+}
+
+func TestVerificationProviderFailuresAreUnknown(t *testing.T) {
+	cases := []struct {
+		status   int
+		category string
+	}{
+		{status: http.StatusTooManyRequests, category: "rate_limited"},
+		{status: http.StatusServiceUnavailable, category: "provider"},
+		{status: http.StatusForbidden, category: "authorization"},
+	}
+	for _, tc := range cases {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(tc.status) }))
+		req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+		result := verifyHTTPRequest(context.Background(), req)
+		server.Close()
+		if result.Status != VerificationUnknown || result.ErrorCategory != tc.category {
+			t.Fatalf("status %d result=%#v", tc.status, result)
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
+	result := verifyHTTPRequest(ctx, req)
+	if result.Status != VerificationUnknown || result.ErrorCategory != "timeout" {
+		t.Fatalf("timeout result=%#v", result)
+	}
+}
 
 func TestDefaultRegistryFindsGitHubToken(t *testing.T) {
 	input := []byte("token := \"ghp_abcdefghijklmnopqrstuvwxyz0123456789\"")
@@ -1287,6 +1357,51 @@ func TestLoadCustomFile(t *testing.T) {
 	candidates := ds[0].Detect([]byte("internal_key=abcdefghijklmnop"))
 	if len(candidates) != 1 || candidates[0].Secret != "abcdefghijklmnop" {
 		t.Fatalf("unexpected candidates: %#v", candidates)
+	}
+}
+
+func TestLoadCustomFileRejectsInvalidConfiguration(t *testing.T) {
+	cases := map[string]string{
+		"invalid regex":    `{"detectors":[{"id":"bad","regex":"("}]}`,
+		"unknown field":    `{"detectors":[{"id":"bad","regex":"x","extra":true}]}`,
+		"invalid severity": `{"detectors":[{"id":"bad","regex":"x","severity":"urgent"}]}`,
+		"invalid group":    `{"detectors":[{"id":"bad","regex":"(x)","secret_group":2}]}`,
+		"duplicate id":     `{"detectors":[{"id":"same","regex":"x"},{"id":"same","regex":"y"}]}`,
+	}
+	for name, contents := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "detectors.json")
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadCustomFile(path); err == nil {
+				t.Fatal("expected controlled configuration error")
+			}
+		})
+	}
+}
+
+func TestConfigureRegistryControlsAndOverrides(t *testing.T) {
+	registry := []Detector{
+		NewRegex("one", "One", "low", nil, `(one-secret-value)`, 1, nil),
+		NewRegex("two", "Two", "medium", nil, `(two-secret-value)`, 1, nil),
+	}
+	configured, err := ConfigureRegistry(registry, []string{"one"}, nil, map[string]string{"one": "critical"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configured) != 1 || configured[0].Info().ID != "one" || configured[0].Info().Severity != "critical" {
+		t.Fatalf("unexpected configured registry: %#v", RegistryInfo(configured))
+	}
+	candidates := configured[0].Detect([]byte("one-secret-value"))
+	if len(candidates) != 1 || candidates[0].Severity != "critical" {
+		t.Fatalf("severity override not applied: %#v", candidates)
+	}
+	if _, err := ConfigureRegistry(append(registry, registry[0]), nil, nil, nil); err == nil {
+		t.Fatal("expected duplicate registry ID error")
+	}
+	if _, err := ConfigureRegistry(registry, nil, []string{"missing"}, nil); err == nil {
+		t.Fatal("expected unknown disabled detector error")
 	}
 }
 

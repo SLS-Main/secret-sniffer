@@ -40,6 +40,29 @@ func TestDefaultOutputPath(t *testing.T) {
 	}
 }
 
+func TestScanExitCode(t *testing.T) {
+	cases := []struct {
+		name         string
+		scanErrors   bool
+		failFindings bool
+		findings     int
+		want         int
+	}{
+		{name: "success", want: 0},
+		{name: "ignored scan error", scanErrors: false, want: 0},
+		{name: "scan error", scanErrors: true, want: 1},
+		{name: "findings", failFindings: true, findings: 1, want: 2},
+		{name: "findings take precedence", scanErrors: true, failFindings: true, findings: 1, want: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := scanExitCode(tc.scanErrors, tc.failFindings, tc.findings); got != tc.want {
+				t.Fatalf("scanExitCode()=%d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExtensionExcludePatterns(t *testing.T) {
 	patterns, err := extensionExcludePatterns("png, .JPG,png")
 	if err != nil {
@@ -259,6 +282,20 @@ func TestReadRepoList(t *testing.T) {
 	}
 	if want := []string{"https://github.com/acme/one", "https://github.com/acme/two.git"}; !equalStrings(targets, want) {
 		t.Fatalf("targets=%v, want %v", targets, want)
+	}
+}
+
+func TestReadPatternFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "patterns.txt")
+	if err := os.WriteFile(path, []byte("# comment\nsrc/**\n\n*.env\nsrc/**\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	patterns, err := readPatternFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"src/**", "*.env"}; !equalStrings(patterns, want) {
+		t.Fatalf("patterns=%v, want %v", patterns, want)
 	}
 }
 

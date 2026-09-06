@@ -39,6 +39,18 @@ var activeProgress struct {
 	closing  chan struct{}
 }
 
+type stringListFlag []string
+
+func (f *stringListFlag) String() string { return strings.Join(*f, ",") }
+func (f *stringListFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("value must not be empty")
+	}
+	*f = append(*f, value)
+	return nil
+}
+
 func main() {
 	var cfg scanner.Config
 	var customPath string
@@ -69,6 +81,7 @@ func main() {
 	var scanResume bool
 	var scanRetryFailed bool
 	var failOnFindings bool
+	var failOnScanErrors bool
 	var redact bool
 	var noRedact bool
 	var quiet bool
@@ -89,6 +102,30 @@ func main() {
 	var awsSSODeviceAuth bool
 	var progressStatePath string
 	var progressInterval time.Duration
+	var verificationStatuses string
+	var enableDetectors string
+	var disableDetectors string
+	var severityOverrides string
+	var gitRanges stringListFlag
+	var gitRefs stringListFlag
+	var gitBranches stringListFlag
+	var includeRegex stringListFlag
+	var excludeRegex stringListFlag
+	var includeFile string
+	var excludeFile string
+	var awsRoleARNs stringListFlag
+	var awsRoleExternalID string
+	var awsRoleSessionName string
+	var maxObjectBytes int64
+	var s3Endpoint string
+	var s3PathStyle bool
+	var s3ExactKeys stringListFlag
+	var s3ExcludeBuckets string
+	var s3RetryAttempts int
+	var s3RetryBaseDelay time.Duration
+	var s3VersionPolicy string
+	var s3DeleteMarkerPolicy string
+	var s3StorageClassPolicy string
 
 	flag.StringVar(&cfg.Target, "target", ".", "local path or GitHub repository URL to scan")
 	flag.IntVar(&cfg.Workers, "workers", runtime.NumCPU(), "number of concurrent workers")
@@ -99,9 +136,21 @@ func main() {
 	flag.Int64Var(&cfg.MaxArchiveBytes, "max-archive-bytes", 250*1024*1024, "maximum expanded bytes to inspect per archive when --scan-archives is enabled")
 	flag.Int64Var(&cfg.MaxExpandedFileBytes, "max-expanded-file-bytes", 25*1024*1024, "maximum decompressed archive entry size to scan")
 	flag.BoolVar(&cfg.GitHistory, "git-history", false, "scan every reachable git blob")
+	flag.IntVar(&cfg.GitMaxDepth, "max-depth", 0, "maximum Git commits and remote clone depth; zero means unlimited")
+	flag.StringVar(&cfg.GitSinceCommit, "since-commit", "", "exclude commits reachable from this commit")
+	flag.Var(&gitRanges, "commit-range", "explicit Git revision range to scan; repeatable")
+	flag.Var(&gitRefs, "git-ref", "Git ref or commit to scan; repeatable")
+	flag.Var(&gitBranches, "branch", "Git branch to scan; repeatable")
+	flag.StringVar(&cfg.GitAdditionalRefs, "additional-ref-policy", "all", "Git additional-ref policy: all, default, selected, none")
+	flag.StringVar(&cfg.GitAuthorizationHeader, "git-authorization-header", os.Getenv("GIT_AUTHORIZATION_HEADER"), "HTTP Authorization header for Git clone; defaults to GIT_AUTHORIZATION_HEADER")
 	flag.BoolVar(&cfg.Verify, "verify", false, "attempt live verification for supported detectors")
+	flag.StringVar(&verificationStatuses, "verification-statuses", "", "comma-separated verification statuses to retain")
 	flag.StringVar(&include, "include", "", "comma-separated glob patterns to include")
 	flag.StringVar(&exclude, "exclude", "", "comma-separated glob patterns to exclude")
+	flag.StringVar(&includeFile, "include-file", "", "newline-separated include glob file")
+	flag.StringVar(&excludeFile, "exclude-file", "", "newline-separated exclude glob file")
+	flag.Var(&includeRegex, "include-regex", "regular-expression path include; repeatable")
+	flag.Var(&excludeRegex, "exclude-regex", "regular-expression path exclude; repeatable")
 	flag.StringVar(&excludeExtensions, "exclude-extensions", "", "comma-separated file extensions to skip before reading or downloading")
 	flag.StringVar(&format, "format", "human", "output format: human, json, jsonl, sarif")
 	flag.StringVar(&outputPath, "output", "", "stream findings to this JSONL file as they are discovered")
@@ -109,6 +158,9 @@ func main() {
 	flag.IntVar(&repoConcurrency, "repo-concurrency", 1, "number of repositories to scan concurrently for repo-list and GitHub org/enterprise/access scans")
 	flag.StringVar(&repoListPath, "repo-list", "", "path to text file containing repository targets to scan, one per line")
 	flag.StringVar(&customPath, "custom-detectors", "", "path to custom detector JSON")
+	flag.StringVar(&enableDetectors, "enable-detectors", "", "comma-separated detector IDs to enable exclusively")
+	flag.StringVar(&disableDetectors, "disable-detectors", "", "comma-separated detector IDs to disable")
+	flag.StringVar(&severityOverrides, "severity-overrides", "", "comma-separated detector=severity overrides")
 	flag.StringVar(&baselinePath, "baseline", "", "path to baseline JSON of accepted fingerprints")
 	flag.StringVar(&writeBaselinePath, "write-baseline", "", "write finding fingerprints to baseline JSON")
 	flag.StringVar(&summaryOutputPath, "summary-output", "", "write GitHub discovery and scan summary JSON to this path")
@@ -127,6 +179,7 @@ func main() {
 	flag.BoolVar(&listDetectors, "list-detectors", false, "print detector metadata as JSON and exit")
 	flag.BoolVar(&truffleHogParity, "trufflehog-parity", false, "print tracked TruffleHog detector parity mappings as JSON and exit")
 	flag.BoolVar(&failOnFindings, "fail-on-findings", false, "exit with status 2 when findings are present")
+	flag.BoolVar(&failOnScanErrors, "fail-on-scan-errors", false, "exit with status 1 when any selected target fails to scan")
 	flag.BoolVar(&redact, "redact", false, "omit raw secrets from machine-readable output")
 	flag.BoolVar(&noRedact, "no-redact", true, "include raw secrets in machine-readable output; default true")
 	flag.BoolVar(&quiet, "quiet", false, "suppress progress logs on stderr")
@@ -136,6 +189,16 @@ func main() {
 	flag.StringVar(&s3Prefix, "s3-prefix", "", "only scan S3 objects under this key prefix")
 	flag.IntVar(&s3BucketConcurrency, "s3-bucket-concurrency", 4, "number of S3 buckets to scan concurrently")
 	flag.IntVar(&s3ObjectConcurrency, "s3-object-concurrency", 0, "number of objects to download and scan concurrently per bucket; defaults to --workers")
+	flag.Int64Var(&maxObjectBytes, "max-object-bytes", 25*1024*1024, "maximum S3 object size to download and scan")
+	flag.Var(&s3ExactKeys, "s3-key", "exact S3 object key to scan; repeatable")
+	flag.StringVar(&s3ExcludeBuckets, "s3-exclude-buckets", "", "comma-separated bucket names to exclude")
+	flag.StringVar(&s3Endpoint, "s3-endpoint", "", "S3-compatible service endpoint URL")
+	flag.BoolVar(&s3PathStyle, "s3-path-style", false, "use path-style S3 addressing")
+	flag.IntVar(&s3RetryAttempts, "s3-retry-attempts", 4, "application-level attempts for transient S3 operations")
+	flag.DurationVar(&s3RetryBaseDelay, "s3-retry-base-delay", 200*time.Millisecond, "base delay for exponential S3 retry backoff")
+	flag.StringVar(&s3VersionPolicy, "s3-version-policy", "current", "S3 object version policy: current, all, noncurrent")
+	flag.StringVar(&s3DeleteMarkerPolicy, "s3-delete-marker-policy", "ignore", "S3 delete-marker policy: ignore, skip, error")
+	flag.StringVar(&s3StorageClassPolicy, "s3-storage-class-policy", "skip", "archived S3 storage policy: skip, error, attempt")
 	flag.StringVar(&s3JobID, "s3-job-id", "", "S3 scan job ID used to validate resumable state")
 	flag.StringVar(&s3StatePath, "s3-state", "", "S3 checkpoint path; defaults to .secret-sniffer-jobs/<job-id>-s3.json")
 	flag.BoolVar(&s3Resume, "s3-resume", false, "resume incomplete S3 buckets from durable page checkpoints")
@@ -145,6 +208,9 @@ func main() {
 	flag.StringVar(&awsSecretAccessKey, "aws-secret-access-key", "", "explicit AWS secret access key")
 	flag.StringVar(&awsSessionToken, "aws-session-token", "", "AWS session token for temporary explicit credentials")
 	flag.BoolVar(&awsSSODeviceAuth, "aws-sso-device-auth", false, "authenticate interactively using the selected AWS IAM Identity Center profile")
+	flag.Var(&awsRoleARNs, "aws-role-arn", "AWS role ARN to assume; repeatable in source-to-target chain order")
+	flag.StringVar(&awsRoleExternalID, "aws-role-external-id", "", "external ID supplied to each explicit role assumption")
+	flag.StringVar(&awsRoleSessionName, "aws-role-session-name", "secret-sniffer", "session name for explicit AWS role assumptions")
 	flag.StringVar(&progressStatePath, "progress-state", "", "write atomic machine-readable scan progress to this path")
 	flag.DurationVar(&progressInterval, "progress-interval", 500*time.Millisecond, "interval for active-item progress snapshots")
 	flag.BoolVar(&showVersion, "version", false, "print version")
@@ -183,6 +249,14 @@ func main() {
 		}
 		registry = append(registry, custom...)
 	}
+	overrides, err := parseSeverityOverrides(severityOverrides)
+	if err != nil {
+		fatal(err)
+	}
+	registry, err = detectors.ConfigureRegistry(registry, splitCSV(enableDetectors), splitCSV(disableDetectors), overrides)
+	if err != nil {
+		fatal(err)
+	}
 	if listDetectors {
 		if err := output.WriteDetectorInfo(os.Stdout, detectors.RegistryInfo(registry)); err != nil {
 			fatal(err)
@@ -204,6 +278,22 @@ func main() {
 	}
 	cfg.Include = splitCSV(include)
 	cfg.Exclude = splitCSV(exclude)
+	if includeFile != "" {
+		patterns, err := readPatternFile(includeFile)
+		if err != nil {
+			fatal(err)
+		}
+		cfg.Include = append(cfg.Include, patterns...)
+	}
+	if excludeFile != "" {
+		patterns, err := readPatternFile(excludeFile)
+		if err != nil {
+			fatal(err)
+		}
+		cfg.Exclude = append(cfg.Exclude, patterns...)
+	}
+	cfg.IncludeRegex = append([]string(nil), includeRegex...)
+	cfg.ExcludeRegex = append([]string(nil), excludeRegex...)
 	extensionPatterns, err := extensionExcludePatterns(excludeExtensions)
 	if err != nil {
 		fatal(err)
@@ -211,6 +301,16 @@ func main() {
 	cfg.Exclude = append(cfg.Exclude, extensionPatterns...)
 	for _, pattern := range extensionPatterns {
 		cfg.ExcludeExtensions = append(cfg.ExcludeExtensions, strings.TrimPrefix(pattern, "*."))
+	}
+	verificationFilter, err := detectors.ParseVerificationStatuses(verificationStatuses)
+	if err != nil {
+		fatal(err)
+	}
+	cfg.GitRanges = append([]string(nil), gitRanges...)
+	cfg.GitRefs = append([]string(nil), gitRefs...)
+	cfg.GitBranches = append([]string(nil), gitBranches...)
+	if err := scanner.ValidateConfig(cfg); err != nil {
+		fatal(err)
 	}
 	runtime.GOMAXPROCS(cfg.Workers)
 
@@ -227,8 +327,14 @@ func main() {
 			SSODeviceAuth: awsSSODeviceAuth, Format: format, OutputPath: outputPath, OutputFlushFindings: outputFlushFindings,
 			IncludeSecrets: noRedact && !redact, BaselinePath: baselinePath, WriteBaselinePath: writeBaselinePath,
 			CustomDetectorsPath: customPath, Console: console, StartedAt: start,
+			VerificationStatuses: verificationFilter,
+			MaxObjectBytes:       maxObjectBytes, ExactKeys: append([]string(nil), s3ExactKeys...), ExcludeBuckets: splitCSV(s3ExcludeBuckets),
+			S3Endpoint: s3Endpoint, S3PathStyle: s3PathStyle, RetryAttempts: s3RetryAttempts, RetryBaseDelay: s3RetryBaseDelay,
+			VersionPolicy: s3VersionPolicy, DeleteMarkerPolicy: s3DeleteMarkerPolicy, StorageClassPolicy: s3StorageClassPolicy,
+			AWSRoleARNs: append([]string(nil), awsRoleARNs...), AWSRoleExternalID: awsRoleExternalID, AWSRoleSessionName: awsRoleSessionName,
 		})
-		if err != nil {
+		var scanFailures *s3ScanFailuresError
+		if err != nil && !errors.As(err, &scanFailures) {
 			if ctx.Err() != nil {
 				fatal(ctx.Err())
 			}
@@ -237,11 +343,13 @@ func main() {
 		if ctx.Err() != nil {
 			fatal(ctx.Err())
 		}
-		finishProgress(nil)
 		console.done(findings, time.Since(start).Round(time.Millisecond))
-		if failOnFindings && findings > 0 {
-			os.Exit(2)
+		exitCode := scanExitCode(failOnScanErrors && scanFailures != nil, failOnFindings, findings)
+		if exitCode != 0 {
+			finishProgress(errors.New(exitReason(exitCode)))
+			os.Exit(exitCode)
 		}
+		finishProgress(nil)
 		return
 	}
 	githubClients, err := githubClients(ctx, githubToken, githubAppID, githubAppPrivateKey, githubInstallationID, githubAccessible, githubOrgs)
@@ -310,7 +418,7 @@ func main() {
 	var streamWriter *asyncJSONLWriter
 	if outputPath != "" {
 		outputFlags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-		if jobState != nil && (scanResume || scanRetryFailed) {
+		if format == "jsonl" && jobState != nil && (scanResume || scanRetryFailed) {
 			outputPath, outputFlags, err = resumeOutputOpenOptions(outputPath, time.Now(), os.Stdin, os.Stderr)
 			if err != nil {
 				fatal(err)
@@ -368,6 +476,22 @@ func main() {
 				targetCfg := cfg
 				targetCfg.Target = target
 				targetCfg.GitHubToken = tokenByTarget[target]
+				if streamWriter != nil {
+					targetCfg.FindingCallback = func(batch []detectors.Finding) error {
+						batch = detectors.FilterVerification(batch, verificationFilter)
+						if knownBaseline != nil {
+							batch = baseline.Filter(batch, knownBaseline)
+						}
+						if cfg.Progress != nil {
+							cfg.Progress.AddFindings(int64(len(batch)))
+						}
+						for _, finding := range batch {
+							console.finding(finding)
+							streamWriter.Write(finding)
+						}
+						return nil
+					}
+				}
 				if installationID := installationByTarget[target]; installationID > 0 && githubAppID != "" && githubAppPrivateKey != "" {
 					token, refreshed, err := cachedInstallationToken(ctx, githubAppID, githubAppPrivateKey, installationID, tokenCache, &tokenMu)
 					if err != nil {
@@ -396,35 +520,54 @@ func main() {
 				runner := scanner.New(targetCfg, registry)
 				targetFindings, err := runner.Scan(ctx)
 				if err != nil {
-					if isGitHubCloneTarget(target) {
-						console.repoError(i+1, len(targets), target, err)
-						mu.Lock()
-						summary.addScanFailure(target, err)
-						if jobState != nil {
-							jobState.markFailed(target, err, time.Now())
-							if writeErr := writeScanJobState(jobPath, jobState); writeErr != nil {
-								mu.Unlock()
-								fatal(writeErr)
-							}
-						}
-						mu.Unlock()
-						continue
+					targetFindings = detectors.FilterVerification(targetFindings, verificationFilter)
+					mu.Lock()
+					totalBeforeBaseline += len(targetFindings)
+					mu.Unlock()
+					if knownBaseline != nil {
+						targetFindings = baseline.Filter(targetFindings, knownBaseline)
 					}
-					fatal(err)
+					if streamWriter == nil {
+						for _, finding := range targetFindings {
+							console.finding(finding)
+						}
+						if cfg.Progress != nil {
+							cfg.Progress.AddFindings(int64(len(targetFindings)))
+						}
+					}
+					console.repoError(i+1, len(targets), target, err)
+					mu.Lock()
+					totalAfterBaseline += len(targetFindings)
+					if outputFile == nil || format != "jsonl" || writeBaselinePath != "" {
+						findings = append(findings, targetFindings...)
+					}
+					summary.addScanFailure(target, err)
+					if jobState != nil {
+						jobState.markFailed(target, err, time.Now())
+						if writeErr := writeScanJobState(jobPath, jobState); writeErr != nil {
+							mu.Unlock()
+							fatal(writeErr)
+						}
+					}
+					mu.Unlock()
+					continue
 				}
+				targetFindings = detectors.FilterVerification(targetFindings, verificationFilter)
 				mu.Lock()
 				totalBeforeBaseline += len(targetFindings)
 				mu.Unlock()
 				if knownBaseline != nil {
 					targetFindings = baseline.Filter(targetFindings, knownBaseline)
 				}
+				if streamWriter == nil && cfg.Progress != nil {
+					cfg.Progress.AddFindings(int64(len(targetFindings)))
+				}
 				mu.Lock()
 				totalAfterBaseline += len(targetFindings)
 				mu.Unlock()
-				for _, finding := range targetFindings {
-					console.finding(finding)
-					if streamWriter != nil {
-						streamWriter.Write(finding)
+				if streamWriter == nil {
+					for _, finding := range targetFindings {
+						console.finding(finding)
 					}
 				}
 				if streamWriter != nil {
@@ -497,14 +640,29 @@ func main() {
 		fmt.Fprintf(os.Stdout, "scan complete: %d findings in %s, output=%s\n", summary.FindingsAfterBaseline, time.Since(start).Round(time.Millisecond), outputPath)
 	}
 	console.done(totalAfterBaseline, time.Since(start).Round(time.Millisecond))
-	if summary.FailedScans > 0 {
-		finishProgress(fmt.Errorf("%d repository scans failed", summary.FailedScans))
-	} else {
-		finishProgress(nil)
+	exitCode := scanExitCode(failOnScanErrors && summary.FailedScans > 0, failOnFindings, totalAfterBaseline)
+	if exitCode != 0 {
+		finishProgress(errors.New(exitReason(exitCode)))
+		os.Exit(exitCode)
 	}
-	if failOnFindings && totalAfterBaseline > 0 {
-		os.Exit(2)
+	finishProgress(nil)
+}
+
+func scanExitCode(hasScanErrors, failOnFindings bool, findings int) int {
+	if failOnFindings && findings > 0 {
+		return 2
 	}
+	if hasScanErrors {
+		return 1
+	}
+	return 0
+}
+
+func exitReason(code int) string {
+	if code == 2 {
+		return "findings exceeded configured policy"
+	}
+	return "one or more selected targets failed to scan"
 }
 
 type githubClient struct {
@@ -772,6 +930,27 @@ func readRepoList(path string) ([]string, error) {
 		return nil, fmt.Errorf("repo list %s did not contain any targets", path)
 	}
 	return targets, nil
+}
+
+func readPatternFile(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read pattern file %s: %w", path, err)
+	}
+	defer file.Close()
+	var patterns []string
+	scan := bufio.NewScanner(file)
+	for scan.Scan() {
+		line := strings.TrimSpace(scan.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	if err := scan.Err(); err != nil {
+		return nil, fmt.Errorf("read pattern file %s: %w", path, err)
+	}
+	return dedupeStrings(patterns), nil
 }
 
 type console struct {
@@ -1510,7 +1689,7 @@ func progressSourceType(s3Buckets string, s3AllBuckets bool, orgs, enterprise st
 	if s3Buckets != "" || s3AllBuckets {
 		return "s3"
 	}
-	if isGitHubDiscovery(orgs, enterprise, accessible) || repoListPath != "" || isGitHubCloneTarget(target) {
+	if isGitHubDiscovery(orgs, enterprise, accessible) || repoListPath != "" || isGitRemoteTarget(target) {
 		return "github"
 	}
 	if gitHistory {
@@ -1538,6 +1717,24 @@ func progressTarget(s3Buckets string, s3AllBuckets bool, orgs, enterprise string
 	}
 }
 
+func isGitRemoteTarget(target string) bool {
+	if at, colon := strings.IndexByte(target, '@'), strings.IndexByte(target, ':'); at > 0 && colon > at+1 && !strings.Contains(target[:colon], "/") {
+		return true
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "ssh", "git":
+		return u.Host != ""
+	case "file":
+		return true
+	default:
+		return false
+	}
+}
+
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil
@@ -1551,4 +1748,20 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func parseSeverityOverrides(raw string) (map[string]string, error) {
+	overrides := map[string]string{}
+	for _, entry := range splitCSV(raw) {
+		id, severity, ok := strings.Cut(entry, "=")
+		id, severity = strings.TrimSpace(id), strings.ToLower(strings.TrimSpace(severity))
+		if !ok || id == "" || severity == "" {
+			return nil, fmt.Errorf("invalid severity override %q; expected detector=severity", entry)
+		}
+		if _, duplicate := overrides[id]; duplicate {
+			return nil, fmt.Errorf("duplicate severity override for detector %q", id)
+		}
+		overrides[id] = severity
+	}
+	return overrides, nil
 }

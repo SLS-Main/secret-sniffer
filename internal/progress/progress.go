@@ -126,6 +126,8 @@ type ProgressReporter interface {
 	SetDiscovered(count int64)
 	DiscoverItems(count int64)
 	QueueItems(count int64)
+	SkipItems(count int64)
+	AddFindings(count int64)
 	StartItem(slot string, item Item)
 	UpdateItem(slot string, update ItemUpdate)
 	CompleteItem(slot string, result ItemResult)
@@ -227,6 +229,34 @@ func (r *Reporter) QueueItems(count int64) {
 	if r.state.Counters.ItemsQueued < 0 {
 		r.state.Counters.ItemsQueued = 0
 	}
+	r.changedLocked()
+	r.mu.Unlock()
+}
+
+func (r *Reporter) SkipItems(count int64) {
+	if count <= 0 {
+		return
+	}
+	r.mu.Lock()
+	if r.closing {
+		r.mu.Unlock()
+		return
+	}
+	r.state.Counters.ItemsSkipped += count
+	r.changedLocked()
+	r.mu.Unlock()
+}
+
+func (r *Reporter) AddFindings(count int64) {
+	if count <= 0 {
+		return
+	}
+	r.mu.Lock()
+	if r.closing {
+		r.mu.Unlock()
+		return
+	}
+	r.state.Counters.Findings += count
 	r.changedLocked()
 	r.mu.Unlock()
 }

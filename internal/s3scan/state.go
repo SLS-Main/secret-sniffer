@@ -31,6 +31,8 @@ type State struct {
 type BucketState struct {
 	Status            string    `json:"status"`
 	ContinuationToken string    `json:"continuation_token,omitempty"`
+	KeyMarker         string    `json:"key_marker,omitempty"`
+	VersionIDMarker   string    `json:"version_id_marker,omitempty"`
 	ObjectsScanned    int64     `json:"objects_scanned"`
 	ObjectsSkipped    int64     `json:"objects_skipped"`
 	Findings          int64     `json:"findings"`
@@ -126,46 +128,93 @@ func (s *Store) Bucket(name string) BucketState {
 func (s *Store) Start(name string, resume bool, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state := s.state.Buckets[name]
-	if !resume {
-		state = BucketState{}
-	}
-	state.Status, state.Error, state.CompletedAt = StatusRunning, "", time.Time{}
-	state.Attempts++
-	state.StartedAt = now
-	s.state.Buckets[name] = state
-	return s.writeLocked(now)
+	return s.updateLocked(now, func(next *State) {
+		state := next.Buckets[name]
+		if !resume {
+			state = BucketState{}
+		}
+		state.Status, state.Error, state.CompletedAt = StatusRunning, "", time.Time{}
+		state.Attempts++
+		state.StartedAt = now
+		next.Buckets[name] = state
+	})
+}
+
+func (s *Store) Reset(buckets []string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.updateLocked(now, func(next *State) {
+		for _, bucket := range buckets {
+			next.Buckets[bucket] = BucketState{Status: StatusPending}
+		}
+	})
 }
 
 func (s *Store) Checkpoint(name, token string, scanned, skipped, findings int64, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state := s.state.Buckets[name]
-	state.Status, state.ContinuationToken = StatusRunning, token
-	state.ObjectsScanned += scanned
-	state.ObjectsSkipped += skipped
-	state.Findings += findings
-	s.state.Buckets[name] = state
-	return s.writeLocked(now)
+	return s.updateLocked(now, func(next *State) {
+		state := next.Buckets[name]
+		state.Status, state.ContinuationToken = StatusRunning, token
+		state.ObjectsScanned += scanned
+		state.ObjectsSkipped += skipped
+		state.Findings += findings
+		next.Buckets[name] = state
+	})
+}
+
+func (s *Store) CheckpointVersions(name, keyMarker, versionIDMarker string, scanned, skipped, findings int64, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.updateLocked(now, func(next *State) {
+		state := next.Buckets[name]
+		state.Status = StatusRunning
+		state.ContinuationToken = ""
+		state.KeyMarker = keyMarker
+		state.VersionIDMarker = versionIDMarker
+		state.ObjectsScanned += scanned
+		state.ObjectsSkipped += skipped
+		state.Findings += findings
+		next.Buckets[name] = state
+	})
 }
 
 func (s *Store) Complete(name string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state := s.state.Buckets[name]
-	state.Status, state.ContinuationToken, state.Error = StatusCompleted, "", ""
-	state.CompletedAt = now
-	s.state.Buckets[name] = state
-	return s.writeLocked(now)
+	return s.updateLocked(now, func(next *State) {
+		state := next.Buckets[name]
+		state.Status, state.ContinuationToken, state.Error = StatusCompleted, "", ""
+		state.KeyMarker, state.VersionIDMarker = "", ""
+		state.CompletedAt = now
+		next.Buckets[name] = state
+	})
 }
 
 func (s *Store) Fail(name string, scanErr error, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state := s.state.Buckets[name]
-	state.Status, state.Error, state.CompletedAt = StatusFailed, scanErr.Error(), now
-	s.state.Buckets[name] = state
-	return s.writeLocked(now)
+	return s.updateLocked(now, func(next *State) {
+		state := next.Buckets[name]
+		state.Status, state.Error, state.CompletedAt = StatusFailed, scanErr.Error(), now
+		next.Buckets[name] = state
+	})
+}
+
+func (s *Store) updateLocked(now time.Time, mutate func(*State)) error {
+	previous := s.state
+	next := previous
+	next.Buckets = make(map[string]BucketState, len(previous.Buckets))
+	for name, state := range previous.Buckets {
+		next.Buckets[name] = state
+	}
+	mutate(&next)
+	s.state = next
+	if err := s.writeLocked(now); err != nil {
+		s.state = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Store) writeLocked(now time.Time) error {

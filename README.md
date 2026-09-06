@@ -103,7 +103,15 @@ Scan several S3 buckets concurrently without downloading excluded file types:
 --max-archive-bytes   Maximum expanded bytes to inspect per archive. Default: 262144000.
 --max-expanded-file-bytes  Maximum decompressed archive entry size to scan. Default: 26214400.
 --git-history         Scan added/modified file versions from git history in addition to the worktree.
+--max-depth           Maximum Git commits and remote clone depth. Default: unlimited.
+--since-commit        Exclude commits reachable from this commit.
+--commit-range        Explicit Git revision range. Repeatable.
+--git-ref             Git ref or commit selector. Repeatable.
+--branch              Git branch selector. Repeatable.
+--additional-ref-policy  Additional refs: all, default, selected, none.
+--git-authorization-header  HTTP Git authorization header; defaults to GIT_AUTHORIZATION_HEADER.
 --verify              Attempt live provider verification for supported detectors.
+--verification-statuses  Comma-separated statuses to retain: verified, unverified, unknown, not_attempted, unsupported.
 --format              Output format: human, json, jsonl, sarif.
 --output              Write findings to this file. JSONL streams during scanning.
 --output-flush-findings  Fsync streamed output after this many findings. Default: 25.
@@ -111,8 +119,15 @@ Scan several S3 buckets concurrently without downloading excluded file types:
 --repo-list           Text file containing repository targets to scan, one per line.
 --include             Comma-separated glob patterns to include.
 --exclude             Comma-separated glob patterns to exclude.
+--include-file        Newline-separated include glob file.
+--exclude-file        Newline-separated exclude glob file.
+--include-regex       Regular-expression path include. Repeatable.
+--exclude-regex       Regular-expression path exclude. Repeatable.
 --exclude-extensions  Comma-separated file extensions to skip before reading/downloading.
 --custom-detectors    Path to custom detector JSON.
+--enable-detectors    Comma-separated detector IDs to enable exclusively.
+--disable-detectors   Comma-separated detector IDs to disable.
+--severity-overrides  Comma-separated detector=severity overrides.
 --baseline            Path to accepted-finding baseline JSON.
 --write-baseline      Write current finding fingerprints to baseline JSON.
 --summary-output      Write GitHub discovery and scan summary JSON to this path.
@@ -129,6 +144,7 @@ Scan several S3 buckets concurrently without downloading excluded file types:
 --github-app-private-key  Path to GitHub App private key PEM. Defaults to GITHUB_APP_PRIVATE_KEY.
 --github-installation-id  Optional GitHub App installation ID. Defaults to GITHUB_INSTALLATION_ID.
 --fail-on-findings    Exit with status 2 when findings remain after baseline filtering.
+--fail-on-scan-errors Exit with status 1 when any selected target fails.
 --redact              Omit raw secrets from machine-readable output.
 --no-redact           Include raw secrets in output. Default: true.
 --quiet               Suppress progress logs on stderr.
@@ -140,6 +156,16 @@ Scan several S3 buckets concurrently without downloading excluded file types:
 --s3-prefix           Only scan objects under this key prefix.
 --s3-bucket-concurrency  Number of buckets to scan concurrently. Default: 4.
 --s3-object-concurrency  Concurrent object downloads/scans per bucket. Default: --workers.
+--max-object-bytes    Maximum S3 object size, independent of --max-file-bytes.
+--s3-key              Exact object key selector. Repeatable.
+--s3-exclude-buckets  Comma-separated bucket exclusions.
+--s3-endpoint         S3-compatible endpoint URL.
+--s3-path-style       Use path-style S3 addressing.
+--s3-retry-attempts   Application-level transient retry attempts. Default: 4.
+--s3-retry-base-delay Base exponential retry delay. Default: 200ms.
+--s3-version-policy   Object versions: current, all, noncurrent.
+--s3-delete-marker-policy Delete markers: ignore, skip, error.
+--s3-storage-class-policy Archived objects: skip, error, attempt.
 --s3-job-id           Stable S3 job ID used to validate resumable state.
 --s3-state            S3 checkpoint file. Default: .secret-sniffer-jobs/<job-id>-s3.json.
 --s3-resume           Resume incomplete buckets from durable page checkpoints.
@@ -149,6 +175,9 @@ Scan several S3 buckets concurrently without downloading excluded file types:
 --aws-secret-access-key  Explicit secret access key.
 --aws-session-token   Session token for temporary explicit AWS credentials.
 --aws-sso-device-auth Start IAM Identity Center device authorization for --aws-profile.
+--aws-role-arn       Role ARN to assume; repeatable in source-to-target chain order.
+--aws-role-external-id  External ID for explicit role assumptions.
+--aws-role-session-name Session name for explicit role assumptions.
 --progress-state      Write atomic machine-readable scan progress to this path.
 --progress-interval   Active-item snapshot interval. Default: 500ms.
 ```
@@ -172,6 +201,22 @@ Stable phases are `initializing`, `discovering`, `listing`, `cloning`, `scanning
 Snapshots use a mode-`0600` temporary file, file and directory `fsync`, and atomic rename. The initial snapshot is written synchronously, so an invalid or unwritable configured path fails startup. Later writes run behind a bounded coalescing notification channel; slow or failed storage cannot block scanner workers, and later write failures produce warnings. The terminal `completed`, `failed`, or `cancelled` snapshot is left in place.
 
 Progress files never contain finding secrets, credentials, authorization headers, signed URL query strings, AWS continuation tokens, or output payloads. Paths are included intentionally for operational visibility.
+
+## Exit Codes
+
+- `0`: scan completed under the selected policies. Partial target failures are tolerated unless `--fail-on-scan-errors` is set.
+- `1`: configuration/runtime failure, or at least one selected repository, file, or bucket failed with `--fail-on-scan-errors`.
+- `2`: findings remain after verification-status filtering and baseline filtering while `--fail-on-findings` is set. Exit code `2` takes precedence when scan errors and findings both occur.
+
+Any nonzero policy exit leaves progress in the `failed` terminal phase. Signal cancellation leaves `cancelled`; successful or tolerated scans leave `completed`.
+
+## Verification Results
+
+Machine findings include a structured `verification` object. Status is one of `verified`, `unverified`, `unknown`, `not_attempted`, or `unsupported`. Provider timeouts, transport failures, rate limits, server failures, and ambiguous authorization failures are `unknown`, not `unverified`. The compatibility `verified` boolean remains and is true only for status `verified`.
+
+Use `--verification-statuses verified,unknown` to retain a subset. Filtering occurs before output, summaries, baseline generation, and `--fail-on-findings` evaluation.
+
+Custom detector JSON is decoded strictly: unknown fields, malformed regular expressions, duplicate IDs, invalid severities, and invalid capture groups are configuration errors rather than panics. Detector enable/disable lists and severity overrides are validated against the effective built-in plus custom registry.
 
 ## S3 Scanning
 
@@ -385,6 +430,10 @@ Supported formats use Go's standard library and do not shell out to external ext
 - `.tar.gz`
 - `.tgz`
 - single-file `.gz`
+- single-file `.xz` and `.bz2`
+- `.7z`
+- ZIP-compatible `.jar`, `.war`, `.ear`, `.whl`, `.nupkg`, and `.apk`
+- nested tar layers used by common container image layouts
 
 Findings inside archives use virtual paths:
 

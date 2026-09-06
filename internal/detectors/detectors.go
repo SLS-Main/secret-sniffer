@@ -1,11 +1,14 @@
 package detectors
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"regexp"
@@ -14,17 +17,52 @@ import (
 )
 
 type Finding struct {
-	DetectorID  string `json:"detector_id"`
-	Name        string `json:"name"`
-	Severity    string `json:"severity"`
-	File        string `json:"file"`
-	Commit      string `json:"commit,omitempty"`
-	Line        int    `json:"line"`
-	Column      int    `json:"column"`
-	Secret      string `json:"secret"`
-	Redacted    string `json:"redacted"`
-	Verified    bool   `json:"verified"`
-	Fingerprint string `json:"fingerprint"`
+	DetectorID   string             `json:"detector_id"`
+	Name         string             `json:"name"`
+	Severity     string             `json:"severity"`
+	File         string             `json:"file"`
+	Commit       string             `json:"commit,omitempty"`
+	Line         int                `json:"line"`
+	Column       int                `json:"column"`
+	Secret       string             `json:"secret"`
+	Redacted     string             `json:"redacted"`
+	Verified     bool               `json:"verified"`
+	Verification VerificationResult `json:"verification"`
+	Fingerprint  string             `json:"fingerprint"`
+	Provenance   *Provenance        `json:"provenance,omitempty"`
+}
+
+type Provenance struct {
+	Provider        string    `json:"provider,omitempty"`
+	Repository      string    `json:"repository,omitempty"`
+	Ref             string    `json:"ref,omitempty"`
+	CommitSHA       string    `json:"commit_sha,omitempty"`
+	CommitAuthor    string    `json:"commit_author,omitempty"`
+	CommitEmail     string    `json:"commit_email,omitempty"`
+	CommitTimestamp time.Time `json:"commit_timestamp,omitempty"`
+	DecoderChain    []string  `json:"decoder_chain,omitempty"`
+	ArchiveChain    []string  `json:"archive_chain,omitempty"`
+	S3Bucket        string    `json:"s3_bucket,omitempty"`
+	S3Key           string    `json:"s3_key,omitempty"`
+	S3VersionID     string    `json:"s3_version_id,omitempty"`
+	S3ETag          string    `json:"s3_etag,omitempty"`
+	S3Region        string    `json:"s3_region,omitempty"`
+}
+
+type VerificationStatus string
+
+const (
+	VerificationVerified     VerificationStatus = "verified"
+	VerificationUnverified   VerificationStatus = "unverified"
+	VerificationUnknown      VerificationStatus = "unknown"
+	VerificationNotAttempted VerificationStatus = "not_attempted"
+	VerificationUnsupported  VerificationStatus = "unsupported"
+)
+
+type VerificationResult struct {
+	Status        VerificationStatus `json:"status"`
+	ErrorCategory string             `json:"error_category,omitempty"`
+	Message       string             `json:"message,omitempty"`
 }
 
 type Candidate struct {
@@ -37,7 +75,7 @@ type Candidate struct {
 	Verifier   Verifier
 }
 
-type Verifier func(context.Context, string) bool
+type Verifier func(context.Context, string) VerificationResult
 
 type Detector interface {
 	Detect([]byte) []Candidate
@@ -95,7 +133,10 @@ func (d RegexDetector) detectContent(content string) []Candidate {
 	out := make([]Candidate, 0, len(matches))
 	for _, m := range matches {
 		group := d.SecretGroup
-		if group < 0 || group*2+1 >= len(m) || m[group*2] < 0 {
+		if group > 0 && (group*2+1 >= len(m) || m[group*2] < 0) {
+			continue
+		}
+		if group < 0 {
 			group = 0
 		}
 		start, end := m[group*2], m[group*2+1]
@@ -1235,20 +1276,105 @@ func ToFinding(c Candidate, file, commit string, b []byte, verify bool) Finding 
 }
 
 func ToFindingAt(c Candidate, file, commit string, line, col int, verify bool) Finding {
-	f := Finding{DetectorID: c.DetectorID, Name: c.Name, Severity: c.Severity, File: file, Commit: commit, Line: line, Column: col, Secret: c.Secret, Redacted: Redact(c.Secret)}
+	f := Finding{DetectorID: c.DetectorID, Name: c.Name, Severity: c.Severity, File: file, Commit: commit, Line: line, Column: col, Secret: c.Secret, Redacted: Redact(c.Secret), Verification: VerificationResult{Status: VerificationNotAttempted}}
 	f.Fingerprint = findingFingerprint(c.DetectorID, c.Secret, file, commit)
-	if verify && c.Verifier != nil {
+	f.Provenance = baseProvenance(file, commit)
+	if verify && c.Verifier == nil {
+		f.Verification.Status = VerificationUnsupported
+	} else if verify {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		f.Verified = c.Verifier(ctx, c.Secret)
+		f.Verification = c.Verifier(ctx, c.Secret)
+		f.Verified = f.Verification.Status == VerificationVerified
 	}
 	return f
 }
 
+func baseProvenance(file, commit string) *Provenance {
+	provenance := &Provenance{CommitSHA: commit}
+	parts := strings.Split(file, "!/")
+	if len(parts) > 1 {
+		provenance.ArchiveChain = append([]string(nil), parts...)
+	}
+	if strings.HasPrefix(file, "s3://") {
+		provenance.Provider = "s3"
+		bucketAndKey := strings.TrimPrefix(parts[0], "s3://")
+		provenance.S3Bucket, provenance.S3Key, _ = strings.Cut(bucketAndKey, "/")
+	} else if commit != "" {
+		provenance.Provider = "git"
+	} else {
+		provenance.Provider = "filesystem"
+	}
+	return provenance
+}
+
+func SetS3Provenance(finding Finding, bucket, key, versionID, etag, region string) Finding {
+	if finding.Provenance == nil {
+		finding.Provenance = &Provenance{}
+	}
+	finding.Provenance.Provider = "s3"
+	finding.Provenance.S3Bucket = bucket
+	finding.Provenance.S3Key = key
+	finding.Provenance.S3VersionID = versionID
+	finding.Provenance.S3ETag = etag
+	finding.Provenance.S3Region = region
+	identity := finding.File
+	if versionID != "" {
+		identity += "?versionId=" + versionID
+	}
+	finding.Fingerprint = findingFingerprint(finding.DetectorID, finding.Secret, identity, finding.Commit)
+	return finding
+}
+
+func ParseVerificationStatuses(raw string) (map[VerificationStatus]struct{}, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	allowed := map[VerificationStatus]struct{}{}
+	for _, value := range strings.Split(raw, ",") {
+		status := VerificationStatus(strings.ToLower(strings.TrimSpace(value)))
+		switch status {
+		case VerificationVerified, VerificationUnverified, VerificationUnknown, VerificationNotAttempted, VerificationUnsupported:
+			allowed[status] = struct{}{}
+		default:
+			return nil, fmt.Errorf("unsupported verification status %q", value)
+		}
+	}
+	return allowed, nil
+}
+
+func FilterVerification(findings []Finding, allowed map[VerificationStatus]struct{}) []Finding {
+	if len(allowed) == 0 {
+		return findings
+	}
+	out := make([]Finding, 0, len(findings))
+	for _, finding := range findings {
+		if _, ok := allowed[finding.Verification.Status]; ok {
+			out = append(out, finding)
+		}
+	}
+	return out
+}
+
 func ReidentifyFinding(f Finding, file, commit string) Finding {
+	if f.Provenance != nil {
+		provenance := *f.Provenance
+		provenance.DecoderChain = append([]string(nil), provenance.DecoderChain...)
+		provenance.ArchiveChain = append([]string(nil), provenance.ArchiveChain...)
+		f.Provenance = &provenance
+	}
 	f.File = file
 	f.Commit = commit
 	f.Fingerprint = findingFingerprint(f.DetectorID, f.Secret, file, commit)
+	if f.Provenance != nil {
+		f.Provenance.CommitSHA = commit
+		parts := strings.Split(file, "!/")
+		if len(parts) > 1 {
+			f.Provenance.ArchiveChain = append([]string(nil), parts...)
+		} else {
+			f.Provenance.ArchiveChain = nil
+		}
+	}
 	return f
 }
 
@@ -1490,47 +1616,203 @@ func LoadCustomFile(path string) ([]Detector, error) {
 		return nil, err
 	}
 	var cf customFile
-	if err := json.Unmarshal(b, &cf); err != nil {
-		return nil, err
+	decoder := json.NewDecoder(bytes.NewReader(b))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cf); err != nil {
+		return nil, fmt.Errorf("decode custom detectors: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, errors.New("custom detector file must contain one JSON object")
 	}
 	out := make([]Detector, 0, len(cf.Detectors))
-	for _, d := range cf.Detectors {
+	seen := map[string]struct{}{}
+	idPattern := regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	for index, d := range cf.Detectors {
 		if d.ID == "" || d.Regex == "" {
-			return nil, errors.New("custom detector requires id and regex")
+			return nil, fmt.Errorf("custom detector %d requires id and regex", index)
 		}
+		if !idPattern.MatchString(d.ID) {
+			return nil, fmt.Errorf("custom detector %q has invalid id", d.ID)
+		}
+		if _, ok := seen[d.ID]; ok {
+			return nil, fmt.Errorf("duplicate detector id %q", d.ID)
+		}
+		seen[d.ID] = struct{}{}
 		name := d.Name
 		if name == "" {
 			name = d.ID
 		}
-		sev := d.Severity
+		sev := strings.ToLower(d.Severity)
 		if sev == "" {
 			sev = "medium"
 		}
-		detector := NewRegex(d.ID, name, sev, d.Keywords, d.Regex, d.SecretGroup, nil).(RegexDetector)
+		if !ValidSeverity(sev) {
+			return nil, fmt.Errorf("custom detector %q has invalid severity %q", d.ID, sev)
+		}
+		re, err := regexp.Compile(d.Regex)
+		if err != nil {
+			return nil, fmt.Errorf("custom detector %q has invalid regex: %w", d.ID, err)
+		}
+		if d.SecretGroup < 0 || d.SecretGroup > re.NumSubexp() {
+			return nil, fmt.Errorf("custom detector %q secret_group %d exceeds regex capture count %d", d.ID, d.SecretGroup, re.NumSubexp())
+		}
+		keywords := normalizeStrings(d.Keywords)
+		detector := RegexDetector{ID: d.ID, Name: name, Severity: sev, Keywords: keywords, Regex: re, SecretGroup: d.SecretGroup, BroadContext: strings.Contains(d.Regex, `[\s\S]{0,`)}
 		detector.BroadContext = false
 		out = append(out, detector)
 	}
 	return out, nil
 }
 
-func verifyGitHub(ctx context.Context, token string) bool {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
+func ValidSeverity(severity string) bool {
+	switch strings.ToLower(severity) {
+	case "critical", "high", "medium", "low", "info":
+		return true
+	default:
 		return false
 	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
 }
 
-func verifyOpenAI(ctx context.Context, token string) bool {
+func ConfigureRegistry(registry []Detector, enabled, disabled []string, overrides map[string]string) ([]Detector, error) {
+	byID := map[string]Detector{}
+	for _, detector := range registry {
+		id := detector.Info().ID
+		if _, exists := byID[id]; exists {
+			return nil, fmt.Errorf("duplicate detector id %q", id)
+		}
+		byID[id] = detector
+	}
+	enableSet, err := validateDetectorIDs("enabled", enabled, byID)
+	if err != nil {
+		return nil, err
+	}
+	disableSet, err := validateDetectorIDs("disabled", disabled, byID)
+	if err != nil {
+		return nil, err
+	}
+	for id := range enableSet {
+		if _, disabled := disableSet[id]; disabled {
+			return nil, fmt.Errorf("detector %q cannot be both enabled and disabled", id)
+		}
+	}
+	for id, severity := range overrides {
+		if _, ok := byID[id]; !ok {
+			return nil, fmt.Errorf("severity override references unknown detector %q", id)
+		}
+		if !ValidSeverity(severity) {
+			return nil, fmt.Errorf("detector %q has invalid severity override %q", id, severity)
+		}
+	}
+	out := make([]Detector, 0, len(registry))
+	for _, detector := range registry {
+		id := detector.Info().ID
+		if len(enableSet) > 0 {
+			if _, ok := enableSet[id]; !ok {
+				continue
+			}
+		}
+		if _, disabled := disableSet[id]; disabled {
+			continue
+		}
+		if severity := overrides[id]; severity != "" {
+			detector = severityDetector{Detector: detector, severity: strings.ToLower(severity)}
+		}
+		out = append(out, detector)
+	}
+	return out, nil
+}
+
+type severityDetector struct {
+	Detector
+	severity string
+}
+
+func (d severityDetector) Detect(content []byte) []Candidate {
+	return overrideCandidateSeverity(d.Detector.Detect(content), d.severity)
+}
+
+func (d severityDetector) DetectPrefiltered(content []byte) []Candidate {
+	if detector, ok := d.Detector.(PrefilteredDetector); ok {
+		return overrideCandidateSeverity(detector.DetectPrefiltered(content), d.severity)
+	}
+	return d.Detect(content)
+}
+
+func (d severityDetector) Info() Info {
+	info := d.Detector.Info()
+	info.Severity = d.severity
+	return info
+}
+
+func overrideCandidateSeverity(candidates []Candidate, severity string) []Candidate {
+	for i := range candidates {
+		candidates[i].Severity = severity
+	}
+	return candidates
+}
+
+func validateDetectorIDs(kind string, ids []string, registry map[string]Detector) (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	for _, id := range ids {
+		if _, ok := registry[id]; !ok {
+			return nil, fmt.Errorf("%s detector list references unknown id %q", kind, id)
+		}
+		out[id] = struct{}{}
+	}
+	return out, nil
+}
+
+func normalizeStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func verifyGitHub(ctx context.Context, token string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyOpenAI(ctx context.Context, token string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.openai.com/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyHTTPRequest(ctx context.Context, req *http.Request) VerificationResult {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return false
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return VerificationResult{Status: VerificationUnknown, ErrorCategory: "timeout", Message: "provider request timed out"}
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			return VerificationResult{Status: VerificationUnknown, ErrorCategory: "cancelled", Message: "provider request cancelled"}
+		}
+		return VerificationResult{Status: VerificationUnknown, ErrorCategory: "network", Message: "provider request failed"}
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return VerificationResult{Status: VerificationVerified}
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return VerificationResult{Status: VerificationUnknown, ErrorCategory: "rate_limited", Message: "provider rate limited verification"}
+	case resp.StatusCode >= 500:
+		return VerificationResult{Status: VerificationUnknown, ErrorCategory: "provider", Message: "provider unavailable"}
+	case resp.StatusCode == http.StatusForbidden:
+		return VerificationResult{Status: VerificationUnknown, ErrorCategory: "authorization", Message: "provider could not authorize verification"}
+	default:
+		return VerificationResult{Status: VerificationUnverified, ErrorCategory: "invalid_credentials", Message: "provider rejected credential"}
+	}
 }

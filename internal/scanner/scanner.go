@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"compress/bzip2"
 	"compress/gzip"
 	"compress/zlib"
 	"context"
@@ -30,7 +31,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bodgit/sevenzip"
+	"github.com/ulikunitz/xz"
+
 	"secret-sniffer/internal/detectors"
+	"secret-sniffer/internal/pathfilter"
 	"secret-sniffer/internal/progress"
 )
 
@@ -39,16 +44,26 @@ var base64CandidateRe = regexp.MustCompile(`\b[A-Za-z0-9+/_-]{20,}={0,2}\b`)
 const maxBase64CandidateBytes = 8192
 
 type Config struct {
-	Target            string
-	Workers           int
-	MaxFileBytes      int64
-	GitHistory        bool
-	Verify            bool
-	Include           []string
-	Exclude           []string
-	ExcludeExtensions []string
-	GitHubToken       string
-	Progress          progress.ProgressReporter
+	Target                 string
+	Workers                int
+	MaxFileBytes           int64
+	GitHistory             bool
+	GitMaxDepth            int
+	GitSinceCommit         string
+	GitRanges              []string
+	GitRefs                []string
+	GitBranches            []string
+	GitAdditionalRefs      string
+	GitAuthorizationHeader string
+	Verify                 bool
+	Include                []string
+	Exclude                []string
+	ExcludeExtensions      []string
+	IncludeRegex           []string
+	ExcludeRegex           []string
+	GitHubToken            string
+	Progress               progress.ProgressReporter
+	FindingCallback        func([]detectors.Finding) error
 
 	ScanArchives         bool
 	MaxArchiveDepth      int
@@ -62,12 +77,53 @@ type Scanner struct {
 	plan         detectorPlan
 	verification *verificationCache
 	instanceID   uint64
+	pathFilter   *pathfilter.Filter
+	configErr    error
+	emitMu       sync.Mutex
+	emitted      map[string]struct{}
+	remoteRoot   string
+	remoteTarget string
 }
 
 var nextScannerID atomic.Uint64
 
 func New(cfg Config, ds []detectors.Detector) *Scanner {
-	return &Scanner{cfg: cfg, plan: newDetectorPlan(ds), verification: newVerificationCache(), instanceID: nextScannerID.Add(1)}
+	filter, err := newPathFilter(cfg)
+	return &Scanner{cfg: cfg, plan: newDetectorPlan(ds), verification: newVerificationCache(), instanceID: nextScannerID.Add(1), pathFilter: filter, configErr: err, emitted: map[string]struct{}{}}
+}
+
+func (s *Scanner) emitFindings(findings []detectors.Finding) error {
+	if s.cfg.FindingCallback == nil || len(findings) == 0 {
+		return nil
+	}
+	s.emitMu.Lock()
+	defer s.emitMu.Unlock()
+	unique := make([]detectors.Finding, 0, len(findings))
+	for _, finding := range findings {
+		if _, exists := s.emitted[finding.Fingerprint]; exists {
+			continue
+		}
+		s.emitted[finding.Fingerprint] = struct{}{}
+		unique = append(unique, finding)
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	return s.cfg.FindingCallback(unique)
+}
+
+func ValidateConfig(cfg Config) error {
+	_, err := newPathFilter(cfg)
+	return err
+}
+
+func newPathFilter(cfg Config) (*pathfilter.Filter, error) {
+	exclude := append([]string{}, cfg.Exclude...)
+	exclude = append(exclude, "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.ico", "*.exe", "*.dll", "*.so", "*.dylib")
+	if !cfg.ScanArchives {
+		exclude = append(exclude, "*.zip", "*.tar", "*.gz", "*.tgz", "*.7z", "*.xz", "*.bz2", "*.jar", "*.war", "*.ear", "*.whl", "*.nupkg", "*.apk")
+	}
+	return pathfilter.New(cfg.Include, exclude, cfg.IncludeRegex, cfg.ExcludeRegex)
 }
 
 // ScanContent applies the configured detector pipeline to content from a remote source.
@@ -174,17 +230,17 @@ type verificationCache struct {
 }
 
 type verificationEntry struct {
-	verified bool
-	ready    chan struct{}
+	result detectors.VerificationResult
+	ready  chan struct{}
 }
 
 func newVerificationCache() *verificationCache {
 	return &verificationCache{entries: map[string]*verificationEntry{}}
 }
 
-func (c *verificationCache) verify(ctx context.Context, candidate detectors.Candidate) bool {
+func (c *verificationCache) verify(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
 	if candidate.Verifier == nil {
-		return false
+		return detectors.VerificationResult{Status: detectors.VerificationUnsupported}
 	}
 	verifierID := reflect.ValueOf(candidate.Verifier).Pointer()
 	key := candidate.DetectorID + "\x00" + candidate.Secret + "\x00" + strconv.FormatUint(uint64(verifierID), 16)
@@ -193,9 +249,9 @@ func (c *verificationCache) verify(ctx context.Context, candidate detectors.Cand
 		c.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			return false
+			return detectors.VerificationResult{Status: detectors.VerificationUnknown, ErrorCategory: "cancelled", Message: "verification cancelled"}
 		case <-entry.ready:
-			return entry.verified
+			return entry.result
 		}
 	}
 	entry := &verificationEntry{ready: make(chan struct{})}
@@ -203,23 +259,26 @@ func (c *verificationCache) verify(ctx context.Context, candidate detectors.Cand
 	c.mu.Unlock()
 
 	verifyCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	entry.verified = candidate.Verifier(verifyCtx, candidate.Secret)
+	entry.result = candidate.Verifier(verifyCtx, candidate.Secret)
 	cancel()
 	close(entry.ready)
-	if !entry.verified {
+	if entry.result.Status == detectors.VerificationUnknown {
 		c.mu.Lock()
 		if c.entries[key] == entry {
 			delete(c.entries, key)
 		}
 		c.mu.Unlock()
 	}
-	return entry.verified
+	return entry.result
 }
 
 func (s *Scanner) Scan(ctx context.Context) ([]detectors.Finding, error) {
+	if s.configErr != nil {
+		return nil, s.configErr
+	}
 	target := s.cfg.Target
 	cleanup := func() {}
-	if isGitHubURL(target) {
+	if isGitRemote(target) {
 		if s.cfg.Progress != nil {
 			s.cfg.Progress.SetPhase(progress.PhaseCloning)
 		}
@@ -229,9 +288,10 @@ func (s *Scanner) Scan(ctx context.Context) ([]detectors.Finding, error) {
 		}
 		cleanup = func() { _ = os.RemoveAll(dir) }
 		defer cleanup()
-		if err := cloneGitHub(ctx, target, s.cfg.GitHubToken, dir); err != nil {
+		if err := cloneGit(ctx, target, s.cfg, dir); err != nil {
 			return nil, err
 		}
+		s.remoteRoot, s.remoteTarget = dir, target
 		target = dir
 	}
 
@@ -246,16 +306,20 @@ func (s *Scanner) Scan(ctx context.Context) ([]detectors.Finding, error) {
 		return s.scanFiles(ctx, []string{target})
 	}
 
+	bare := isBareGitRepo(target)
 	var findings []detectors.Finding
-	if s.cfg.GitHistory && isGitRepo(target) {
+	if (s.cfg.GitHistory || bare) && isGitRepo(target) {
 		if s.cfg.Progress != nil {
 			s.cfg.Progress.SetPhase(progress.PhaseScanningHistory)
 		}
 		gitFindings, err := s.scanGitHistory(ctx, target)
-		if err != nil {
-			return nil, err
-		}
 		findings = append(findings, gitFindings...)
+		if err != nil {
+			return dedupe(findings), err
+		}
+	}
+	if bare {
+		return dedupe(findings), nil
 	}
 	if s.cfg.Progress != nil {
 		s.cfg.Progress.SetPhase(progress.PhaseDiscovering)
@@ -268,15 +332,18 @@ func (s *Scanner) Scan(ctx context.Context) ([]detectors.Finding, error) {
 		s.cfg.Progress.SetPhase(progress.PhaseScanningWorktree)
 	}
 	worktreeFindings, err := s.scanFiles(ctx, files)
-	if err != nil {
-		return nil, err
-	}
 	findings = append(findings, worktreeFindings...)
+	if err != nil {
+		return dedupe(findings), err
+	}
 	return dedupe(findings), nil
 }
 
-func cloneGitHub(ctx context.Context, target, token, dir string) error {
-	cloneURL := githubCloneURL(target, token)
+func cloneGit(ctx context.Context, target string, cfg Config, dir string) error {
+	cloneURL, err := validatedGitRemote(target)
+	if err != nil {
+		return err
+	}
 	var lastErr error
 	for attempt := 1; attempt <= 4; attempt++ {
 		if attempt > 1 {
@@ -287,12 +354,21 @@ func cloneGitHub(ctx context.Context, target, token, dir string) error {
 				return err
 			}
 		}
-		cmd := exec.CommandContext(ctx, "git", "clone", "--quiet", cloneURL, dir)
+		args := []string{"clone", "--quiet"}
+		if cfg.GitMaxDepth > 0 {
+			args = append(args, "--depth", strconv.Itoa(cfg.GitMaxDepth))
+		}
+		if len(cfg.GitBranches) == 1 {
+			args = append(args, "--branch", cfg.GitBranches[0])
+		}
+		args = append(args, "--", cloneURL, dir)
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Env = gitCommandEnv(cloneURL, cfg)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			return nil
 		}
-		lastErr = fmt.Errorf("git clone failed for %s: %w: %s", target, err, strings.TrimSpace(string(out)))
+		lastErr = fmt.Errorf("git clone failed for %s: %w: %s", sanitizedGitRemote(target), err, sanitizeGitError(string(out), cfg))
 		if attempt == 4 || !retryableGitCloneError(string(out)) {
 			break
 		}
@@ -301,6 +377,27 @@ func cloneGitHub(ctx context.Context, target, token, dir string) error {
 		}
 	}
 	return lastErr
+}
+
+func gitCommandEnv(target string, cfg Config) []string {
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	header := cfg.GitAuthorizationHeader
+	if header == "" && cfg.GitHubToken != "" && isGitHubHTTPURL(target) {
+		header = "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+cfg.GitHubToken))
+	}
+	if header != "" && isHTTPGitURL(target) {
+		env = append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0="+header)
+	}
+	return env
+}
+
+func sanitizeGitError(message string, cfg Config) string {
+	for _, secret := range []string{cfg.GitHubToken, cfg.GitAuthorizationHeader} {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		}
+	}
+	return strings.TrimSpace(message)
 }
 
 func retryableGitCloneError(output string) bool {
@@ -382,18 +479,14 @@ func (s *Scanner) allowedRelPath(rel string) bool {
 	if slices.Contains(s.cfg.ExcludeExtensions, extension) {
 		return false
 	}
+	if slices.Contains([]string{"png", "jpg", "jpeg", "gif", "webp", "ico", "exe", "dll", "so", "dylib"}, extension) {
+		return false
+	}
+	if !s.cfg.ScanArchives && slices.Contains([]string{"zip", "tar", "gz", "tgz", "7z", "xz", "bz2", "jar", "war", "ear", "whl", "nupkg", "apk"}, extension) {
+		return false
+	}
 
-	if len(s.cfg.Include) > 0 && !matchAny(s.cfg.Include, rel, base) {
-		return false
-	}
-	defaultExcludes := []string{"*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.ico", "*.7z", "*.exe", "*.dll", "*.so", "*.dylib"}
-	if !s.cfg.ScanArchives {
-		defaultExcludes = append(defaultExcludes, "*.zip", "*.tar", "*.gz", "*.tgz")
-	}
-	if matchAny(defaultExcludes, rel, base) || matchAny(s.cfg.Exclude, rel, base) {
-		return false
-	}
-	return true
+	return s.pathFilter == nil || s.pathFilter.Allowed(rel)
 }
 
 func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Finding, error) {
@@ -424,11 +517,13 @@ func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Fi
 				if err == nil {
 					itemCtx := progress.WithSlot(ctx, slot)
 					findings := s.scanBlob(itemCtx, filePath, "", b, 0)
+					findings = s.reidentifyRemoteWorktree(findings, filePath)
+					emitErr := s.emitFindings(findings)
 					if s.cfg.Progress != nil {
 						s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
-						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b)), Findings: int64(len(findings))})
+						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b))})
 					}
-					out <- result{findings: findings}
+					out <- result{findings: findings, err: emitErr}
 				} else {
 					if s.cfg.Progress != nil {
 						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "read_error", Error: err.Error()})
@@ -466,9 +561,32 @@ func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Fi
 		return nil, ctx.Err()
 	}
 	if scanErr != nil {
-		return nil, scanErr
+		return dedupe(findings), scanErr
 	}
 	return dedupe(findings), nil
+}
+
+func (s *Scanner) reidentifyRemoteWorktree(findings []detectors.Finding, filePath string) []detectors.Finding {
+	if s.remoteRoot == "" {
+		return findings
+	}
+	rel, err := filepath.Rel(s.remoteRoot, filePath)
+	if err != nil {
+		return findings
+	}
+	rel = filepath.ToSlash(rel)
+	for i := range findings {
+		display := rel
+		if suffix, ok := strings.CutPrefix(findings[i].File, filePath); ok {
+			display += suffix
+		}
+		findings[i] = detectors.ReidentifyFinding(findings[i], display, findings[i].Commit)
+		if findings[i].Provenance != nil {
+			findings[i].Provenance.Provider = "git"
+			findings[i].Provenance.Repository = sanitizedGitRemote(s.remoteTarget)
+		}
+	}
+	return findings
 }
 
 func (s *Scanner) scanBytes(ctx context.Context, file, commit string, b []byte) []detectors.Finding {
@@ -507,8 +625,10 @@ func (s *Scanner) scanByteView(ctx context.Context, file, commit string, view []
 		for _, c := range detectPlanned(d, view) {
 			line, col := lines.location(c.Start)
 			f := detectors.ToFindingAt(c, file, commit, line, col, false)
+			s.enrichFindingSource(&f)
 			if s.cfg.Verify {
-				f.Verified = s.verification.verify(ctx, c)
+				f.Verification = s.verification.verify(ctx, c)
+				f.Verified = f.Verification.Status == detectors.VerificationVerified
 			}
 			key := f.DetectorID + "\x00" + f.Secret + "\x00" + f.File + "\x00" + f.Commit
 			if _, ok := seen[key]; ok {
@@ -552,8 +672,13 @@ func (s *Scanner) scanDecodedBase64(ctx context.Context, file, commit string, b 
 				c.End = end
 				line, col := lines.location(c.Start)
 				f := detectors.ToFindingAt(c, file, commit, line, col, false)
+				s.enrichFindingSource(&f)
+				if f.Provenance != nil {
+					f.Provenance.DecoderChain = append(f.Provenance.DecoderChain, "base64")
+				}
 				if s.cfg.Verify {
-					f.Verified = s.verification.verify(ctx, c)
+					f.Verification = s.verification.verify(ctx, c)
+					f.Verified = f.Verification.Status == detectors.VerificationVerified
 				}
 				key := f.DetectorID + "\x00" + f.Secret + "\x00" + f.File + "\x00" + f.Commit
 				if _, ok := seen[key]; ok {
@@ -609,7 +734,11 @@ func decodeBase64Candidate(b []byte) ([]byte, bool) {
 }
 
 func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.Finding, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", repo, "log", "--all", "--root", "-z", "--format=commit:%H", "--name-only", "--diff-filter=AMR")
+	args, err := s.gitHistoryArgs(repo)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -653,7 +782,14 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 				if s.cfg.Progress != nil {
 					s.cfg.Progress.StartItem(slot, progress.Item{Stage: progress.StageScanning, Path: f.path, Commit: f.commit})
 				}
-				b, oid, err := batch.blob(f.commit+":"+f.path, s.cfg.MaxFileBytes)
+				var b []byte
+				var oid string
+				var err error
+				if strings.ContainsAny(f.path, "\r\n") {
+					b, oid, err = gitBlobByRevision(ctx, repo, f.commit+":"+f.path, s.cfg.MaxFileBytes)
+				} else {
+					b, oid, err = batch.blob(f.commit+":"+f.path, s.cfg.MaxFileBytes)
+				}
 				if err == nil {
 					if s.cfg.Progress != nil {
 						s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
@@ -665,11 +801,13 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 					findings := cache.findings(ctx, cacheKey, f.path, f.commit, func() []detectors.Finding {
 						return s.scanBlob(progress.WithSlot(ctx, slot), f.path, f.commit, b, 0)
 					})
+					s.enrichGitCommitMetadata(repo, findings)
+					emitErr := s.emitFindings(findings)
 					if s.cfg.Progress != nil {
 						s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
-						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b)), Findings: int64(len(findings))})
+						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b))})
 					}
-					out <- result{findings: findings}
+					out <- result{findings: findings, err: emitErr}
 				} else {
 					stage, reason := progress.StageFailed, "read_error"
 					if err.Error() == "blob too large" {
@@ -739,10 +877,139 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 	if scan.Err() != nil {
 		return nil, scan.Err()
 	}
+	findings = dedupe(findings)
+	s.enrichGitCommitMetadata(repo, findings)
 	if scanErr != nil {
-		return nil, scanErr
+		return findings, scanErr
 	}
-	return dedupe(findings), nil
+	return findings, nil
+}
+
+func gitBlobByRevision(ctx context.Context, repo, revision string, maxBytes int64) ([]byte, string, error) {
+	oidOutput, err := exec.CommandContext(ctx, "git", "-C", repo, "rev-parse", "--verify", revision).Output()
+	if err != nil {
+		return nil, "", err
+	}
+	oid := strings.TrimSpace(string(oidOutput))
+	sizeOutput, err := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "-s", oid).Output()
+	if err != nil {
+		return nil, "", err
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(string(sizeOutput)), 10, 64)
+	if err != nil {
+		return nil, "", err
+	}
+	if size > maxBytes {
+		return nil, "", errors.New("blob too large")
+	}
+	content, err := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "blob", oid).Output()
+	return content, oid, err
+}
+
+func (s *Scanner) enrichFindingSource(finding *detectors.Finding) {
+	if finding.Provenance == nil {
+		return
+	}
+	if finding.Commit != "" || isGitRemote(s.cfg.Target) {
+		finding.Provenance.Repository = sanitizedGitRemote(s.cfg.Target)
+		refs := append(append([]string{}, s.cfg.GitBranches...), s.cfg.GitRefs...)
+		if len(refs) > 0 {
+			finding.Provenance.Ref = strings.Join(refs, ",")
+		}
+	}
+}
+
+func (s *Scanner) enrichGitCommitMetadata(repo string, findings []detectors.Finding) {
+	type metadata struct {
+		author, email string
+		timestamp     time.Time
+	}
+	cache := map[string]metadata{}
+	for i := range findings {
+		if findings[i].Commit == "" || findings[i].Provenance == nil {
+			continue
+		}
+		meta, ok := cache[findings[i].Commit]
+		if !ok {
+			cmd := exec.Command("git", "-C", repo, "show", "-s", "--format=%an%x00%ae%x00%cI", findings[i].Commit, "--")
+			out, err := cmd.Output()
+			if err == nil {
+				parts := strings.Split(strings.TrimSpace(string(out)), "\x00")
+				if len(parts) == 3 {
+					meta.author, meta.email = parts[0], parts[1]
+					meta.timestamp, _ = time.Parse(time.RFC3339, parts[2])
+				}
+			}
+			cache[findings[i].Commit] = meta
+		}
+		findings[i].Provenance.CommitAuthor = meta.author
+		findings[i].Provenance.CommitEmail = meta.email
+		findings[i].Provenance.CommitTimestamp = meta.timestamp
+	}
+}
+
+func (s *Scanner) gitHistoryArgs(repo string) ([]string, error) {
+	args := []string{"log", "--root", "-z", "--format=commit:%H", "--name-only", "--diff-filter=AMR"}
+	if s.cfg.GitMaxDepth > 0 {
+		args = append(args, "--max-count", strconv.Itoa(s.cfg.GitMaxDepth))
+	}
+	policy := s.cfg.GitAdditionalRefs
+	if policy == "" {
+		policy = "all"
+	}
+	if policy != "all" && policy != "default" && policy != "selected" && policy != "none" {
+		return nil, fmt.Errorf("invalid additional-ref policy %q", policy)
+	}
+	var revisions []string
+	for _, revision := range append(append([]string{}, s.cfg.GitRanges...), s.cfg.GitRefs...) {
+		if err := validateGitRevision(revision); err != nil {
+			return nil, err
+		}
+		revisions = append(revisions, revision)
+	}
+	for _, branch := range s.cfg.GitBranches {
+		if err := validateGitRevision(branch); err != nil {
+			return nil, err
+		}
+		revision := branch
+		if exec.Command("git", "-C", repo, "rev-parse", "--verify", branch+"^{commit}").Run() != nil {
+			remoteBranch := "refs/remotes/origin/" + branch
+			if exec.Command("git", "-C", repo, "rev-parse", "--verify", remoteBranch+"^{commit}").Run() == nil {
+				revision = remoteBranch
+			}
+		}
+		revisions = append(revisions, revision)
+	}
+	hasSelectors := len(revisions) > 0
+	if s.cfg.GitSinceCommit != "" {
+		if err := validateGitRevision(s.cfg.GitSinceCommit); err != nil {
+			return nil, err
+		}
+		if !hasSelectors && policy != "all" {
+			revisions = append(revisions, "HEAD")
+		}
+		revisions = append(revisions, "^"+s.cfg.GitSinceCommit)
+	}
+	switch {
+	case policy == "all":
+		args = append(args, "--all")
+	case policy == "default":
+		revisions = append(revisions, "HEAD")
+	case len(revisions) == 0 && policy == "none":
+		revisions = append(revisions, "HEAD")
+	case policy == "selected" && len(revisions) == 0:
+		return nil, errors.New("additional-ref policy selected requires --git-ref, --branch, or --commit-range")
+	}
+	args = append(args, revisions...)
+	args = append(args, "--")
+	return args, nil
+}
+
+func validateGitRevision(revision string) error {
+	if revision == "" || strings.HasPrefix(revision, "-") || strings.ContainsAny(revision, "\x00\r\n\t ") {
+		return fmt.Errorf("invalid git revision %q", revision)
+	}
+	return nil
 }
 
 func splitNUL(data []byte, atEOF bool) (int, []byte, error) {
@@ -939,15 +1206,89 @@ func (s *Scanner) scanArchiveBytes(ctx context.Context, file, commit string, b [
 		} else {
 			name = file + "!/" + entryName
 		}
+		if !s.allowedArchivePath(name, entryName) {
+			return nil
+		}
 		s.updateArchiveProgress(ctx, progress.StageExtracting, entryName, depth+1, 0)
-		entry, ok := readLimited(zr, s.maxExpandedFileBytes())
+		limit := s.maxExpandedFileBytes()
+		if s.maxArchiveBytes() < limit {
+			limit = s.maxArchiveBytes()
+		}
+		entry, ok := readLimited(zr, limit)
 		if !ok {
 			return nil
 		}
 		s.updateArchiveProgress(ctx, progress.StageScanning, entryName, depth+1, int64(len(entry)))
 		return s.scanBlob(ctx, name, commit, entry, depth+1)
+	case "xz":
+		r, err := xz.NewReader(bytes.NewReader(b))
+		if err != nil {
+			return nil
+		}
+		return s.scanCompressed(ctx, file, commit, r, ".xz", depth)
+	case "bz2":
+		return s.scanCompressed(ctx, file, commit, bzip2.NewReader(bytes.NewReader(b)), ".bz2", depth)
+	case "7z":
+		return s.scan7z(ctx, file, commit, b, depth)
 	}
 	return nil
+}
+
+func (s *Scanner) scanCompressed(ctx context.Context, file, commit string, reader io.Reader, suffix string, depth int) []detectors.Finding {
+	entryName := path.Base(strings.TrimSuffix(file, suffix))
+	name := file + "!/" + entryName
+	if !s.allowedArchivePath(name, entryName) {
+		return nil
+	}
+	s.updateArchiveProgress(ctx, progress.StageExtracting, entryName, depth+1, 0)
+	limit := s.maxExpandedFileBytes()
+	if s.maxArchiveBytes() < limit {
+		limit = s.maxArchiveBytes()
+	}
+	entry, ok := readLimited(reader, limit)
+	if !ok {
+		return nil
+	}
+	s.updateArchiveProgress(ctx, progress.StageScanning, entryName, depth+1, int64(len(entry)))
+	return s.scanBlob(ctx, name, commit, entry, depth+1)
+}
+
+func (s *Scanner) scan7z(ctx context.Context, file, commit string, b []byte, depth int) []detectors.Finding {
+	reader, err := sevenzip.NewReader(bytes.NewReader(b), int64(len(b)))
+	if err != nil {
+		return nil
+	}
+	var findings []detectors.Finding
+	var expanded int64
+	entries := 0
+	for _, entry := range reader.File {
+		if ctx.Err() != nil || entries >= s.maxArchiveEntries() || expanded >= s.maxArchiveBytes() {
+			break
+		}
+		entries++
+		name, ok := safeArchivePath(entry.Name)
+		if !ok || entry.FileInfo().IsDir() || !s.allowedArchivePath(file+"!/"+name, name) || entry.UncompressedSize > uint64(s.maxExpandedFileBytes()) {
+			continue
+		}
+		s.updateArchiveProgress(ctx, progress.StageExtracting, name, depth+1, int64(entry.UncompressedSize))
+		r, err := entry.Open()
+		if err != nil {
+			continue
+		}
+		limit := s.maxExpandedFileBytes()
+		if remaining := s.maxArchiveBytes() - expanded; remaining < limit {
+			limit = remaining
+		}
+		content, ok := readLimited(r, limit)
+		_ = r.Close()
+		if !ok || expanded+int64(len(content)) > s.maxArchiveBytes() {
+			continue
+		}
+		expanded += int64(len(content))
+		s.updateArchiveProgress(ctx, progress.StageScanning, name, depth+1, int64(len(content)))
+		findings = append(findings, s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)...)
+	}
+	return findings
 }
 
 func (s *Scanner) scanZip(ctx context.Context, file, commit string, b []byte, depth int) []detectors.Finding {
@@ -962,11 +1303,15 @@ func (s *Scanner) scanZip(ctx context.Context, file, commit string, b []byte, de
 		if ctx.Err() != nil || entries >= s.maxArchiveEntries() || expanded >= s.maxArchiveBytes() {
 			break
 		}
+		entries++
 		if entry.FileInfo().IsDir() {
 			continue
 		}
 		name, ok := safeArchivePath(entry.Name)
 		if !ok {
+			continue
+		}
+		if !s.allowedArchivePath(file+"!/"+name, name) {
 			continue
 		}
 		if entry.UncompressedSize64 > uint64(s.maxExpandedFileBytes()) {
@@ -977,7 +1322,11 @@ func (s *Scanner) scanZip(ctx context.Context, file, commit string, b []byte, de
 		if err != nil {
 			continue
 		}
-		content, ok := readLimited(r, s.maxExpandedFileBytes())
+		limit := s.maxExpandedFileBytes()
+		if remaining := s.maxArchiveBytes() - expanded; remaining < limit {
+			limit = remaining
+		}
+		content, ok := readLimited(r, limit)
 		_ = r.Close()
 		if !ok {
 			continue
@@ -986,7 +1335,6 @@ func (s *Scanner) scanZip(ctx context.Context, file, commit string, b []byte, de
 			break
 		}
 		expanded += int64(len(content))
-		entries++
 		s.updateArchiveProgress(ctx, progress.StageScanning, name, depth+1, int64(len(content)))
 		findings = append(findings, s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)...)
 	}
@@ -1009,15 +1357,20 @@ func (s *Scanner) scanTar(ctx context.Context, file, commit string, r io.Reader,
 		if err != nil {
 			break
 		}
+		entries++
 		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
 			continue
 		}
 		name, ok := safeArchivePath(h.Name)
-		if !ok || h.Size > s.maxExpandedFileBytes() {
+		if !ok || !s.allowedArchivePath(file+"!/"+name, name) || h.Size > s.maxExpandedFileBytes() {
 			continue
 		}
 		s.updateArchiveProgress(ctx, progress.StageExtracting, name, depth+1, h.Size)
-		content, ok := readLimited(tr, s.maxExpandedFileBytes())
+		limit := s.maxExpandedFileBytes()
+		if remaining := s.maxArchiveBytes() - expanded; remaining < limit {
+			limit = remaining
+		}
+		content, ok := readLimited(tr, limit)
 		if !ok {
 			continue
 		}
@@ -1025,7 +1378,6 @@ func (s *Scanner) scanTar(ctx context.Context, file, commit string, r io.Reader,
 			break
 		}
 		expanded += int64(len(content))
-		entries++
 		s.updateArchiveProgress(ctx, progress.StageScanning, name, depth+1, int64(len(content)))
 		findings = append(findings, s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)...)
 	}
@@ -1048,10 +1400,17 @@ func (s *Scanner) updateArchiveProgress(ctx context.Context, stage, entry string
 	}
 }
 
+func (s *Scanner) allowedArchivePath(virtualPath, entry string) bool {
+	if len(s.cfg.Include) > 0 || len(s.cfg.IncludeRegex) > 0 {
+		return (s.pathFilter == nil || s.pathFilter.Allowed(virtualPath)) || (s.pathFilter == nil || s.pathFilter.Allowed(entry))
+	}
+	return s.pathFilter == nil || s.pathFilter.Allowed(virtualPath)
+}
+
 func archiveKind(file string) string {
 	file = strings.ToLower(file)
 	switch {
-	case strings.HasSuffix(file, ".zip"):
+	case strings.HasSuffix(file, ".zip"), strings.HasSuffix(file, ".jar"), strings.HasSuffix(file, ".war"), strings.HasSuffix(file, ".ear"), strings.HasSuffix(file, ".whl"), strings.HasSuffix(file, ".nupkg"), strings.HasSuffix(file, ".apk"):
 		return "zip"
 	case strings.HasSuffix(file, ".tar"):
 		return "tar"
@@ -1059,6 +1418,12 @@ func archiveKind(file string) string {
 		return "targz"
 	case strings.HasSuffix(file, ".gz"):
 		return "gz"
+	case strings.HasSuffix(file, ".xz"):
+		return "xz"
+	case strings.HasSuffix(file, ".bz2"):
+		return "bz2"
+	case strings.HasSuffix(file, ".7z"):
+		return "7z"
 	default:
 		return ""
 	}
@@ -1380,7 +1745,77 @@ func (s *Scanner) maxExpandedFileBytes() int64 {
 	return 25 * 1024 * 1024
 }
 
-func isGitRepo(path string) bool { _, err := os.Stat(filepath.Join(path, ".git")); return err == nil }
+func isGitRepo(path string) bool {
+	cmd := exec.Command("git", "-C", path, "rev-parse", "--git-dir")
+	return cmd.Run() == nil
+}
+
+func isBareGitRepo(path string) bool {
+	cmd := exec.Command("git", "-C", path, "rev-parse", "--is-bare-repository")
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+func isGitRemote(s string) bool {
+	if isSCPGitRemote(s) {
+		return true
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "ssh", "git", "file":
+		return u.Host != "" || u.Scheme == "file"
+	default:
+		return false
+	}
+}
+
+func validatedGitRemote(raw string) (string, error) {
+	if isSCPGitRemote(raw) {
+		return raw, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !isGitRemote(raw) {
+		return "", fmt.Errorf("invalid git remote %q", sanitizedGitRemote(raw))
+	}
+	if u.User != nil {
+		if _, hasPassword := u.User.Password(); hasPassword {
+			return "", errors.New("git remote URLs must not contain embedded passwords or tokens")
+		}
+	}
+	return raw, nil
+}
+
+func isSCPGitRemote(raw string) bool {
+	at := strings.IndexByte(raw, '@')
+	colon := strings.IndexByte(raw, ':')
+	return at > 0 && colon > at+1 && !strings.Contains(raw[:colon], "/")
+}
+
+func sanitizedGitRemote(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	u.User, u.RawQuery, u.Fragment = nil, "", ""
+	return u.String()
+}
+
+func isHTTPGitURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
+func isGitHubHTTPURL(raw string) bool {
+	if !isHTTPGitURL(raw) {
+		return false
+	}
+	u, _ := url.Parse(raw)
+	host := strings.ToLower(u.Hostname())
+	return host == "github.com" || host == "www.github.com"
+}
 
 func isGitHubURL(s string) bool {
 	u, err := url.Parse(s)
@@ -1392,18 +1827,7 @@ func isGitHubURL(s string) bool {
 }
 
 func githubCloneURL(raw, token string) string {
-	if token == "" {
-		return raw
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return raw
-	}
-	if strings.ToLower(u.Host) != "github.com" && strings.ToLower(u.Host) != "www.github.com" {
-		return raw
-	}
-	u.User = url.UserPassword("x-access-token", token)
-	return u.String()
+	return raw
 }
 
 func isBinary(b []byte) bool {

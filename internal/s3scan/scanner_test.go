@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 
 	"secret-sniffer/internal/detectors"
 	"secret-sniffer/internal/progress"
@@ -35,14 +36,31 @@ type fakeS3 struct {
 	bodyFactory   func(string) io.ReadCloser
 	listBarrier   chan struct{}
 	barrierOnce   sync.Once
+	listFailures  int
+	getFailures   map[string]int
+	versions      map[string][]types.ObjectVersion
+	deleteMarkers map[string][]types.DeleteMarkerEntry
+	getVersionIDs []string
 }
 
 func (f *fakeS3) ListBuckets(context.Context, *s3.ListBucketsInput, ...func(*s3.Options)) (*s3.ListBucketsOutput, error) {
 	return &s3.ListBucketsOutput{}, nil
 }
 
+func (f *fakeS3) ListObjectVersions(_ context.Context, in *s3.ListObjectVersionsInput, _ ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	bucket := aws.ToString(in.Bucket)
+	return &s3.ListObjectVersionsOutput{Versions: f.versions[bucket], DeleteMarkers: f.deleteMarkers[bucket], IsTruncated: aws.Bool(false)}, nil
+}
+
 func (f *fakeS3) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	f.mu.Lock()
+	if f.listFailures > 0 {
+		f.listFailures--
+		f.mu.Unlock()
+		return nil, &smithy.GenericAPIError{Code: "SlowDown", Message: "retry"}
+	}
 	f.activeBuckets++
 	if f.activeBuckets > f.maxActive {
 		f.maxActive = f.activeBuckets
@@ -67,17 +85,90 @@ func (f *fakeS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*
 	key := aws.ToString(in.Key)
 	f.mu.Lock()
 	f.getCalls = append(f.getCalls, key)
+	f.getVersionIDs = append(f.getVersionIDs, aws.ToString(in.VersionId))
+	if f.getFailures[key] > 0 {
+		f.getFailures[key]--
+		f.mu.Unlock()
+		return nil, &smithy.GenericAPIError{Code: "ServiceUnavailable", Message: "retry"}
+	}
 	if f.getIfMatch == nil {
 		f.getIfMatch = map[string]string{}
 	}
 	f.getIfMatch[key] = aws.ToString(in.IfMatch)
-	body := f.bodies[key]
+	body := f.bodies[key+"@"+aws.ToString(in.VersionId)]
+	if body == "" {
+		body = f.bodies[key]
+	}
 	factory := f.bodyFactory
 	f.mu.Unlock()
 	if factory != nil {
 		return &s3.GetObjectOutput{Body: factory(key)}, nil
 	}
 	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewBufferString(body))}, nil
+}
+
+func TestS3VersionScanningUsesVersionIDsAndDistinctFingerprints(t *testing.T) {
+	client := &fakeS3{
+		versions: map[string][]types.ObjectVersion{"bucket": {
+			{Key: aws.String("config.env"), VersionId: aws.String("v1"), ETag: aws.String(`"one"`), Size: aws.Int64(6), IsLatest: aws.Bool(false)},
+			{Key: aws.String("config.env"), VersionId: aws.String("v2"), ETag: aws.String(`"two"`), Size: aws.Int64(6), IsLatest: aws.Bool(true)},
+		}},
+		bodies: map[string]string{"config.env@v1": "secret", "config.env@v2": "secret"},
+	}
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.json"), "job", "scope", []string{"bucket"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var committed []detectors.Finding
+	runner, err := New(client, Config{
+		Buckets: []string{"bucket"}, VersionPolicy: "all", Store: store,
+		ScanObject: func(_ context.Context, file string, _ []byte) []detectors.Finding {
+			return []detectors.Finding{{DetectorID: "test", File: file, Secret: "same"}}
+		},
+		CommitFindings: func(findings []detectors.Finding) error { committed = append(committed, findings...); return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := runner.Scan(context.Background())
+	if result.ObjectsScanned != 2 || len(committed) != 2 || len(client.getVersionIDs) != 2 {
+		t.Fatalf("unexpected version result=%#v findings=%#v versions=%v", result, committed, client.getVersionIDs)
+	}
+	if committed[0].Fingerprint == committed[1].Fingerprint || committed[0].Provenance.S3VersionID == committed[1].Provenance.S3VersionID {
+		t.Fatalf("version provenance/fingerprints are not distinct: %#v", committed)
+	}
+}
+
+func TestTransientS3FailuresRetryWithoutDuplicateCommit(t *testing.T) {
+	client := &fakeS3{
+		objects: map[string][]types.Object{"bucket": {{Key: aws.String("config.env"), Size: aws.Int64(6)}}},
+		bodies:  map[string]string{"config.env": "secret"}, listFailures: 1, getFailures: map[string]int{"config.env": 1},
+	}
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.json"), "job", "scope", []string{"bucket"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	commits := 0
+	runner, err := New(client, Config{
+		Buckets: []string{"bucket"}, Store: store, RetryAttempts: 3, RetryBaseDelay: time.Millisecond,
+		ScanObject: func(context.Context, string, []byte) []detectors.Finding {
+			return []detectors.Finding{{DetectorID: "test"}}
+		},
+		CommitFindings: func(findings []detectors.Finding) error {
+			commits += len(findings)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := runner.Scan(context.Background())
+	if result.BucketsFailed != 0 || result.Findings != 1 || commits != 1 {
+		t.Fatalf("unexpected retried result=%#v commits=%d", result, commits)
+	}
+	if len(client.getCalls) != 2 {
+		t.Fatalf("GetObject calls=%d, want 2", len(client.getCalls))
+	}
 }
 
 func TestS3ProgressShowsConcurrentDownloadAndScanning(t *testing.T) {

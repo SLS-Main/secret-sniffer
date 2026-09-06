@@ -14,8 +14,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/sso"
 	"github.com/aws/aws-sdk-go-v2/service/ssooidc"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
 )
 
@@ -28,6 +30,9 @@ type Options struct {
 	SSODeviceAuth   bool
 	ConfigFile      string
 	DevicePrompt    func(verificationURI, userCode string)
+	RoleARNs        []string
+	RoleExternalID  string
+	RoleSessionName string
 }
 
 func Load(ctx context.Context, opts Options) (aws.Config, error) {
@@ -62,6 +67,25 @@ func Load(ctx context.Context, opts Options) (aws.Config, error) {
 	}
 	if cfg.Region == "" {
 		cfg.Region = "us-east-1"
+	}
+	if len(opts.RoleARNs) > 0 {
+		sessionName := opts.RoleSessionName
+		if sessionName == "" {
+			sessionName = "secret-sniffer"
+		}
+		for index, roleARN := range opts.RoleARNs {
+			if strings.TrimSpace(roleARN) == "" {
+				return aws.Config{}, fmt.Errorf("AWS role ARN %d is empty", index+1)
+			}
+			source := cfg.Copy()
+			provider := stscreds.NewAssumeRoleProvider(sts.NewFromConfig(source), roleARN, func(options *stscreds.AssumeRoleOptions) {
+				options.RoleSessionName = sessionName
+				if opts.RoleExternalID != "" {
+					options.ExternalID = aws.String(opts.RoleExternalID)
+				}
+			})
+			cfg.Credentials = aws.NewCredentialsCache(provider)
+		}
 	}
 	if _, err := cfg.Credentials.Retrieve(ctx); err != nil {
 		return aws.Config{}, fmt.Errorf("resolve AWS credentials: %w", err)

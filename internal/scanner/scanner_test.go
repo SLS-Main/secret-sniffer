@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ulikunitz/xz"
+
 	"secret-sniffer/internal/detectors"
 	"secret-sniffer/internal/progress"
 )
@@ -164,6 +166,33 @@ func TestScannerFindsSecretInNestedArchive(t *testing.T) {
 	}
 }
 
+func TestScannerFindsSecretInXZArchive(t *testing.T) {
+	dir := t.TempDir()
+	secret := "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef"
+	var compressed bytes.Buffer
+	writer, err := xz.NewWriter(&compressed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte(secret)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.env.xz"), compressed.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := New(Config{Target: dir, Workers: 1, MaxFileBytes: 1024 * 1024, ScanArchives: true}, detectors.DefaultRegistry())
+	findings, err := runner.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(findings, "openai-key", "sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef") {
+		t.Fatalf("expected XZ finding, got %#v", findings)
+	}
+}
+
 func TestScannerFindsSecretInPDFDocument(t *testing.T) {
 	dir := t.TempDir()
 	secret := "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef"
@@ -290,6 +319,47 @@ func TestFilesystemProgressIncludesActivePath(t *testing.T) {
 	reporter.Close(progress.Final{Phase: progress.PhaseCompleted})
 }
 
+func TestRepositoryFindingsStreamBeforeScanCompletes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "01-first.txt"), []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "02-block.txt"), []byte("block"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	detector := &streamingDetector{blocked: make(chan struct{}), release: make(chan struct{})}
+	streamed := make(chan detectors.Finding, 1)
+	runner := New(Config{
+		Target: dir, Workers: 1, MaxFileBytes: 1024,
+		FindingCallback: func(findings []detectors.Finding) error {
+			for _, finding := range findings {
+				streamed <- finding
+			}
+			return nil
+		},
+	}, []detectors.Detector{detector})
+	done := make(chan error, 1)
+	go func() { _, err := runner.Scan(context.Background()); done <- err }()
+	select {
+	case finding := <-streamed:
+		if !strings.HasSuffix(finding.File, "01-first.txt") {
+			t.Fatalf("unexpected streamed finding: %#v", finding)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("finding was not streamed")
+	}
+	<-detector.blocked
+	select {
+	case err := <-done:
+		t.Fatalf("scan completed before blocked file was released: %v", err)
+	default:
+	}
+	close(detector.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestArchiveProgressIncludesEntry(t *testing.T) {
 	dir := t.TempDir()
 	archivePath := filepath.Join(dir, "build.zip")
@@ -386,11 +456,11 @@ func TestDetectorPlanSkipsMissingKeywords(t *testing.T) {
 func TestVerificationCacheDeduplicatesAndUsesScanContext(t *testing.T) {
 	cache := newVerificationCache()
 	var calls int32
-	candidate := detectors.Candidate{DetectorID: "test", Secret: "same-secret", Verifier: func(context.Context, string) bool {
+	candidate := detectors.Candidate{DetectorID: "test", Secret: "same-secret", Verifier: func(context.Context, string) detectors.VerificationResult {
 		atomic.AddInt32(&calls, 1)
-		return true
+		return detectors.VerificationResult{Status: detectors.VerificationVerified}
 	}}
-	if !cache.verify(context.Background(), candidate) || !cache.verify(context.Background(), candidate) {
+	if cache.verify(context.Background(), candidate).Status != detectors.VerificationVerified || cache.verify(context.Background(), candidate).Status != detectors.VerificationVerified {
 		t.Fatal("expected cached verification result")
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -401,14 +471,17 @@ func TestVerificationCacheDeduplicatesAndUsesScanContext(t *testing.T) {
 	cancel()
 	candidate.Secret = "canceled-secret"
 	var canceledCalls int32
-	candidate.Verifier = func(ctx context.Context, _ string) bool {
+	candidate.Verifier = func(ctx context.Context, _ string) detectors.VerificationResult {
 		atomic.AddInt32(&canceledCalls, 1)
-		return ctx.Err() == nil
+		if ctx.Err() != nil {
+			return detectors.VerificationResult{Status: detectors.VerificationUnknown, ErrorCategory: "cancelled"}
+		}
+		return detectors.VerificationResult{Status: detectors.VerificationVerified}
 	}
-	if cache.verify(canceled, candidate) {
+	if cache.verify(canceled, candidate).Status != detectors.VerificationUnknown {
 		t.Fatal("expected canceled verification to fail")
 	}
-	if !cache.verify(context.Background(), candidate) {
+	if cache.verify(context.Background(), candidate).Status != detectors.VerificationVerified {
 		t.Fatal("expected failed canceled result to be retried")
 	}
 	if got := atomic.LoadInt32(&canceledCalls); got != 2 {
@@ -634,6 +707,26 @@ type blockingDetector struct {
 	once    sync.Once
 }
 
+type streamingDetector struct {
+	blocked chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (d *streamingDetector) Detect(content []byte) []detectors.Candidate {
+	if string(content) == "block" {
+		d.once.Do(func() { close(d.blocked) })
+		<-d.release
+		return nil
+	}
+	if string(content) == "first" {
+		return []detectors.Candidate{{DetectorID: "stream", Name: "Stream", Severity: "high", Secret: "stream-secret-value", Start: 0, End: len(content)}}
+	}
+	return nil
+}
+
+func (d *streamingDetector) Info() detectors.Info { return detectors.Info{ID: "stream"} }
+
 func newBlockingDetector() *blockingDetector {
 	return &blockingDetector{started: make(chan struct{}), release: make(chan struct{})}
 }
@@ -687,12 +780,117 @@ func (d countingDetector) Info() detectors.Info {
 	return detectors.Info{ID: d.id, Keywords: d.keywords}
 }
 
-func TestGitHubCloneURLInjectsToken(t *testing.T) {
+func TestGitHubCloneURLDoesNotInjectToken(t *testing.T) {
 	got := githubCloneURL("https://github.com/acme/repo", "token123")
-	want := "https://x-access-token:token123@github.com/acme/repo"
+	want := "https://github.com/acme/repo"
 	if got != want {
 		t.Fatalf("unexpected clone URL: %s", got)
 	}
+}
+
+func TestGitCommandAuthIsEnvironmentOnly(t *testing.T) {
+	cfg := Config{GitHubToken: "token123"}
+	env := strings.Join(gitCommandEnv("https://github.com/acme/repo", cfg), "\n")
+	if !strings.Contains(env, "GIT_CONFIG_VALUE_0=Authorization: Basic ") || strings.Contains(githubCloneURL("https://github.com/acme/repo", cfg.GitHubToken), cfg.GitHubToken) {
+		t.Fatalf("Git credential was not isolated to environment")
+	}
+	if strings.Contains(sanitizeGitError("failed token123", cfg), "token123") {
+		t.Fatal("Git error leaked token")
+	}
+}
+
+func TestGenericGitRemoteRecognition(t *testing.T) {
+	for _, target := range []string{"https://gitlab.example/acme/repo.git", "ssh://git@example.com/acme/repo.git", "git@example.com:acme/repo.git", "file:///tmp/repo.git"} {
+		if !isGitRemote(target) {
+			t.Fatalf("expected Git remote %q", target)
+		}
+	}
+	if _, err := validatedGitRemote("https://user:token@example.com/repo.git"); err == nil {
+		t.Fatal("expected embedded credential rejection")
+	}
+}
+
+func TestGitHistorySelectorsAndBareRepository(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	runGit(t, repo, "branch", "-M", "main")
+	writeGitSecret(t, repo, "first.env", "sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-qm", "first")
+	first := strings.TrimSpace(string(runGitOutput(t, repo, "rev-parse", "HEAD")))
+	writeGitSecret(t, repo, "second.env", "sk-bbcdefghijklmnopqrstuvwxyz1234567890abcdef")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-qm", "second")
+	second := strings.TrimSpace(string(runGitOutput(t, repo, "rev-parse", "HEAD")))
+	writeGitSecret(t, repo, "third.env", "sk-cbcdefghijklmnopqrstuvwxyz1234567890abcdef")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-qm", "third")
+
+	cases := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{name: "depth", cfg: Config{GitMaxDepth: 1, GitAdditionalRefs: "selected", GitRefs: []string{"main"}}, want: "third.env"},
+		{name: "since", cfg: Config{GitSinceCommit: second, GitAdditionalRefs: "selected", GitRefs: []string{"main"}}, want: "third.env"},
+		{name: "range", cfg: Config{GitRanges: []string{first + ".." + second}, GitAdditionalRefs: "selected"}, want: "second.env"},
+		{name: "branch", cfg: Config{GitBranches: []string{"main"}, GitAdditionalRefs: "selected"}, want: "third.env"},
+		{name: "ref", cfg: Config{GitRefs: []string{second}, GitMaxDepth: 1, GitAdditionalRefs: "selected"}, want: "second.env"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.Target, tc.cfg.Workers, tc.cfg.MaxFileBytes, tc.cfg.GitHistory = repo, 2, 1024, true
+			findings, err := New(tc.cfg, detectors.DefaultRegistry()).scanGitHistory(context.Background(), repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !hasCommittedFindingPath(findings, tc.want) {
+				t.Fatalf("expected %s in %#v", tc.want, findings)
+			}
+		})
+	}
+
+	bare := filepath.Join(t.TempDir(), "repo.git")
+	cmd := exec.Command("git", "clone", "--bare", repo, bare)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bare clone failed: %v: %s", err, out)
+	}
+	if !isBareGitRepo(bare) {
+		t.Fatal("bare repository was not recognized")
+	}
+	findings, err := New(Config{Target: bare, Workers: 2, MaxFileBytes: 1024}, detectors.DefaultRegistry()).Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) == 0 {
+		t.Fatal("bare repository history was not scanned")
+	}
+
+	remoteFindings, err := New(Config{Target: "file://" + repo, Workers: 2, MaxFileBytes: 1024, GitHistory: true, GitMaxDepth: 1}, detectors.DefaultRegistry()).Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remoteFindings) == 0 {
+		t.Fatal("file:// Git remote was not scanned")
+	}
+}
+
+func writeGitSecret(t *testing.T, repo, name, secret string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, name), []byte("OPENAI_API_KEY="+secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func hasCommittedFindingPath(findings []detectors.Finding, name string) bool {
+	for _, finding := range findings {
+		if finding.Commit != "" && finding.File == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRetryableGitCloneError(t *testing.T) {

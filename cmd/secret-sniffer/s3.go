@@ -31,31 +31,53 @@ import (
 )
 
 type s3RunOptions struct {
-	ScannerConfig       scanner.Config
-	Registry            []detectors.Detector
-	Buckets             []string
-	AllBuckets          bool
-	Prefix              string
-	BucketConcurrency   int
-	ObjectConcurrency   int
-	JobID               string
-	StatePath           string
-	Resume              bool
-	AWSProfile          string
-	AWSRegion           string
-	AWSAccessKeyID      string
-	AWSSecretAccessKey  string
-	AWSSessionToken     string
-	SSODeviceAuth       bool
-	Format              string
-	OutputPath          string
-	OutputFlushFindings int
-	IncludeSecrets      bool
-	BaselinePath        string
-	WriteBaselinePath   string
-	CustomDetectorsPath string
-	Console             console
-	StartedAt           time.Time
+	ScannerConfig        scanner.Config
+	Registry             []detectors.Detector
+	Buckets              []string
+	AllBuckets           bool
+	Prefix               string
+	BucketConcurrency    int
+	ObjectConcurrency    int
+	JobID                string
+	StatePath            string
+	Resume               bool
+	AWSProfile           string
+	AWSRegion            string
+	AWSAccessKeyID       string
+	AWSSecretAccessKey   string
+	AWSSessionToken      string
+	AWSRoleARNs          []string
+	AWSRoleExternalID    string
+	AWSRoleSessionName   string
+	SSODeviceAuth        bool
+	Format               string
+	OutputPath           string
+	OutputFlushFindings  int
+	IncludeSecrets       bool
+	BaselinePath         string
+	WriteBaselinePath    string
+	CustomDetectorsPath  string
+	VerificationStatuses map[detectors.VerificationStatus]struct{}
+	MaxObjectBytes       int64
+	ExactKeys            []string
+	ExcludeBuckets       []string
+	S3Endpoint           string
+	S3PathStyle          bool
+	RetryAttempts        int
+	RetryBaseDelay       time.Duration
+	VersionPolicy        string
+	DeleteMarkerPolicy   string
+	StorageClassPolicy   string
+	Console              console
+	StartedAt            time.Time
+}
+
+type s3ScanFailuresError struct {
+	Failures map[string]string
+}
+
+func (e *s3ScanFailuresError) Error() string {
+	return fmt.Sprintf("%d S3 bucket(s) failed", len(e.Failures))
 }
 
 func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
@@ -65,6 +87,7 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 	awsCfg, err := awsauth.Load(ctx, awsauth.Options{
 		Profile: opts.AWSProfile, Region: opts.AWSRegion, AccessKeyID: opts.AWSAccessKeyID,
 		SecretAccessKey: opts.AWSSecretAccessKey, SessionToken: opts.AWSSessionToken, SSODeviceAuth: opts.SSODeviceAuth,
+		RoleARNs: opts.AWSRoleARNs, RoleExternalID: opts.AWSRoleExternalID, RoleSessionName: opts.AWSRoleSessionName,
 		DevicePrompt: func(uri, code string) {
 			opts.Console.info("AWS device authentication: open %s and enter code %s", uri, code)
 		},
@@ -72,7 +95,7 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	client := s3.NewFromConfig(awsCfg)
+	client := newS3Client(awsCfg, opts.S3Endpoint, opts.S3PathStyle)
 	if opts.AllBuckets {
 		if opts.ScannerConfig.Progress != nil {
 			opts.ScannerConfig.Progress.SetPhase(progress.PhaseDiscovering)
@@ -84,13 +107,18 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 		}
 	}
 	opts.Buckets = dedupeStrings(opts.Buckets)
+	excludedBuckets := stringSet(opts.ExcludeBuckets)
+	opts.Buckets = slices.DeleteFunc(opts.Buckets, func(bucket string) bool {
+		_, excluded := excludedBuckets[bucket]
+		return excluded
+	})
 	if len(opts.Buckets) == 0 {
 		return 0, errors.New("no S3 buckets selected")
 	}
 	if opts.ScannerConfig.Progress != nil {
 		opts.ScannerConfig.Progress.SetPhase(progress.PhaseDiscovering)
 	}
-	regionalClient := resolveS3BucketClients(ctx, awsCfg, client, opts.Buckets, opts.BucketConcurrency, opts.Console)
+	regionalClient := resolveS3BucketClients(ctx, awsCfg, client, opts.Buckets, opts.BucketConcurrency, opts.S3Endpoint, opts.S3PathStyle, opts.Console)
 	format := strings.ToLower(opts.Format)
 	switch format {
 	case "human", "json", "jsonl", "sarif":
@@ -126,6 +154,11 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !opts.Resume {
+		if err := store.Reset(opts.Buckets, time.Now()); err != nil {
+			return 0, err
+		}
+	}
 	resumeProgress := opts.Resume && stateHasProgress(store.Snapshot())
 	if resumeProgress {
 		if _, err := os.Stat(journalPath); err != nil {
@@ -136,6 +169,16 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 		}
 		if err := repairFindingJournal(journalPath); err != nil {
 			return 0, err
+		}
+	}
+	committedFingerprints := map[string]struct{}{}
+	if resumeProgress {
+		committedFingerprints, err = findingJournalFingerprints(journalPath)
+		if err != nil {
+			return 0, err
+		}
+		if opts.ScannerConfig.Progress != nil {
+			opts.ScannerConfig.Progress.AddFindings(int64(len(committedFingerprints)))
 		}
 	}
 	opts.Console.info("S3 scan job %s state=%s buckets=%d bucket_concurrency=%d object_concurrency=%d", opts.JobID, opts.StatePath, len(opts.Buckets), opts.BucketConcurrency, opts.ObjectConcurrency)
@@ -187,9 +230,23 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 
 	runner := scanner.New(opts.ScannerConfig, opts.Registry)
 	var committedFindings atomic.Int64
+	var commitMu sync.Mutex
 	commit := func(page []detectors.Finding) error {
+		page = detectors.FilterVerification(page, opts.VerificationStatuses)
 		if knownBaseline != nil {
 			page = baseline.Filter(page, knownBaseline)
+		}
+		commitMu.Lock()
+		defer commitMu.Unlock()
+		unique := page[:0]
+		for _, finding := range page {
+			if _, exists := committedFingerprints[finding.Fingerprint]; !exists {
+				unique = append(unique, finding)
+			}
+		}
+		page = unique
+		if opts.ScannerConfig.Progress != nil {
+			opts.ScannerConfig.Progress.AddFindings(int64(len(page)))
 		}
 		for _, finding := range page {
 			opts.Console.finding(finding)
@@ -198,14 +255,19 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 		if err := streamWriter.Flush(); err != nil {
 			return err
 		}
+		for _, finding := range page {
+			committedFingerprints[finding.Fingerprint] = struct{}{}
+		}
 		committedFindings.Add(int64(len(page)))
 		return nil
 	}
 	s3Scanner, err := s3scan.New(regionalClient, s3scan.Config{
 		Buckets: opts.Buckets, Prefix: opts.Prefix, Resume: opts.Resume, BucketConcurrency: opts.BucketConcurrency,
-		ObjectConcurrency: opts.ObjectConcurrency, MaxObjectBytes: opts.ScannerConfig.MaxFileBytes, Store: store,
+		ObjectConcurrency: opts.ObjectConcurrency, MaxObjectBytes: opts.MaxObjectBytes, Store: store,
 		AllowObject: runner.AllowsRemotePath, SkipObjectReason: runner.RemotePathSkipReason,
-		ScanObject: runner.ScanContent, CommitFindings: commit, Progress: opts.ScannerConfig.Progress,
+		ExactKeys: stringSet(opts.ExactKeys), RetryAttempts: opts.RetryAttempts, RetryBaseDelay: opts.RetryBaseDelay,
+		VersionPolicy: opts.VersionPolicy, DeleteMarkerPolicy: opts.DeleteMarkerPolicy, StorageClassPolicy: opts.StorageClassPolicy,
+		BucketRegions: regionalClient.regions, ScanObject: runner.ScanContent, CommitFindings: commit, Progress: opts.ScannerConfig.Progress,
 	})
 	if err != nil {
 		return 0, err
@@ -262,13 +324,29 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 	}
 	fmt.Fprintln(os.Stdout)
 	if result.BucketsFailed > 0 {
-		failureErr := errors.New("one or more S3 buckets failed")
-		for bucket, message := range result.Failures {
-			failureErr = errors.Join(failureErr, fmt.Errorf("s3://%s: %s", bucket, message))
-		}
-		return findingCount, failureErr
+		return findingCount, &s3ScanFailuresError{Failures: result.Failures}
 	}
 	return findingCount, nil
+}
+
+func findingJournalFingerprints(path string) (map[string]struct{}, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	seen := map[string]struct{}{}
+	decoder := json.NewDecoder(file)
+	for {
+		var finding detectors.Finding
+		if err := decoder.Decode(&finding); err != nil {
+			if err == io.EOF {
+				return seen, nil
+			}
+			return nil, fmt.Errorf("read S3 finding journal %s: %w", path, err)
+		}
+		seen[finding.Fingerprint] = struct{}{}
+	}
 }
 
 func stateHasProgress(state s3scan.State) bool {
@@ -352,6 +430,7 @@ func countFindingJournal(path string) (int, error) {
 type regionalS3Client struct {
 	defaultClient *s3.Client
 	byBucket      map[string]*s3.Client
+	regions       map[string]string
 }
 
 func (c *regionalS3Client) ListBuckets(ctx context.Context, input *s3.ListBucketsInput, options ...func(*s3.Options)) (*s3.ListBucketsOutput, error) {
@@ -360,6 +439,10 @@ func (c *regionalS3Client) ListBuckets(ctx context.Context, input *s3.ListBucket
 
 func (c *regionalS3Client) ListObjectsV2(ctx context.Context, input *s3.ListObjectsV2Input, options ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	return c.client(aws.ToString(input.Bucket)).ListObjectsV2(ctx, input, options...)
+}
+
+func (c *regionalS3Client) ListObjectVersions(ctx context.Context, input *s3.ListObjectVersionsInput, options ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error) {
+	return c.client(aws.ToString(input.Bucket)).ListObjectVersions(ctx, input, options...)
 }
 
 func (c *regionalS3Client) GetObject(ctx context.Context, input *s3.GetObjectInput, options ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
@@ -373,11 +456,30 @@ func (c *regionalS3Client) client(bucket string) *s3.Client {
 	return c.defaultClient
 }
 
-func resolveS3BucketClients(ctx context.Context, cfg aws.Config, bootstrap *s3.Client, buckets []string, concurrency int, console console) *regionalS3Client {
+func newS3Client(cfg aws.Config, endpoint string, pathStyle bool) *s3.Client {
+	return s3.NewFromConfig(cfg, func(options *s3.Options) {
+		if endpoint != "" {
+			options.BaseEndpoint = aws.String(endpoint)
+		}
+		options.UsePathStyle = pathStyle
+	})
+}
+
+func resolveS3BucketClients(ctx context.Context, cfg aws.Config, bootstrap *s3.Client, buckets []string, concurrency int, endpoint string, pathStyle bool, console console) *regionalS3Client {
+	if endpoint != "" {
+		regions := map[string]string{}
+		for _, bucket := range buckets {
+			regions[bucket] = cfg.Region
+		}
+		return &regionalS3Client{defaultClient: bootstrap, byBucket: map[string]*s3.Client{}, regions: regions}
+	}
 	if concurrency < 1 {
 		concurrency = 1
 	}
-	clients := &regionalS3Client{defaultClient: bootstrap, byBucket: map[string]*s3.Client{}}
+	clients := &regionalS3Client{defaultClient: bootstrap, byBucket: map[string]*s3.Client{}, regions: map[string]string{}}
+	for _, bucket := range buckets {
+		clients.regions[bucket] = cfg.Region
+	}
 	jobs := make(chan string)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -394,7 +496,8 @@ func resolveS3BucketClients(ctx context.Context, cfg aws.Config, bootstrap *s3.C
 				bucketCfg := cfg.Copy()
 				bucketCfg.Region = region
 				mu.Lock()
-				clients.byBucket[bucket] = s3.NewFromConfig(bucketCfg)
+				clients.byBucket[bucket] = newS3Client(bucketCfg, endpoint, pathStyle)
+				clients.regions[bucket] = region
 				mu.Unlock()
 			}
 		}()
@@ -411,6 +514,16 @@ func resolveS3BucketClients(ctx context.Context, cfg aws.Config, bootstrap *s3.C
 	close(jobs)
 	wg.Wait()
 	return clients
+}
+
+func stringSet(values []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out[value] = struct{}{}
+		}
+	}
+	return out
 }
 
 func readFindingJournal(path string) ([]detectors.Finding, error) {
@@ -466,7 +579,8 @@ func extensionExcludePatterns(raw string) ([]string, error) {
 func s3ScopeHash(opts s3RunOptions) (string, error) {
 	detectorIDs := make([]string, 0, len(opts.Registry))
 	for _, detector := range opts.Registry {
-		detectorIDs = append(detectorIDs, detector.Info().ID)
+		info := detector.Info()
+		detectorIDs = append(detectorIDs, info.ID+":"+info.Severity)
 	}
 	payload := struct {
 		Prefix               string   `json:"prefix"`
@@ -474,6 +588,8 @@ func s3ScopeHash(opts s3RunOptions) (string, error) {
 		Include              []string `json:"include"`
 		Exclude              []string `json:"exclude"`
 		ExcludeExtensions    []string `json:"exclude_extensions"`
+		IncludeRegex         []string `json:"include_regex"`
+		ExcludeRegex         []string `json:"exclude_regex"`
 		ScanArchives         bool     `json:"scan_archives"`
 		MaxArchiveDepth      int      `json:"max_archive_depth"`
 		MaxArchiveEntries    int      `json:"max_archive_entries"`
@@ -488,16 +604,31 @@ func s3ScopeHash(opts s3RunOptions) (string, error) {
 		BaselineHash         string   `json:"baseline_hash"`
 		CustomDetectorsHash  string   `json:"custom_detectors_hash"`
 		DetectorIDs          []string `json:"detector_ids"`
+		VerificationStatuses []string `json:"verification_statuses"`
+		ExactKeys            []string `json:"exact_keys"`
+		ExcludeBuckets       []string `json:"exclude_buckets"`
+		Endpoint             string   `json:"endpoint"`
+		PathStyle            bool     `json:"path_style"`
+		VersionPolicy        string   `json:"version_policy"`
+		DeleteMarkerPolicy   string   `json:"delete_marker_policy"`
+		StorageClassPolicy   string   `json:"storage_class_policy"`
 	}{
-		Prefix: opts.Prefix, MaxObjectBytes: opts.ScannerConfig.MaxFileBytes, Include: opts.ScannerConfig.Include,
+		Prefix: opts.Prefix, MaxObjectBytes: opts.MaxObjectBytes, Include: opts.ScannerConfig.Include,
 		Exclude: opts.ScannerConfig.Exclude, ExcludeExtensions: opts.ScannerConfig.ExcludeExtensions,
+		IncludeRegex: opts.ScannerConfig.IncludeRegex, ExcludeRegex: opts.ScannerConfig.ExcludeRegex,
 		ScanArchives: opts.ScannerConfig.ScanArchives, MaxArchiveDepth: opts.ScannerConfig.MaxArchiveDepth,
 		MaxArchiveEntries: opts.ScannerConfig.MaxArchiveEntries, MaxArchiveBytes: opts.ScannerConfig.MaxArchiveBytes,
 		MaxExpandedFileBytes: opts.ScannerConfig.MaxExpandedFileBytes, Verify: opts.ScannerConfig.Verify,
 		IncludeSecrets: opts.IncludeSecrets, Format: strings.ToLower(opts.Format), AllBuckets: opts.AllBuckets, DetectorIDs: detectorIDs,
+		ExactKeys: opts.ExactKeys, ExcludeBuckets: opts.ExcludeBuckets, Endpoint: opts.S3Endpoint, PathStyle: opts.S3PathStyle,
+		VersionPolicy: opts.VersionPolicy, DeleteMarkerPolicy: opts.DeleteMarkerPolicy, StorageClassPolicy: opts.StorageClassPolicy,
 	}
 	payload.Buckets = append([]string(nil), opts.Buckets...)
 	slices.Sort(payload.Buckets)
+	for status := range opts.VerificationStatuses {
+		payload.VerificationStatuses = append(payload.VerificationStatuses, string(status))
+	}
+	slices.Sort(payload.VerificationStatuses)
 	journalPath := opts.OutputPath
 	if payload.Format != "jsonl" {
 		journalPath = opts.StatePath + ".findings.jsonl"

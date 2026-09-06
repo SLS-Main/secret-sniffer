@@ -1,6 +1,8 @@
 name: Release Linux binary
 
 on:
+  push:
+    tags: ["v*"]
   release:
     types: [published]
 
@@ -8,8 +10,8 @@ permissions:
   contents: write
 
 jobs:
-  linux-amd64:
-    name: Build Linux amd64
+  linux:
+    name: Build Linux release binaries
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
@@ -26,22 +28,29 @@ jobs:
 
       - name: Build release binary
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
           mkdir -p dist
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -trimpath \
-            -ldflags="-s -w -X main.version=${RELEASE_TAG}" \
-            -o dist/secret-sniffer-linux-amd64 \
-            ./cmd/secret-sniffer
-          sha256sum dist/secret-sniffer-linux-amd64 > dist/secret-sniffer-linux-amd64.sha256
+          for arch in amd64 arm64; do
+            binary="dist/secret-sniffer-linux-${arch}"
+            CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build \
+              -trimpath \
+              -ldflags="-s -w -X main.version=${RELEASE_TAG}" \
+              -o "${binary}" \
+              ./cmd/secret-sniffer
+            (cd dist && sha256sum "secret-sniffer-linux-${arch}" > "secret-sniffer-linux-${arch}.sha256")
+          done
 
-      - name: Upload release assets
+      - name: Create release and upload assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
+          gh release view "${RELEASE_TAG}" >/dev/null 2>&1 || \
+            gh release create "${RELEASE_TAG}" --verify-tag --generate-notes --title "${RELEASE_TAG}"
           gh release upload "${RELEASE_TAG}" \
             dist/secret-sniffer-linux-amd64 \
             dist/secret-sniffer-linux-amd64.sha256 \
+            dist/secret-sniffer-linux-arm64 \
+            dist/secret-sniffer-linux-arm64.sha256 \
             --clobber
