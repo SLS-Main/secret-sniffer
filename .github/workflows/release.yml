@@ -2,7 +2,6 @@ name: Release Linux binary
 
 on:
   push:
-    tags: ["v*"]
   release:
     types: [published]
 
@@ -26,9 +25,36 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Resolve release metadata
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          if [[ "${EVENT_NAME}" == "release" ]]; then
+            tag="${EVENT_RELEASE_TAG}"
+            title="${EVENT_RELEASE_TAG}"
+            prerelease="false"
+          elif [[ "${REF_TYPE}" == "tag" ]]; then
+            tag="${REF_NAME}"
+            title="${REF_NAME}"
+            prerelease="false"
+          else
+            short_sha="${COMMIT_SHA:0:12}"
+            tag="build-${short_sha}"
+            title="Automated build ${short_sha}"
+            prerelease="true"
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "title=${title}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+
       - name: Build release binary
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           mkdir -p dist
           for arch in amd64 arm64; do
@@ -44,10 +70,18 @@ jobs:
       - name: Create release and upload assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.release.outputs.title }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
-          gh release view "${RELEASE_TAG}" >/dev/null 2>&1 || \
-            gh release create "${RELEASE_TAG}" --verify-tag --generate-notes --title "${RELEASE_TAG}"
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            args=("${RELEASE_TAG}" --target "${COMMIT_SHA}" --generate-notes --title "${RELEASE_TITLE}")
+            if [[ "${PRERELEASE}" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            gh release create "${args[@]}"
+          fi
           gh release upload "${RELEASE_TAG}" \
             dist/secret-sniffer-linux-amd64 \
             dist/secret-sniffer-linux-amd64.sha256 \
