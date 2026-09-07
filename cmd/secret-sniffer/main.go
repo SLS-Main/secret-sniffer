@@ -1028,6 +1028,10 @@ type asyncJSONLMessage struct {
 }
 
 func newAsyncJSONLWriter(file *os.File, includeSecrets bool, flushEvery int) *asyncJSONLWriter {
+	return newAsyncJSONLWriterWithSync(file, includeSecrets, flushEvery, file.Sync)
+}
+
+func newAsyncJSONLWriterWithSync(file *os.File, includeSecrets bool, flushEvery int, syncFile func() error) *asyncJSONLWriter {
 	w := &asyncJSONLWriter{messages: make(chan asyncJSONLMessage, 256), done: make(chan error, 1)}
 	go func() {
 		writer := output.NewJSONLWriter(file, includeSecrets)
@@ -1036,39 +1040,29 @@ func newAsyncJSONLWriter(file *os.File, includeSecrets bool, flushEvery int) *as
 		for message := range w.messages {
 			if message.flush != nil {
 				if firstErr == nil && writtenSinceSync > 0 {
-					firstErr = file.Sync()
+					firstErr = syncFile()
 					writtenSinceSync = 0
 				}
 				message.flush <- firstErr
 				continue
 			}
-			if firstErr != nil || message.finding == nil {
-				if message.written != nil {
-					message.written <- firstErr
-				}
-				continue
-			}
-			if err := writer.Write(*message.finding); err != nil {
-				firstErr = err
-				if message.written != nil {
-					message.written <- firstErr
-				}
-				continue
-			}
-			writtenSinceSync++
-			if flushEvery < 1 || writtenSinceSync >= flushEvery {
-				if err := file.Sync(); err != nil {
+			if firstErr == nil && message.finding != nil {
+				if err := writer.Write(*message.finding); err != nil {
 					firstErr = err
-					continue
+				} else {
+					writtenSinceSync++
+					if flushEvery < 1 || writtenSinceSync >= flushEvery {
+						firstErr = syncFile()
+						writtenSinceSync = 0
+					}
 				}
-				writtenSinceSync = 0
 			}
 			if message.written != nil {
 				message.written <- firstErr
 			}
 		}
 		if firstErr == nil && writtenSinceSync > 0 {
-			firstErr = file.Sync()
+			firstErr = syncFile()
 		}
 		w.done <- firstErr
 	}()
@@ -1086,6 +1080,8 @@ func (w *asyncJSONLWriter) WriteFinding(ctx context.Context, finding detectors.F
 		return ctx.Err()
 	case w.messages <- asyncJSONLMessage{finding: &finding, written: written}:
 	}
+	// Once accepted by the bounded queue, wait for the definitive result so output
+	// and emitted counters cannot disagree if cancellation races the acknowledgement.
 	return <-written
 }
 

@@ -245,15 +245,15 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 			}
 		}
 		page = unique
-		if opts.ScannerConfig.Progress != nil {
-			opts.ScannerConfig.Progress.AddFindings(int64(len(page)))
-		}
 		for _, finding := range page {
 			opts.Console.finding(finding)
 			streamWriter.Write(finding)
 		}
 		if err := streamWriter.Flush(); err != nil {
 			return err
+		}
+		if opts.ScannerConfig.Progress != nil {
+			opts.ScannerConfig.Progress.AddFindings(int64(len(page)))
 		}
 		for _, finding := range page {
 			committedFingerprints[finding.Fingerprint] = struct{}{}

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"secret-sniffer/internal/detectors"
+	"secret-sniffer/internal/progress"
+	"secret-sniffer/internal/scanner"
 )
 
 func TestShouldRefreshToken(t *testing.T) {
@@ -202,6 +204,86 @@ func TestAsyncJSONLWriterReportsWriteFailureAtFlush(t *testing.T) {
 	}
 	if err := writer.Close(); err == nil {
 		t.Fatal("expected close to retain output error")
+	}
+}
+
+func TestAsyncJSONLWriterAcknowledgesThresholdSyncFailure(t *testing.T) {
+	file, err := os.OpenFile(filepath.Join(t.TempDir(), "findings.jsonl"), os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncErr := errors.New("forced fsync failure")
+	writer := newAsyncJSONLWriterWithSync(file, true, 1, func() error { return syncErr })
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := writer.WriteFinding(ctx, detectors.Finding{DetectorID: "test", Secret: "secret-value"}); !errors.Is(err, syncErr) {
+		t.Fatalf("WriteFinding error=%v, want %v", err, syncErr)
+	}
+	if err := writer.Close(); !errors.Is(err, syncErr) {
+		t.Fatalf("Close error=%v, want %v", err, syncErr)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestThresholdSyncFailureStopsScanAndFailsProgress(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.env"), []byte("secret=abcdefghijklmnop"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputFile, err := os.OpenFile(filepath.Join(t.TempDir(), "findings.jsonl"), os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncErr := errors.New("forced fsync failure")
+	writer := newAsyncJSONLWriterWithSync(outputFile, true, 1, func() error { return syncErr })
+	progressPath := filepath.Join(t.TempDir(), "progress.json")
+	reporter, err := progress.New(progressPath, time.Millisecond, "filesystem", dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := scanner.New(scanner.Config{Target: dir, Workers: 2, MaxFileBytes: 1024, Progress: reporter}, []detectors.Detector{
+		detectors.NewRegex("test", "Test", "high", nil, `secret=([a-z]{16})`, 1, nil),
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, scanErr := runner.ScanWithOptions(context.Background(), scanner.ScanOptions{
+			FindingSink: scanner.FindingSinkFunc(func(ctx context.Context, finding detectors.Finding) error {
+				return writer.WriteFinding(ctx, finding)
+			}),
+			RetainFindings: false,
+		})
+		done <- scanErr
+	}()
+	select {
+	case scanErr := <-done:
+		if !errors.Is(scanErr, syncErr) {
+			t.Fatalf("scan error=%v, want %v", scanErr, syncErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("scan remained blocked waiting for writer acknowledgement")
+	}
+	if err := writer.Close(); !errors.Is(err, syncErr) {
+		t.Fatalf("writer close error=%v, want %v", err, syncErr)
+	}
+	if err := outputFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if code := scanExitCode(true, false, 0); code != 1 {
+		t.Fatalf("scan failure exit code=%d, want 1", code)
+	}
+	reporter.Close(progress.Final{Phase: progress.PhaseFailed, Error: syncErr.Error()})
+	b, err := os.ReadFile(progressPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state progress.State
+	if err := json.Unmarshal(b, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != progress.PhaseFailed || state.Counters.ItemsFailed == 0 || state.Counters.Findings != 0 {
+		t.Fatalf("unexpected failed progress state: %#v", state)
 	}
 }
 
