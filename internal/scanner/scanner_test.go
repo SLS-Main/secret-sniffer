@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -357,6 +359,50 @@ func TestRepositoryFindingsStreamBeforeScanCompletes(t *testing.T) {
 	close(detector.release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStreamingScanDoesNotRetainFindings(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 200; i++ {
+		name := filepath.Join(dir, fmt.Sprintf("secret-%03d.txt", i))
+		if err := os.WriteFile(name, []byte("first"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := New(Config{Target: dir, Workers: 8, MaxFileBytes: 1024}, []detectors.Detector{&streamingDetector{blocked: make(chan struct{}), release: make(chan struct{})}})
+	emitted := 0
+	result, err := runner.ScanWithOptions(context.Background(), ScanOptions{
+		RetainFindings: false,
+		FindingSink: FindingSinkFunc(func(context.Context, detectors.Finding) error {
+			emitted++
+			return nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Findings) != 0 || result.FindingCount != 200 || emitted != 200 {
+		t.Fatalf("streaming retention mismatch: retained=%d count=%d emitted=%d", len(result.Findings), result.FindingCount, emitted)
+	}
+}
+
+func TestFindingSinkFailureStopsScan(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 20; i++ {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("secret-%03d.txt", i)), []byte("first"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := New(Config{Target: dir, Workers: 4, MaxFileBytes: 1024}, []detectors.Detector{&streamingDetector{blocked: make(chan struct{}), release: make(chan struct{})}})
+	result, err := runner.ScanWithOptions(context.Background(), ScanOptions{
+		FindingSink: FindingSinkFunc(func(context.Context, detectors.Finding) error { return errors.New("output failed") }),
+	})
+	if err == nil || !strings.Contains(err.Error(), "output failed") {
+		t.Fatalf("expected sink error, got result=%#v err=%v", result, err)
+	}
+	if result.FindingCount != 0 {
+		t.Fatalf("failed sink finding count=%d, want 0", result.FindingCount)
 	}
 }
 

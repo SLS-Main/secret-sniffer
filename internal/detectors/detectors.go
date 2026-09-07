@@ -17,19 +17,20 @@ import (
 )
 
 type Finding struct {
-	DetectorID   string             `json:"detector_id"`
-	Name         string             `json:"name"`
-	Severity     string             `json:"severity"`
-	File         string             `json:"file"`
-	Commit       string             `json:"commit,omitempty"`
-	Line         int                `json:"line"`
-	Column       int                `json:"column"`
-	Secret       string             `json:"secret"`
-	Redacted     string             `json:"redacted"`
-	Verified     bool               `json:"verified"`
-	Verification VerificationResult `json:"verification"`
-	Fingerprint  string             `json:"fingerprint"`
-	Provenance   *Provenance        `json:"provenance,omitempty"`
+	DetectorID        string             `json:"detector_id"`
+	Name              string             `json:"name"`
+	Severity          string             `json:"severity"`
+	File              string             `json:"file"`
+	Commit            string             `json:"commit,omitempty"`
+	Line              int                `json:"line"`
+	Column            int                `json:"column"`
+	Secret            string             `json:"secret"`
+	Redacted          string             `json:"redacted"`
+	Verified          bool               `json:"verified"`
+	Verification      VerificationResult `json:"verification"`
+	Fingerprint       string             `json:"fingerprint"`
+	LegacyFingerprint string             `json:"legacy_fingerprint,omitempty"`
+	Provenance        *Provenance        `json:"provenance,omitempty"`
 }
 
 type Provenance struct {
@@ -1322,7 +1323,26 @@ func SetS3Provenance(finding Finding, bucket, key, versionID, etag, region strin
 	if versionID != "" {
 		identity += "?versionId=" + versionID
 	}
-	finding.Fingerprint = findingFingerprint(finding.DetectorID, finding.Secret, identity, finding.Commit)
+	newFingerprint := findingFingerprint(finding.DetectorID, finding.Secret, identity, finding.Commit)
+	if newFingerprint != finding.Fingerprint {
+		finding.LegacyFingerprint = finding.Fingerprint
+		finding.Fingerprint = newFingerprint
+	}
+	return finding
+}
+
+func SetRepositoryProvenance(finding Finding, repository, ref string) Finding {
+	if finding.Provenance == nil {
+		finding.Provenance = &Provenance{}
+	}
+	finding.Provenance.Provider = "git"
+	finding.Provenance.Repository = repository
+	finding.Provenance.Ref = ref
+	newFingerprint := findingFingerprint(finding.DetectorID, finding.Secret, repository+"\x00"+finding.File, finding.Commit)
+	if newFingerprint != finding.Fingerprint {
+		finding.LegacyFingerprint = finding.Fingerprint
+		finding.Fingerprint = newFingerprint
+	}
 	return finding
 }
 
@@ -1357,6 +1377,10 @@ func FilterVerification(findings []Finding, allowed map[VerificationStatus]struc
 }
 
 func ReidentifyFinding(f Finding, file, commit string) Finding {
+	return ReidentifyFindingWithIdentity(f, file, commit, file)
+}
+
+func ReidentifyFindingWithIdentity(f Finding, file, commit, identity string) Finding {
 	if f.Provenance != nil {
 		provenance := *f.Provenance
 		provenance.DecoderChain = append([]string(nil), provenance.DecoderChain...)
@@ -1365,7 +1389,7 @@ func ReidentifyFinding(f Finding, file, commit string) Finding {
 	}
 	f.File = file
 	f.Commit = commit
-	f.Fingerprint = findingFingerprint(f.DetectorID, f.Secret, file, commit)
+	f.Fingerprint = findingFingerprint(f.DetectorID, f.Secret, identity, commit)
 	if f.Provenance != nil {
 		f.Provenance.CommitSHA = commit
 		parts := strings.Split(file, "!/")

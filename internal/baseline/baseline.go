@@ -39,6 +39,11 @@ func Filter(findings []detectors.Finding, known map[string]struct{}) []detectors
 		if _, ok := known[f.Fingerprint]; ok {
 			continue
 		}
+		if f.LegacyFingerprint != "" {
+			if _, ok := known[f.LegacyFingerprint]; ok {
+				continue
+			}
+		}
 		out = append(out, f)
 	}
 	return out
@@ -51,6 +56,10 @@ func Write(path string, findings []detectors.Finding) error {
 			seen[f.Fingerprint] = struct{}{}
 		}
 	}
+	return WriteFingerprints(path, seen)
+}
+
+func WriteFingerprints(path string, seen map[string]struct{}) error {
 	fps := make([]string, 0, len(seen))
 	for fp := range seen {
 		fps = append(fps, fp)

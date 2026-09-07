@@ -72,6 +72,28 @@ type Config struct {
 	MaxExpandedFileBytes int64
 }
 
+type FindingSink interface {
+	WriteFinding(context.Context, detectors.Finding) error
+}
+
+type FindingSinkFunc func(context.Context, detectors.Finding) error
+
+func (f FindingSinkFunc) WriteFinding(ctx context.Context, finding detectors.Finding) error {
+	return f(ctx, finding)
+}
+
+type ScanOptions struct {
+	FindingSink      FindingSink
+	FindingFilter    func(detectors.Finding) bool
+	OnFindingEmitted func(detectors.Finding)
+	RetainFindings   bool
+}
+
+type ScanResult struct {
+	Findings     []detectors.Finding
+	FindingCount int
+}
+
 type Scanner struct {
 	cfg          Config
 	plan         detectorPlan
@@ -81,6 +103,8 @@ type Scanner struct {
 	configErr    error
 	emitMu       sync.Mutex
 	emitted      map[string]struct{}
+	scanOptions  ScanOptions
+	emittedCount int
 	remoteRoot   string
 	remoteTarget string
 }
@@ -89,27 +113,47 @@ var nextScannerID atomic.Uint64
 
 func New(cfg Config, ds []detectors.Detector) *Scanner {
 	filter, err := newPathFilter(cfg)
-	return &Scanner{cfg: cfg, plan: newDetectorPlan(ds), verification: newVerificationCache(), instanceID: nextScannerID.Add(1), pathFilter: filter, configErr: err, emitted: map[string]struct{}{}}
+	return &Scanner{cfg: cfg, plan: newDetectorPlan(ds), verification: newVerificationCache(), instanceID: nextScannerID.Add(1), pathFilter: filter, configErr: err, emitted: map[string]struct{}{}, scanOptions: ScanOptions{RetainFindings: true}}
 }
 
-func (s *Scanner) emitFindings(findings []detectors.Finding) error {
-	if s.cfg.FindingCallback == nil || len(findings) == 0 {
-		return nil
+func (s *Scanner) processFindings(ctx context.Context, findings []detectors.Finding) ([]detectors.Finding, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(findings) == 0 {
+		return nil, nil
 	}
 	s.emitMu.Lock()
 	defer s.emitMu.Unlock()
-	unique := make([]detectors.Finding, 0, len(findings))
+	var retained []detectors.Finding
+	if s.scanOptions.RetainFindings {
+		retained = make([]detectors.Finding, 0, len(findings))
+	}
 	for _, finding := range findings {
+		if err := ctx.Err(); err != nil {
+			return retained, err
+		}
 		if _, exists := s.emitted[finding.Fingerprint]; exists {
 			continue
 		}
+		if s.scanOptions.FindingFilter != nil && !s.scanOptions.FindingFilter(finding) {
+			continue
+		}
 		s.emitted[finding.Fingerprint] = struct{}{}
-		unique = append(unique, finding)
+		if s.scanOptions.FindingSink != nil {
+			if err := s.scanOptions.FindingSink.WriteFinding(ctx, finding); err != nil {
+				return retained, err
+			}
+		}
+		s.emittedCount++
+		if s.scanOptions.OnFindingEmitted != nil {
+			s.scanOptions.OnFindingEmitted(finding)
+		}
+		if s.scanOptions.RetainFindings {
+			retained = append(retained, finding)
+		}
 	}
-	if len(unique) == 0 {
-		return nil
-	}
-	return s.cfg.FindingCallback(unique)
+	return retained, nil
 }
 
 func ValidateConfig(cfg Config) error {
@@ -273,6 +317,30 @@ func (c *verificationCache) verify(ctx context.Context, candidate detectors.Cand
 }
 
 func (s *Scanner) Scan(ctx context.Context) ([]detectors.Finding, error) {
+	options := ScanOptions{RetainFindings: true}
+	if s.cfg.FindingCallback != nil {
+		options.FindingSink = FindingSinkFunc(func(_ context.Context, finding detectors.Finding) error {
+			return s.cfg.FindingCallback([]detectors.Finding{finding})
+		})
+	}
+	result, err := s.ScanWithOptions(ctx, options)
+	return result.Findings, err
+}
+
+func (s *Scanner) ScanWithOptions(ctx context.Context, options ScanOptions) (ScanResult, error) {
+	s.emitMu.Lock()
+	s.scanOptions = options
+	s.emitted = map[string]struct{}{}
+	s.emittedCount = 0
+	s.emitMu.Unlock()
+	findings, err := s.scan(ctx)
+	s.emitMu.Lock()
+	count := s.emittedCount
+	s.emitMu.Unlock()
+	return ScanResult{Findings: findings, FindingCount: count}, err
+}
+
+func (s *Scanner) scan(ctx context.Context) ([]detectors.Finding, error) {
 	if s.configErr != nil {
 		return nil, s.configErr
 	}
@@ -496,6 +564,8 @@ func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Fi
 	}
 	jobs := make(chan string, s.cfg.Workers)
 	out := make(chan result)
+	scanCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var wg sync.WaitGroup
 	if s.cfg.Progress != nil {
 		s.cfg.Progress.DiscoverItems(int64(len(files)))
@@ -515,15 +585,20 @@ func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Fi
 				}
 				b, err := os.ReadFile(filePath)
 				if err == nil {
-					itemCtx := progress.WithSlot(ctx, slot)
+					itemCtx := progress.WithSlot(scanCtx, slot)
 					findings := s.scanBlob(itemCtx, filePath, "", b, 0)
 					findings = s.reidentifyRemoteWorktree(findings, filePath)
-					emitErr := s.emitFindings(findings)
-					if s.cfg.Progress != nil {
+					retained, emitErr := s.processFindings(itemCtx, findings)
+					if s.cfg.Progress != nil && emitErr == nil {
 						s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
 						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b))})
+					} else if s.cfg.Progress != nil {
+						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "output_error", Error: emitErr.Error()})
 					}
-					out <- result{findings: findings, err: emitErr}
+					if emitErr != nil {
+						cancel()
+					}
+					out <- result{findings: retained, err: emitErr}
 				} else {
 					if s.cfg.Progress != nil {
 						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "read_error", Error: err.Error()})
@@ -541,7 +616,7 @@ func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Fi
 				s.cfg.Progress.QueueItems(1)
 			}
 			select {
-			case <-ctx.Done():
+			case <-scanCtx.Done():
 				if s.cfg.Progress != nil {
 					s.cfg.Progress.QueueItems(-1)
 				}
@@ -581,6 +656,8 @@ func (s *Scanner) reidentifyRemoteWorktree(findings []detectors.Finding, filePat
 			display += suffix
 		}
 		findings[i] = detectors.ReidentifyFinding(findings[i], display, findings[i].Commit)
+		identity := sanitizedGitRemote(s.remoteTarget) + "\x00" + display
+		findings[i] = detectors.ReidentifyFindingWithIdentity(findings[i], display, findings[i].Commit, identity)
 		if findings[i].Provenance != nil {
 			findings[i].Provenance.Provider = "git"
 			findings[i].Provenance.Repository = sanitizedGitRemote(s.remoteTarget)
@@ -734,11 +811,13 @@ func decodeBase64Candidate(b []byte) ([]byte, bool) {
 }
 
 func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.Finding, error) {
+	scanCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	args, err := s.gitHistoryArgs(repo)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
+	cmd := exec.CommandContext(scanCtx, "git", append([]string{"-C", repo}, args...)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -757,7 +836,7 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 	cache := newHistoryBlobCache()
 	batches := make([]*gitBatchReader, 0, s.cfg.Workers)
 	for range s.cfg.Workers {
-		batch, err := newGitBatchReader(ctx, repo)
+		batch, err := newGitBatchReader(scanCtx, repo)
 		if err != nil {
 			for _, opened := range batches {
 				opened.close()
@@ -786,7 +865,7 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 				var oid string
 				var err error
 				if strings.ContainsAny(f.path, "\r\n") {
-					b, oid, err = gitBlobByRevision(ctx, repo, f.commit+":"+f.path, s.cfg.MaxFileBytes)
+					b, oid, err = gitBlobByRevision(scanCtx, repo, f.commit+":"+f.path, s.cfg.MaxFileBytes)
 				} else {
 					b, oid, err = batch.blob(f.commit+":"+f.path, s.cfg.MaxFileBytes)
 				}
@@ -798,16 +877,31 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 					if s.cfg.ScanArchives {
 						cacheKey += "\x00" + archiveKind(f.path)
 					}
-					findings := cache.findings(ctx, cacheKey, f.path, f.commit, func() []detectors.Finding {
-						return s.scanBlob(progress.WithSlot(ctx, slot), f.path, f.commit, b, 0)
-					})
-					s.enrichGitCommitMetadata(repo, findings)
-					emitErr := s.emitFindings(findings)
-					if s.cfg.Progress != nil {
-						s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
-						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b))})
+					var findings []detectors.Finding
+					if s.scanOptions.RetainFindings {
+						findings = cache.findings(scanCtx, cacheKey, f.path, f.commit, func() []detectors.Finding {
+							return s.scanBlob(progress.WithSlot(scanCtx, slot), f.path, f.commit, b, 0)
+						})
+					} else {
+						findings = s.scanBlob(progress.WithSlot(scanCtx, slot), f.path, f.commit, b, 0)
 					}
-					out <- result{findings: findings, err: emitErr}
+					s.enrichGitCommitMetadata(repo, findings)
+					for i := range findings {
+						s.enrichFindingSource(&findings[i])
+					}
+					retained, emitErr := s.processFindings(progress.WithSlot(scanCtx, slot), findings)
+					if emitErr != nil {
+						cancel()
+					}
+					if s.cfg.Progress != nil {
+						if emitErr == nil {
+							s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
+							s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b))})
+						} else {
+							s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "output_error", Error: emitErr.Error()})
+						}
+					}
+					out <- result{findings: retained, err: emitErr}
 				} else {
 					stage, reason := progress.StageFailed, "read_error"
 					if err.Error() == "blob too large" {
@@ -852,7 +946,7 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 				s.cfg.Progress.QueueItems(1)
 			}
 			select {
-			case <-ctx.Done():
+			case <-scanCtx.Done():
 				if s.cfg.Progress != nil {
 					s.cfg.Progress.QueueItems(-1)
 				}
@@ -869,6 +963,9 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 		scanErr = errors.Join(scanErr, result.err)
 	}
 	if err := cmd.Wait(); err != nil {
+		if scanErr != nil {
+			return findings, scanErr
+		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -911,11 +1008,13 @@ func (s *Scanner) enrichFindingSource(finding *detectors.Finding) {
 		return
 	}
 	if finding.Commit != "" || isGitRemote(s.cfg.Target) {
-		finding.Provenance.Repository = sanitizedGitRemote(s.cfg.Target)
+		repository := sanitizedGitRemote(s.cfg.Target)
 		refs := append(append([]string{}, s.cfg.GitBranches...), s.cfg.GitRefs...)
+		ref := ""
 		if len(refs) > 0 {
-			finding.Provenance.Ref = strings.Join(refs, ",")
+			ref = strings.Join(refs, ",")
 		}
+		*finding = detectors.SetRepositoryProvenance(*finding, repository, ref)
 	}
 }
 

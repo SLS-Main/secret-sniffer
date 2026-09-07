@@ -416,6 +416,8 @@ func main() {
 	}
 	var outputFile *os.File
 	var streamWriter *asyncJSONLWriter
+	streamedFingerprints := map[string]struct{}{}
+	var outputDedupMu sync.Mutex
 	if outputPath != "" {
 		outputFlags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 		if format == "jsonl" && jobState != nil && (scanResume || scanRetryFailed) {
@@ -430,6 +432,15 @@ func main() {
 		}
 		defer outputFile.Close()
 		if format == "jsonl" {
+			if outputFlags&os.O_APPEND != 0 {
+				if err := repairFindingJournal(outputPath); err != nil {
+					fatal(err)
+				}
+				streamedFingerprints, err = findingJournalFingerprints(outputPath)
+				if err != nil {
+					fatal(err)
+				}
+			}
 			streamWriter = newAsyncJSONLWriter(outputFile, includeSecrets, outputFlushFindings)
 			console.info("Streaming findings to %s", outputPath)
 		} else {
@@ -451,8 +462,15 @@ func main() {
 		}
 	}
 	var findings []detectors.Finding
-	totalBeforeBaseline := 0
-	totalAfterBaseline := 0
+	baselineFingerprints := map[string]struct{}{}
+	for fingerprint := range streamedFingerprints {
+		baselineFingerprints[fingerprint] = struct{}{}
+	}
+	totalBeforeBaseline := len(streamedFingerprints)
+	totalAfterBaseline := len(streamedFingerprints)
+	if cfg.Progress != nil && len(streamedFingerprints) > 0 {
+		cfg.Progress.AddFindings(int64(len(streamedFingerprints)))
+	}
 	var mu sync.Mutex
 	var tokenMu sync.Mutex
 	jobs := make(chan int)
@@ -476,22 +494,6 @@ func main() {
 				targetCfg := cfg
 				targetCfg.Target = target
 				targetCfg.GitHubToken = tokenByTarget[target]
-				if streamWriter != nil {
-					targetCfg.FindingCallback = func(batch []detectors.Finding) error {
-						batch = detectors.FilterVerification(batch, verificationFilter)
-						if knownBaseline != nil {
-							batch = baseline.Filter(batch, knownBaseline)
-						}
-						if cfg.Progress != nil {
-							cfg.Progress.AddFindings(int64(len(batch)))
-						}
-						for _, finding := range batch {
-							console.finding(finding)
-							streamWriter.Write(finding)
-						}
-						return nil
-					}
-				}
 				if installationID := installationByTarget[target]; installationID > 0 && githubAppID != "" && githubAppPrivateKey != "" {
 					token, refreshed, err := cachedInstallationToken(ctx, githubAppID, githubAppPrivateKey, installationID, tokenCache, &tokenMu)
 					if err != nil {
@@ -518,27 +520,90 @@ func main() {
 					}
 				}
 				runner := scanner.New(targetCfg, registry)
-				targetFindings, err := runner.Scan(ctx)
-				if err != nil {
-					targetFindings = detectors.FilterVerification(targetFindings, verificationFilter)
-					mu.Lock()
-					totalBeforeBaseline += len(targetFindings)
-					mu.Unlock()
+				targetBeforeBaseline, targetAfterBaseline := 0, 0
+				targetNewBeforeBaseline, targetNewAfterBaseline := 0, 0
+				countedExisting := map[string]struct{}{}
+				filter := func(finding detectors.Finding) bool {
+					if len(verificationFilter) > 0 {
+						if _, allowed := verificationFilter[finding.Verification.Status]; !allowed {
+							return false
+						}
+					}
+					if streamWriter != nil {
+						outputDedupMu.Lock()
+						defer outputDedupMu.Unlock()
+						if _, exists := streamedFingerprints[finding.Fingerprint]; exists {
+							if _, counted := countedExisting[finding.Fingerprint]; !counted {
+								countedExisting[finding.Fingerprint] = struct{}{}
+								targetBeforeBaseline++
+								targetAfterBaseline++
+							}
+							return false
+						}
+						if len(targets) == 1 && finding.LegacyFingerprint != "" {
+							if _, exists := streamedFingerprints[finding.LegacyFingerprint]; exists {
+								if _, counted := countedExisting[finding.LegacyFingerprint]; !counted {
+									countedExisting[finding.LegacyFingerprint] = struct{}{}
+									targetBeforeBaseline++
+									targetAfterBaseline++
+								}
+								return false
+							}
+						}
+						streamedFingerprints[finding.Fingerprint] = struct{}{}
+					}
+					targetBeforeBaseline++
+					targetNewBeforeBaseline++
 					if knownBaseline != nil {
-						targetFindings = baseline.Filter(targetFindings, knownBaseline)
+						if _, excluded := knownBaseline[finding.Fingerprint]; excluded {
+							return false
+						}
+						if finding.LegacyFingerprint != "" {
+							if _, excluded := knownBaseline[finding.LegacyFingerprint]; excluded {
+								return false
+							}
+						}
+					}
+					return true
+				}
+				var sink scanner.FindingSink
+				if streamWriter != nil {
+					sink = scanner.FindingSinkFunc(func(sinkCtx context.Context, finding detectors.Finding) error {
+						console.finding(finding)
+						return streamWriter.WriteFinding(sinkCtx, finding)
+					})
+				}
+				onEmitted := func(finding detectors.Finding) {
+					targetAfterBaseline++
+					targetNewAfterBaseline++
+					if cfg.Progress != nil {
+						cfg.Progress.AddFindings(1)
+					}
+					if writeBaselinePath != "" {
+						mu.Lock()
+						baselineFingerprints[finding.Fingerprint] = struct{}{}
+						mu.Unlock()
+					}
+				}
+				retainFindings := streamWriter == nil
+				result, err := runner.ScanWithOptions(ctx, scanner.ScanOptions{FindingSink: sink, FindingFilter: filter, OnFindingEmitted: onEmitted, RetainFindings: retainFindings})
+				targetFindings := result.Findings
+				mu.Lock()
+				totalBeforeBaseline += targetNewBeforeBaseline
+				totalAfterBaseline += targetNewAfterBaseline
+				mu.Unlock()
+				if err != nil {
+					if streamWriter != nil {
+						err = errors.Join(err, streamWriter.Flush())
 					}
 					if streamWriter == nil {
 						for _, finding := range targetFindings {
 							console.finding(finding)
 						}
-						if cfg.Progress != nil {
-							cfg.Progress.AddFindings(int64(len(targetFindings)))
-						}
 					}
 					console.repoError(i+1, len(targets), target, err)
 					mu.Lock()
-					totalAfterBaseline += len(targetFindings)
-					if outputFile == nil || format != "jsonl" || writeBaselinePath != "" {
+					if retainFindings {
 						findings = append(findings, targetFindings...)
 					}
 					summary.addScanFailure(target, err)
@@ -552,19 +617,6 @@ func main() {
 					mu.Unlock()
 					continue
 				}
-				targetFindings = detectors.FilterVerification(targetFindings, verificationFilter)
-				mu.Lock()
-				totalBeforeBaseline += len(targetFindings)
-				mu.Unlock()
-				if knownBaseline != nil {
-					targetFindings = baseline.Filter(targetFindings, knownBaseline)
-				}
-				if streamWriter == nil && cfg.Progress != nil {
-					cfg.Progress.AddFindings(int64(len(targetFindings)))
-				}
-				mu.Lock()
-				totalAfterBaseline += len(targetFindings)
-				mu.Unlock()
 				if streamWriter == nil {
 					for _, finding := range targetFindings {
 						console.finding(finding)
@@ -575,17 +627,17 @@ func main() {
 						fatal(err)
 					}
 				}
-				console.repoDone(i+1, len(targets), target, len(targetFindings))
+				console.repoDone(i+1, len(targets), target, targetAfterBaseline)
 				mu.Lock()
-				summary.addScanResult(target, len(targetFindings))
+				summary.addScanResult(target, targetAfterBaseline)
 				if jobState != nil {
-					jobState.markCompleted(target, len(targetFindings), time.Now())
+					jobState.markCompleted(target, targetAfterBaseline, time.Now())
 					if err := writeScanJobState(jobPath, jobState); err != nil {
 						mu.Unlock()
 						fatal(err)
 					}
 				}
-				if outputFile == nil || format != "jsonl" || writeBaselinePath != "" {
+				if retainFindings {
 					findings = append(findings, targetFindings...)
 				}
 				mu.Unlock()
@@ -609,7 +661,13 @@ func main() {
 		}
 	}
 	if writeBaselinePath != "" {
-		if err := baseline.Write(writeBaselinePath, findings); err != nil {
+		var err error
+		if streamWriter != nil {
+			err = baseline.WriteFingerprints(writeBaselinePath, baselineFingerprints)
+		} else {
+			err = baseline.Write(writeBaselinePath, findings)
+		}
+		if err != nil {
 			fatal(err)
 		}
 	}
@@ -966,6 +1024,7 @@ type asyncJSONLWriter struct {
 type asyncJSONLMessage struct {
 	finding *detectors.Finding
 	flush   chan error
+	written chan error
 }
 
 func newAsyncJSONLWriter(file *os.File, includeSecrets bool, flushEvery int) *asyncJSONLWriter {
@@ -984,10 +1043,16 @@ func newAsyncJSONLWriter(file *os.File, includeSecrets bool, flushEvery int) *as
 				continue
 			}
 			if firstErr != nil || message.finding == nil {
+				if message.written != nil {
+					message.written <- firstErr
+				}
 				continue
 			}
 			if err := writer.Write(*message.finding); err != nil {
 				firstErr = err
+				if message.written != nil {
+					message.written <- firstErr
+				}
 				continue
 			}
 			writtenSinceSync++
@@ -997,6 +1062,9 @@ func newAsyncJSONLWriter(file *os.File, includeSecrets bool, flushEvery int) *as
 					continue
 				}
 				writtenSinceSync = 0
+			}
+			if message.written != nil {
+				message.written <- firstErr
 			}
 		}
 		if firstErr == nil && writtenSinceSync > 0 {
@@ -1009,6 +1077,16 @@ func newAsyncJSONLWriter(file *os.File, includeSecrets bool, flushEvery int) *as
 
 func (w *asyncJSONLWriter) Write(finding detectors.Finding) {
 	w.messages <- asyncJSONLMessage{finding: &finding}
+}
+
+func (w *asyncJSONLWriter) WriteFinding(ctx context.Context, finding detectors.Finding) error {
+	written := make(chan error, 1)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case w.messages <- asyncJSONLMessage{finding: &finding, written: written}:
+	}
+	return <-written
 }
 
 func (w *asyncJSONLWriter) Flush() error {
