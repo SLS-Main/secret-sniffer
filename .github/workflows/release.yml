@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-publisher
+  cancel-in-progress: false
+
 jobs:
   linux:
     name: Build Linux release binaries
@@ -32,25 +36,22 @@ jobs:
           EVENT_RELEASE_TAG: ${{ github.event.release.tag_name }}
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
-          COMMIT_SHA: ${{ github.sha }}
         run: |
           if [[ "${EVENT_NAME}" == "release" ]]; then
             tag="${EVENT_RELEASE_TAG}"
-            title="${EVENT_RELEASE_TAG}"
-            prerelease="false"
-          elif [[ "${REF_TYPE}" == "tag" ]]; then
+          elif [[ "${REF_TYPE}" == "tag" && "${REF_NAME}" =~ ^v2\.[0-9]+$ ]]; then
             tag="${REF_NAME}"
-            title="${REF_NAME}"
-            prerelease="false"
           else
-            short_sha="${COMMIT_SHA:0:12}"
-            tag="build-${short_sha}"
-            title="Automated build ${short_sha}"
-            prerelease="true"
+            highest=0
+            while read -r _ ref; do
+              candidate="${ref#refs/tags/}"
+              if [[ "${candidate}" =~ ^v2\.([0-9]+)$ ]] && (( BASH_REMATCH[1] > highest )); then
+                highest="${BASH_REMATCH[1]}"
+              fi
+            done < <(git ls-remote --tags origin 'refs/tags/v2.*')
+            tag="v2.$((highest + 1))"
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "title=${title}" >> "${GITHUB_OUTPUT}"
-          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
 
       - name: Build release binary
         env:
@@ -71,16 +72,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
-          RELEASE_TITLE: ${{ steps.release.outputs.title }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
           if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            args=("${RELEASE_TAG}" --target "${COMMIT_SHA}" --generate-notes --title "${RELEASE_TITLE}")
-            if [[ "${PRERELEASE}" == "true" ]]; then
-              args+=(--prerelease)
-            fi
-            gh release create "${args[@]}"
+            gh release create "${RELEASE_TAG}" \
+              --target "${COMMIT_SHA}" \
+              --generate-notes \
+              --latest \
+              --title "${RELEASE_TAG}"
+          else
+            gh release edit "${RELEASE_TAG}" --latest
           fi
           gh release upload "${RELEASE_TAG}" \
             dist/secret-sniffer-linux-amd64 \
@@ -88,3 +89,8 @@ jobs:
             dist/secret-sniffer-linux-arm64 \
             dist/secret-sniffer-linux-arm64.sha256 \
             --clobber
+
+          gh release list --limit 100 --json tagName --jq '.[] | select(.tagName | startswith("build-")) | .tagName' | \
+            while read -r obsolete_tag; do
+              gh release delete "${obsolete_tag}" --cleanup-tag --yes
+            done
