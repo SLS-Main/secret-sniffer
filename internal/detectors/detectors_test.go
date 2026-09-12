@@ -46,6 +46,24 @@ func TestVerificationStatusesAndFiltering(t *testing.T) {
 	}
 }
 
+func TestVerifyHTTPRequestCapturesBoundedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("response ", 30)))
+	}))
+	defer server.Close()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := verifyHTTPRequest(context.Background(), req)
+	if result.Status != VerificationVerified {
+		t.Fatalf("status=%q", result.Status)
+	}
+	if len([]rune(result.Response)) != 100 {
+		t.Fatalf("response length=%d, response=%q", len([]rune(result.Response)), result.Response)
+	}
+}
+
 func TestVerificationProviderFailuresAreUnknown(t *testing.T) {
 	cases := []struct {
 		status   int

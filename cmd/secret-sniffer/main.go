@@ -103,6 +103,7 @@ func main() {
 	var progressStatePath string
 	var progressInterval time.Duration
 	var verificationStatuses string
+	var verificationWorkers int
 	var enableDetectors string
 	var disableDetectors string
 	var severityOverrides string
@@ -173,6 +174,7 @@ func main() {
 	flag.StringVar(&cfg.GitAdditionalRefs, "additional-ref-policy", "all", "Git additional-ref policy: all, default, selected, none")
 	flag.StringVar(&cfg.GitAuthorizationHeader, "git-authorization-header", os.Getenv("GIT_AUTHORIZATION_HEADER"), "HTTP Authorization header for Git clone; defaults to GIT_AUTHORIZATION_HEADER")
 	flag.BoolVar(&cfg.Verify, "verify", false, "attempt live verification for supported detectors")
+	flag.IntVar(&verificationWorkers, "verification-workers", 4, "number of dedicated concurrent verification workers")
 	flag.StringVar(&verificationStatuses, "verification-statuses", "", "comma-separated verification statuses to retain")
 	flag.StringVar(&include, "include", "", "comma-separated glob patterns to include")
 	flag.StringVar(&exclude, "exclude", "", "comma-separated glob patterns to exclude")
@@ -369,6 +371,10 @@ func main() {
 	cfg.GitBranches = append([]string(nil), gitBranches...)
 	if err := scanner.ValidateConfig(cfg); err != nil {
 		fatal(err)
+	}
+	if cfg.Verify {
+		cfg.Verification = scanner.NewVerificationService(verificationWorkers)
+		defer cfg.Verification.Close()
 	}
 	runtime.GOMAXPROCS(cfg.Workers)
 

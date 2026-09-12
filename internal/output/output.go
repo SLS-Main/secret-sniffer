@@ -122,7 +122,7 @@ func writeSARIF(w io.Writer, findings []detectors.Finding) error {
 			"message":             map[string]string{"text": f.Name + " " + f.Redacted},
 			"locations":           []map[string]any{{"physicalLocation": map[string]any{"artifactLocation": map[string]string{"uri": sarifURI(f.File)}, "region": map[string]int{"startLine": f.Line, "startColumn": f.Column}}}},
 			"partialFingerprints": map[string]string{"secretSnifferFingerprint": f.Fingerprint},
-			"properties":          map[string]any{"verification_status": f.Verification.Status, "verification_error_category": f.Verification.ErrorCategory, "commit": f.Commit, "provenance": f.Provenance},
+			"properties":          map[string]any{"verification_status": f.Verification.Status, "verification_error_category": f.Verification.ErrorCategory, "verification_response": f.Verification.Response, "commit": f.Commit, "provenance": f.Provenance},
 		})
 	}
 	ruleIDs := make([]string, 0, len(rules))

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -64,6 +65,7 @@ type Config struct {
 	GitHubToken            string
 	Progress               progress.ProgressReporter
 	FindingCallback        func([]detectors.Finding) error
+	Verification           *VerificationService
 
 	ScanArchives         bool
 	MaxArchiveDepth      int
@@ -97,7 +99,7 @@ type ScanResult struct {
 type Scanner struct {
 	cfg          Config
 	plan         detectorPlan
-	verification *verificationCache
+	verification verificationRunner
 	instanceID   uint64
 	pathFilter   *pathfilter.Filter
 	configErr    error
@@ -113,7 +115,11 @@ var nextScannerID atomic.Uint64
 
 func New(cfg Config, ds []detectors.Detector) *Scanner {
 	filter, err := newPathFilter(cfg)
-	return &Scanner{cfg: cfg, plan: newDetectorPlan(ds), verification: newVerificationCache(), instanceID: nextScannerID.Add(1), pathFilter: filter, configErr: err, emitted: map[string]struct{}{}, scanOptions: ScanOptions{RetainFindings: true}}
+	verification := verificationRunner(newVerificationCache())
+	if cfg.Verification != nil {
+		verification = cfg.Verification
+	}
+	return &Scanner{cfg: cfg, plan: newDetectorPlan(ds), verification: verification, instanceID: nextScannerID.Add(1), pathFilter: filter, configErr: err, emitted: map[string]struct{}{}, scanOptions: ScanOptions{RetainFindings: true}}
 }
 
 func (s *Scanner) processFindings(ctx context.Context, findings []detectors.Finding) ([]detectors.Finding, error) {
@@ -273,6 +279,10 @@ type verificationCache struct {
 	entries map[string]*verificationEntry
 }
 
+type verificationRunner interface {
+	verify(context.Context, detectors.Candidate) detectors.VerificationResult
+}
+
 type verificationEntry struct {
 	result detectors.VerificationResult
 	ready  chan struct{}
@@ -283,11 +293,19 @@ func newVerificationCache() *verificationCache {
 }
 
 func (c *verificationCache) verify(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
+	return c.verifyWith(ctx, candidate, func(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
+		verifyCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		return candidate.Verifier(verifyCtx, candidate.Secret)
+	})
+}
+
+func (c *verificationCache) verifyWith(ctx context.Context, candidate detectors.Candidate, execute func(context.Context, detectors.Candidate) detectors.VerificationResult) detectors.VerificationResult {
 	if candidate.Verifier == nil {
 		return detectors.VerificationResult{Status: detectors.VerificationUnsupported}
 	}
 	verifierID := reflect.ValueOf(candidate.Verifier).Pointer()
-	key := candidate.DetectorID + "\x00" + candidate.Secret + "\x00" + strconv.FormatUint(uint64(verifierID), 16)
+	key := candidate.Secret + "\x00" + strconv.FormatUint(uint64(verifierID), 16)
 	c.mu.Lock()
 	if entry, ok := c.entries[key]; ok {
 		c.mu.Unlock()
@@ -302,11 +320,9 @@ func (c *verificationCache) verify(ctx context.Context, candidate detectors.Cand
 	c.entries[key] = entry
 	c.mu.Unlock()
 
-	verifyCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	entry.result = candidate.Verifier(verifyCtx, candidate.Secret)
-	cancel()
+	entry.result = execute(ctx, candidate)
 	close(entry.ready)
-	if entry.result.Status == detectors.VerificationUnknown {
+	if entry.result.ErrorCategory == "cancelled" {
 		c.mu.Lock()
 		if c.entries[key] == entry {
 			delete(c.entries, key)
@@ -314,6 +330,83 @@ func (c *verificationCache) verify(ctx context.Context, candidate detectors.Cand
 		c.mu.Unlock()
 	}
 	return entry.result
+}
+
+type verificationJob struct {
+	ctx       context.Context
+	candidate detectors.Candidate
+	result    chan detectors.VerificationResult
+}
+
+// VerificationService isolates provider requests from scan workers and shares
+// results across every scanner participating in a job.
+type VerificationService struct {
+	cache  *verificationCache
+	client *http.Client
+	jobs   chan verificationJob
+	wg     sync.WaitGroup
+}
+
+func NewVerificationService(workers int) *VerificationService {
+	if workers < 1 {
+		workers = 1
+	}
+	transport := &http.Transport{}
+	if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = defaultTransport.Clone()
+	}
+	transport.Proxy = http.ProxyFromEnvironment
+	service := &VerificationService{
+		cache: newVerificationCache(),
+		client: &http.Client{
+			Transport:     transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+		jobs: make(chan verificationJob, workers*4),
+	}
+	for range workers {
+		service.wg.Add(1)
+		go service.worker()
+	}
+	return service
+}
+
+func (s *VerificationService) verify(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
+	return s.cache.verifyWith(ctx, candidate, s.execute)
+}
+
+func (s *VerificationService) execute(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
+	job := verificationJob{ctx: ctx, candidate: candidate, result: make(chan detectors.VerificationResult, 1)}
+	select {
+	case <-ctx.Done():
+		return detectors.VerificationResult{Status: detectors.VerificationUnknown, ErrorCategory: "cancelled", Message: "verification cancelled"}
+	case s.jobs <- job:
+	}
+	select {
+	case <-ctx.Done():
+		return detectors.VerificationResult{Status: detectors.VerificationUnknown, ErrorCategory: "cancelled", Message: "verification cancelled"}
+	case result := <-job.result:
+		return result
+	}
+}
+
+func (s *VerificationService) worker() {
+	defer s.wg.Done()
+	for job := range s.jobs {
+		verifyCtx, cancel := context.WithTimeout(job.ctx, 8*time.Second)
+		verifyCtx = detectors.WithVerificationHTTPClient(verifyCtx, s.client)
+		result := job.candidate.Verifier(verifyCtx, job.candidate.Secret)
+		cancel()
+		job.result <- result
+	}
+}
+
+func (s *VerificationService) Close() {
+	if s == nil {
+		return
+	}
+	close(s.jobs)
+	s.wg.Wait()
 }
 
 func (s *Scanner) Scan(ctx context.Context) ([]detectors.Finding, error) {

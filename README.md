@@ -137,6 +137,7 @@ AZURE_STORAGE_ACCOUNT='accountname' ./secret-sniffer \
 --additional-ref-policy  Additional refs: all, default, selected, none.
 --git-authorization-header  HTTP Git authorization header; defaults to GIT_AUTHORIZATION_HEADER.
 --verify              Attempt live provider verification for supported detectors.
+--verification-workers Dedicated concurrent provider verification workers. Default: 4.
 --verification-statuses  Comma-separated statuses to retain: verified, unverified, unknown, not_attempted, unsupported.
 --format              Output format: human, json, jsonl, sarif.
 --output              Write findings to this file. JSONL streams during scanning.
@@ -271,7 +272,11 @@ Any nonzero policy exit leaves progress in the `failed` terminal phase. Signal c
 
 ## Verification Results
 
-Machine findings include a structured `verification` object. Status is one of `verified`, `unverified`, `unknown`, `not_attempted`, or `unsupported`. Provider timeouts, transport failures, rate limits, server failures, and ambiguous authorization failures are `unknown`, not `unverified`. The compatibility `verified` boolean remains and is true only for status `verified`.
+Machine findings include a structured `verification` object. Status is one of `verified`, `unverified`, `unknown`, `not_attempted`, or `unsupported`. Provider timeouts, transport failures, rate limits, server failures, and ambiguous authorization failures are `unknown`, not `unverified`. The compatibility `verified` boolean remains and is true only for status `verified`. When an endpoint returns a body, a whitespace-normalized response excerpt is included as `response` and limited to 100 characters.
+
+Provider requests run through a bounded pool controlled by `--verification-workers`. All scanners in one invocation share an in-flight and completed-result cache keyed by the verifier and secret, so the same credential is contacted at most once per job even when it appears in many files, repositories, commits, archives, or cloud objects. Cancelled attempts may be retried; completed provider responses, including rate-limit and network outcomes, are reused for the remainder of the job.
+
+Verification HTTP requests honor Go's standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment settings. Cross-endpoint redirects are not followed, preventing credential-bearing headers from being forwarded to redirect targets.
 
 Use `--verification-statuses verified,unknown` to retain a subset. Filtering occurs before output, summaries, baseline generation, and `--fail-on-findings` evaluation.
 
@@ -861,7 +866,7 @@ Verification is off by default:
 
 Verification may contact provider APIs with candidate credentials. Only use it when you are authorized to validate discovered credentials.
 
-Currently supported verification hooks include GitHub and OpenAI. More provider verifiers are planned.
+The built-in registry currently exposes 52 verifiable patterns across GitHub, GitLab, Azure DevOps, package registries, AI providers, communications platforms, infrastructure services, and SaaS APIs. `--list-detectors` reports the `verifiable` status for each detector. Credentials that require a paired username, account ID, tenant, regional hostname, or second secret remain unsupported until that context can be captured reliably; potentially mutating verification calls are not enabled by default.
 
 ## Detector Inventory
 

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -532,6 +533,40 @@ func TestVerificationCacheDeduplicatesAndUsesScanContext(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&canceledCalls); got != 2 {
 		t.Fatalf("canceled verifier calls=%d, want 2", got)
+	}
+}
+
+func TestVerificationServiceDeduplicatesAcrossConcurrentScanners(t *testing.T) {
+	service := NewVerificationService(2)
+	defer service.Close()
+	var calls int32
+	verifier := func(context.Context, string) detectors.VerificationResult {
+		atomic.AddInt32(&calls, 1)
+		time.Sleep(10 * time.Millisecond)
+		return detectors.VerificationResult{Status: detectors.VerificationVerified, Response: "account"}
+	}
+	candidates := []detectors.Candidate{
+		{DetectorID: "one", Secret: "same-secret", Verifier: verifier},
+		{DetectorID: "two", Secret: "same-secret", Verifier: verifier},
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(candidate detectors.Candidate) {
+			defer wg.Done()
+			result := service.verify(context.Background(), candidate)
+			if result.Status != detectors.VerificationVerified || result.Response != "account" {
+				t.Errorf("unexpected result: %#v", result)
+			}
+		}(candidates[i%len(candidates)])
+	}
+	wg.Wait()
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("verifier calls=%d, want 1", got)
+	}
+	transport, ok := service.client.Transport.(*http.Transport)
+	if !ok || transport.Proxy == nil {
+		t.Fatal("verification transport must honor proxy environment settings")
 	}
 }
 
