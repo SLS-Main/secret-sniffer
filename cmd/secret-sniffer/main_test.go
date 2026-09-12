@@ -303,17 +303,99 @@ func TestIsGitHubDiscovery(t *testing.T) {
 }
 
 func TestProgressSourceType(t *testing.T) {
-	if got := progressSourceType("bucket", false, "", "", false, "", false, "."); got != "s3" {
+	if got := progressSourceType("bucket", false, "", false, "", "", "", false, "", false, "."); got != "s3" {
 		t.Fatalf("S3 source type=%q", got)
 	}
-	if got := progressSourceType("", false, "", "", false, "", true, "/tmp/repo"); got != "git" {
+	if got := progressSourceType("", false, "container", false, "", "", "", false, "", false, "."); got != "azure_blob" {
+		t.Fatalf("Azure Blob source type=%q", got)
+	}
+	if got := progressSourceType("", false, "", false, "ado-org", "", "", false, "", false, "."); got != "azure_devops" {
+		t.Fatalf("Azure DevOps source type=%q", got)
+	}
+	if got := progressSourceType("", false, "", false, "", "", "", false, "", true, "/tmp/repo"); got != "git" {
 		t.Fatalf("local history source type=%q", got)
 	}
-	if got := progressSourceType("", false, "acme", "", false, "", false, "."); got != "github" {
+	if got := progressSourceType("", false, "", false, "", "acme", "", false, "", false, "."); got != "github" {
 		t.Fatalf("GitHub source type=%q", got)
 	}
-	if got := progressSourceType("", false, "", "", false, "", false, "/tmp/files"); got != "filesystem" {
+	if got := progressSourceType("", false, "", false, "", "", "", false, "", false, "/tmp/files"); got != "filesystem" {
 		t.Fatalf("filesystem source type=%q", got)
+	}
+}
+
+func TestAzureAuthModeInference(t *testing.T) {
+	if got := azureAuthMode(azureRunOptions{ConnectionString: "UseDevelopmentStorage=true"}); got != "connection-string" {
+		t.Fatalf("connection string mode=%q", got)
+	}
+	if got := azureAuthMode(azureRunOptions{SharedKey: "key"}); got != "shared-key" {
+		t.Fatalf("shared key mode=%q", got)
+	}
+	if got := azureAuthMode(azureRunOptions{SASURL: "https://acct.blob.core.windows.net/?sig=x"}); got != "sas" {
+		t.Fatalf("sas mode=%q", got)
+	}
+	if got := azureAuthMode(azureRunOptions{Anonymous: true}); got != "anonymous" {
+		t.Fatalf("anonymous mode=%q", got)
+	}
+	if got := azureAuthMode(azureRunOptions{}); got != "default" {
+		t.Fatalf("default mode=%q", got)
+	}
+	for _, mode := range []string{"client-secret", "client-certificate", "managed-identity", "workload-identity", "azure-cli", "azure-dev-cli"} {
+		if err := validateAzureAuthMode(mode); err != nil {
+			t.Fatalf("mode %q should be valid: %v", mode, err)
+		}
+	}
+	if err := validateAzureAuthMode("bogus"); err == nil {
+		t.Fatal("expected invalid auth mode error")
+	}
+}
+
+func TestAzureDevOpsAuthModes(t *testing.T) {
+	if got := azureDevOpsAuthMode(azureDevOpsOptions{PAT: "pat"}); got != "pat" {
+		t.Fatalf("pat mode=%q", got)
+	}
+	if got := azureDevOpsAuthMode(azureDevOpsOptions{BearerToken: "token"}); got != "bearer" {
+		t.Fatalf("bearer mode=%q", got)
+	}
+	if got := azureDevOpsAuthMode(azureDevOpsOptions{}); got != "default" {
+		t.Fatalf("default mode=%q", got)
+	}
+	for _, mode := range []string{"default", "client-secret", "client-certificate", "managed-identity", "workload-identity", "azure-cli", "azure-dev-cli", "pat", "bearer", "anonymous"} {
+		if err := validateAzureDevOpsAuthMode(mode); err != nil {
+			t.Fatalf("mode %q should be valid: %v", mode, err)
+		}
+	}
+	if err := validateAzureDevOpsAuthMode("bogus"); err == nil {
+		t.Fatal("expected invalid auth mode error")
+	}
+}
+
+func TestAzureDevOpsPATAuthHeader(t *testing.T) {
+	header, err := azureDevOpsAuthHeader(context.Background(), azureDevOpsOptions{PAT: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header != "Authorization: Basic OnNlY3JldA==" {
+		t.Fatalf("header=%q", header)
+	}
+}
+
+func TestNormalizeAzureSASOptionsInfersSelectors(t *testing.T) {
+	opts := azureRunOptions{SASURL: "https://acct.blob.core.windows.net/configs/path/to/app.env?sv=1&sig=abc"}
+	normalizeAzureSASOptions(&opts)
+	if opts.Account != "acct" {
+		t.Fatalf("account=%q", opts.Account)
+	}
+	if len(opts.Containers) != 1 || opts.Containers[0] != "configs" {
+		t.Fatalf("containers=%v", opts.Containers)
+	}
+	if len(opts.ExactBlobs) != 1 || opts.ExactBlobs[0] != "path/to/app.env" {
+		t.Fatalf("exact blobs=%v", opts.ExactBlobs)
+	}
+	if opts.SASURL != "https://acct.blob.core.windows.net/?sv=1&sig=abc" {
+		t.Fatalf("sas url=%q", opts.SASURL)
+	}
+	if opts.ServiceURL != opts.SASURL {
+		t.Fatalf("service url=%q", opts.ServiceURL)
 	}
 }
 

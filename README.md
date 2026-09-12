@@ -1,6 +1,6 @@
 # secret-sniffer
 
-High-concurrency GitHub, S3, and filesystem secret scanner written in Go.
+High-concurrency GitHub, S3, Azure Blob Storage, and filesystem secret scanner written in Go.
 
 `secret-sniffer` is designed around provider-specific detectors, keyword prefilters, format validation, deduplication, optional verification, and remediation-focused raw-secret output by default. It is intended for large servers with many CPU cores and enough memory to scan large repositories aggressively.
 
@@ -73,6 +73,20 @@ Scan every repository accessible to a GitHub App installation token or PAT:
 GITHUB_TOKEN='ghs_or_pat_here' ./secret-sniffer --github-accessible --git-history --workers 32 --format jsonl > accessible.findings.jsonl
 ```
 
+Scan Azure DevOps repositories with an enterprise app registration:
+
+```bash
+./secret-sniffer \
+  --azure-devops-org ORG \
+  --azure-devops-auth client-secret \
+  --azure-tenant-id TENANT_ID \
+  --azure-client-id APP_CLIENT_ID \
+  --azure-client-secret APP_CLIENT_SECRET \
+  --git-history \
+  --format jsonl \
+  --output azure-devops-findings.jsonl
+```
+
 Scan repositories listed in a text file:
 
 ```bash
@@ -89,6 +103,18 @@ Scan several S3 buckets concurrently without downloading excluded file types:
   --exclude-extensions png,jpg,jpeg,gif,mp4 \
   --format jsonl \
   --output s3-findings.jsonl
+```
+
+Scan Azure Blob Storage containers with DefaultAzureCredential auth:
+
+```bash
+AZURE_STORAGE_ACCOUNT='accountname' ./secret-sniffer \
+  --azure-blob-containers app-config,backups,artifacts \
+  --azure-blob-container-concurrency 3 \
+  --azure-blob-concurrency 16 \
+  --exclude-extensions png,jpg,jpeg,gif,mp4 \
+  --format jsonl \
+  --output azure-blob-findings.jsonl
 ```
 
 ## Common Options
@@ -143,6 +169,12 @@ Scan several S3 buckets concurrently without downloading excluded file types:
 --github-app-id       GitHub App ID for minting installation tokens. Defaults to GITHUB_APP_ID.
 --github-app-private-key  Path to GitHub App private key PEM. Defaults to GITHUB_APP_PRIVATE_KEY.
 --github-installation-id  Optional GitHub App installation ID. Defaults to GITHUB_INSTALLATION_ID.
+--azure-devops-org    Comma-separated Azure DevOps organization names to enumerate and scan.
+--azure-devops-project Comma-separated Azure DevOps project names. Default: all projects in each org.
+--azure-devops-base-url Azure DevOps base URL. Defaults to https://dev.azure.com or AZURE_DEVOPS_BASE_URL.
+--azure-devops-auth   Azure DevOps auth mode: default, client-secret, client-certificate, managed-identity, workload-identity, azure-cli, azure-dev-cli, pat, bearer, anonymous.
+--azure-devops-pat    Azure DevOps PAT for PAT/basic auth. Defaults to AZURE_DEVOPS_PAT.
+--azure-devops-token  Azure DevOps bearer token. Defaults to AZURE_DEVOPS_TOKEN.
 --fail-on-findings    Exit with status 2 when findings remain after baseline filtering.
 --fail-on-scan-errors Exit with status 1 when any selected target fails.
 --redact              Omit raw secrets from machine-readable output.
@@ -178,9 +210,36 @@ Scan several S3 buckets concurrently without downloading excluded file types:
 --aws-role-arn       Role ARN to assume; repeatable in source-to-target chain order.
 --aws-role-external-id  External ID for explicit role assumptions.
 --aws-role-session-name Session name for explicit role assumptions.
+--azure-storage-account Azure Storage account name. Defaults to AZURE_STORAGE_ACCOUNT.
+--azure-blob-service-url Azure Blob service URL. Defaults to AZURE_BLOB_SERVICE_URL.
+--azure-blob-containers Comma-separated Azure Blob container names to scan concurrently.
+--azure-blob-all-containers Discover and scan every container in the Azure Storage account.
+--azure-blob-prefix  Only scan blobs under this name prefix.
+--azure-blob-container-concurrency Number of containers to scan concurrently. Default: 4.
+--azure-blob-concurrency Concurrent blob downloads/scans per container. Default: --workers.
+--azure-blob-name    Exact blob name selector. Repeatable.
+--azure-blob-exclude-containers Comma-separated container exclusions.
+--azure-blob-retry-attempts Application-level transient retry attempts. Default: 4.
+--azure-blob-retry-base-delay Base exponential retry delay. Default: 200ms.
+--azure-storage-auth Azure Storage auth mode: default, client-secret, client-certificate, managed-identity, workload-identity, azure-cli, azure-dev-cli, connection-string, shared-key, sas, anonymous.
+--azure-storage-key  Account key for shared-key auth. Defaults to AZURE_STORAGE_KEY.
+--azure-storage-connection-string Connection string. Defaults to AZURE_STORAGE_CONNECTION_STRING.
+--azure-storage-sas-url Blob service SAS URL. Defaults to AZURE_STORAGE_SAS_URL.
+--azure-storage-anonymous Use anonymous/no-credential Blob access.
+--azure-tenant-id    Microsoft Entra tenant ID. Defaults to AZURE_TENANT_ID.
+--azure-client-id    Microsoft Entra client ID. Defaults to AZURE_CLIENT_ID.
+--azure-client-secret Microsoft Entra client secret. Defaults to AZURE_CLIENT_SECRET.
+--azure-client-certificate PEM or PKCS#12 client certificate path. Defaults to AZURE_CLIENT_CERTIFICATE_PATH.
+--azure-client-certificate-password Client certificate password. Defaults to AZURE_CLIENT_CERTIFICATE_PASSWORD.
+--azure-federated-token-file Federated token file for workload identity. Defaults to AZURE_FEDERATED_TOKEN_FILE.
+--azure-managed-identity-id User-assigned managed identity client ID.
 --progress-state      Write atomic machine-readable scan progress to this path.
 --progress-interval   Active-item snapshot interval. Default: 500ms.
 ```
+
+Azure Blob authentication supports `DefaultAzureCredential` by default, including environment service-principal credentials, workload identity, managed identity, Azure CLI, and Azure Developer CLI. You can also force a specific Microsoft Entra mode with `client-secret`, `client-certificate`, `managed-identity`, `workload-identity`, `azure-cli`, or `azure-dev-cli`. Storage-specific auth is supported through account shared keys, connection strings, SAS URLs, and anonymous public-container access. Container or blob SAS URLs infer the container and exact blob selector when those flags are omitted.
+
+Azure DevOps authentication supports PAT/basic auth, explicit bearer tokens, anonymous public project access, and the same Microsoft Entra credential modes used for Azure Blob scans. Enterprise app registrations should use `--azure-devops-auth client-secret` or `client-certificate` with `--azure-tenant-id` and `--azure-client-id`. Azure DevOps Entra tokens are requested for the Azure DevOps resource scope and refreshed per repository clone during long scans.
 
 ## Machine-Readable Progress
 
@@ -194,7 +253,7 @@ Use `--progress-state` when an orchestrator or UI needs stable progress without 
   --format jsonl
 ```
 
-The schema is versioned and includes a monotonically increasing sequence, source and target metadata, aggregate counters, one entry per active worker slot, and the most recently completed item. S3 entries include bucket, object path, download bytes, and download/scan stage. Filesystem entries include the active path, archive entries include the outer path plus entry/depth, and Git-history entries include path and commit.
+The schema is versioned and includes a monotonically increasing sequence, source and target metadata, aggregate counters, one entry per active worker slot, and the most recently completed item. S3 entries include bucket, object path, download bytes, and download/scan stage. Azure Blob entries include account/container, blob path, download bytes, and download/scan stage. Azure DevOps repository scans use the same Git clone and history progress fields as GitHub scans. Filesystem entries include the active path, archive entries include the outer path plus entry/depth, and Git-history entries include path and commit.
 
 Stable phases are `initializing`, `discovering`, `listing`, `cloning`, `scanning_worktree`, `scanning_history`, `downloading`, `extracting`, `scanning`, `finalizing`, `completed`, `failed`, and `cancelled`. Stable item stages are `queued`, `downloading`, `downloaded`, `extracting`, `scanning`, `completed`, `skipped`, and `failed`.
 

@@ -48,6 +48,11 @@ type Provenance struct {
 	S3VersionID     string    `json:"s3_version_id,omitempty"`
 	S3ETag          string    `json:"s3_etag,omitempty"`
 	S3Region        string    `json:"s3_region,omitempty"`
+	AzureAccount    string    `json:"azure_account,omitempty"`
+	AzureContainer  string    `json:"azure_container,omitempty"`
+	AzureBlob       string    `json:"azure_blob,omitempty"`
+	AzureVersionID  string    `json:"azure_version_id,omitempty"`
+	AzureETag       string    `json:"azure_etag,omitempty"`
 }
 
 type VerificationStatus string
@@ -1301,6 +1306,14 @@ func baseProvenance(file, commit string) *Provenance {
 		provenance.Provider = "s3"
 		bucketAndKey := strings.TrimPrefix(parts[0], "s3://")
 		provenance.S3Bucket, provenance.S3Key, _ = strings.Cut(bucketAndKey, "/")
+	} else if strings.HasPrefix(file, "azureblob://") {
+		provenance.Provider = "azure_blob"
+		accountContainerAndBlob := strings.TrimPrefix(parts[0], "azureblob://")
+		account, containerAndBlob, _ := strings.Cut(accountContainerAndBlob, "/")
+		container, blob, _ := strings.Cut(containerAndBlob, "/")
+		provenance.AzureAccount = account
+		provenance.AzureContainer = container
+		provenance.AzureBlob = blob
 	} else if commit != "" {
 		provenance.Provider = "git"
 	} else {
@@ -1319,6 +1332,28 @@ func SetS3Provenance(finding Finding, bucket, key, versionID, etag, region strin
 	finding.Provenance.S3VersionID = versionID
 	finding.Provenance.S3ETag = etag
 	finding.Provenance.S3Region = region
+	identity := finding.File
+	if versionID != "" {
+		identity += "?versionId=" + versionID
+	}
+	newFingerprint := findingFingerprint(finding.DetectorID, finding.Secret, identity, finding.Commit)
+	if newFingerprint != finding.Fingerprint {
+		finding.LegacyFingerprint = finding.Fingerprint
+		finding.Fingerprint = newFingerprint
+	}
+	return finding
+}
+
+func SetAzureBlobProvenance(finding Finding, account, container, blob, versionID, etag string) Finding {
+	if finding.Provenance == nil {
+		finding.Provenance = &Provenance{}
+	}
+	finding.Provenance.Provider = "azure_blob"
+	finding.Provenance.AzureAccount = account
+	finding.Provenance.AzureContainer = container
+	finding.Provenance.AzureBlob = blob
+	finding.Provenance.AzureVersionID = versionID
+	finding.Provenance.AzureETag = etag
 	identity := finding.File
 	if versionID != "" {
 		identity += "?versionId=" + versionID

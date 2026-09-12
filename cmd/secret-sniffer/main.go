@@ -126,6 +126,35 @@ func main() {
 	var s3VersionPolicy string
 	var s3DeleteMarkerPolicy string
 	var s3StorageClassPolicy string
+	var azureStorageAccount string
+	var azureBlobServiceURL string
+	var azureBlobContainers string
+	var azureBlobPrefix string
+	var azureStorageAuth string
+	var azureStorageKey string
+	var azureStorageConnectionString string
+	var azureStorageSASURL string
+	var azureBlobExcludeContainers string
+	var azureTenantID string
+	var azureClientID string
+	var azureClientSecret string
+	var azureClientCertificate string
+	var azureClientCertificatePassword string
+	var azureFederatedTokenFile string
+	var azureManagedIdentityID string
+	var azureDevOpsOrgs string
+	var azureDevOpsProjects string
+	var azureDevOpsBaseURL string
+	var azureDevOpsAuth string
+	var azureDevOpsPAT string
+	var azureDevOpsToken string
+	var azureBlobContainerConcurrency int
+	var azureBlobConcurrency int
+	var azureBlobRetryAttempts int
+	var azureBlobRetryBaseDelay time.Duration
+	var azureBlobAllContainers bool
+	var azureStorageAnonymous bool
+	var azureBlobExactNames stringListFlag
 
 	flag.StringVar(&cfg.Target, "target", ".", "local path or GitHub repository URL to scan")
 	flag.IntVar(&cfg.Workers, "workers", runtime.NumCPU(), "number of concurrent workers")
@@ -211,6 +240,35 @@ func main() {
 	flag.Var(&awsRoleARNs, "aws-role-arn", "AWS role ARN to assume; repeatable in source-to-target chain order")
 	flag.StringVar(&awsRoleExternalID, "aws-role-external-id", "", "external ID supplied to each explicit role assumption")
 	flag.StringVar(&awsRoleSessionName, "aws-role-session-name", "secret-sniffer", "session name for explicit AWS role assumptions")
+	flag.StringVar(&azureStorageAccount, "azure-storage-account", os.Getenv("AZURE_STORAGE_ACCOUNT"), "Azure Storage account name; defaults to AZURE_STORAGE_ACCOUNT")
+	flag.StringVar(&azureBlobServiceURL, "azure-blob-service-url", os.Getenv("AZURE_BLOB_SERVICE_URL"), "Azure Blob service URL, such as https://account.blob.core.windows.net/; defaults to AZURE_BLOB_SERVICE_URL")
+	flag.StringVar(&azureBlobContainers, "azure-blob-containers", "", "comma-separated Azure Blob container names to scan concurrently")
+	flag.BoolVar(&azureBlobAllContainers, "azure-blob-all-containers", false, "discover and scan every container in the Azure Storage account")
+	flag.StringVar(&azureBlobPrefix, "azure-blob-prefix", "", "only scan Azure blobs under this name prefix")
+	flag.IntVar(&azureBlobContainerConcurrency, "azure-blob-container-concurrency", 4, "number of Azure Blob containers to scan concurrently")
+	flag.IntVar(&azureBlobConcurrency, "azure-blob-concurrency", 0, "number of Azure blobs to download and scan concurrently per container; defaults to --workers")
+	flag.Var(&azureBlobExactNames, "azure-blob-name", "exact Azure blob name to scan; repeatable")
+	flag.StringVar(&azureBlobExcludeContainers, "azure-blob-exclude-containers", "", "comma-separated Azure Blob containers to exclude")
+	flag.IntVar(&azureBlobRetryAttempts, "azure-blob-retry-attempts", 4, "application-level attempts for transient Azure Blob operations")
+	flag.DurationVar(&azureBlobRetryBaseDelay, "azure-blob-retry-base-delay", 200*time.Millisecond, "base delay for exponential Azure Blob retry backoff")
+	flag.StringVar(&azureStorageAuth, "azure-storage-auth", "", "Azure Storage auth mode: default, connection-string, shared-key, sas, anonymous; inferred when omitted")
+	flag.StringVar(&azureStorageKey, "azure-storage-key", os.Getenv("AZURE_STORAGE_KEY"), "Azure Storage account key for shared-key auth; defaults to AZURE_STORAGE_KEY")
+	flag.StringVar(&azureStorageConnectionString, "azure-storage-connection-string", os.Getenv("AZURE_STORAGE_CONNECTION_STRING"), "Azure Storage connection string; defaults to AZURE_STORAGE_CONNECTION_STRING")
+	flag.StringVar(&azureStorageSASURL, "azure-storage-sas-url", os.Getenv("AZURE_STORAGE_SAS_URL"), "Azure Blob service SAS URL; defaults to AZURE_STORAGE_SAS_URL")
+	flag.BoolVar(&azureStorageAnonymous, "azure-storage-anonymous", false, "use anonymous/no-credential Azure Blob access")
+	flag.StringVar(&azureTenantID, "azure-tenant-id", os.Getenv("AZURE_TENANT_ID"), "Microsoft Entra tenant ID for explicit Azure AD auth; defaults to AZURE_TENANT_ID")
+	flag.StringVar(&azureClientID, "azure-client-id", os.Getenv("AZURE_CLIENT_ID"), "Microsoft Entra client ID for explicit Azure AD auth; defaults to AZURE_CLIENT_ID")
+	flag.StringVar(&azureClientSecret, "azure-client-secret", os.Getenv("AZURE_CLIENT_SECRET"), "Microsoft Entra client secret for client-secret auth; defaults to AZURE_CLIENT_SECRET")
+	flag.StringVar(&azureClientCertificate, "azure-client-certificate", os.Getenv("AZURE_CLIENT_CERTIFICATE_PATH"), "PEM or PKCS#12 client certificate path for client-certificate auth; defaults to AZURE_CLIENT_CERTIFICATE_PATH")
+	flag.StringVar(&azureClientCertificatePassword, "azure-client-certificate-password", os.Getenv("AZURE_CLIENT_CERTIFICATE_PASSWORD"), "client certificate password; defaults to AZURE_CLIENT_CERTIFICATE_PASSWORD")
+	flag.StringVar(&azureFederatedTokenFile, "azure-federated-token-file", os.Getenv("AZURE_FEDERATED_TOKEN_FILE"), "federated token file for workload-identity auth; defaults to AZURE_FEDERATED_TOKEN_FILE")
+	flag.StringVar(&azureManagedIdentityID, "azure-managed-identity-id", "", "user-assigned managed identity client ID for managed-identity auth")
+	flag.StringVar(&azureDevOpsOrgs, "azure-devops-org", "", "comma-separated Azure DevOps organization names to enumerate and scan")
+	flag.StringVar(&azureDevOpsProjects, "azure-devops-project", "", "comma-separated Azure DevOps project names; defaults to all projects in each organization")
+	flag.StringVar(&azureDevOpsBaseURL, "azure-devops-base-url", os.Getenv("AZURE_DEVOPS_BASE_URL"), "Azure DevOps base URL; defaults to https://dev.azure.com or AZURE_DEVOPS_BASE_URL")
+	flag.StringVar(&azureDevOpsAuth, "azure-devops-auth", "", "Azure DevOps auth mode: default, client-secret, client-certificate, managed-identity, workload-identity, azure-cli, azure-dev-cli, pat, bearer, anonymous; inferred when omitted")
+	flag.StringVar(&azureDevOpsPAT, "azure-devops-pat", os.Getenv("AZURE_DEVOPS_PAT"), "Azure DevOps PAT for PAT/basic auth; defaults to AZURE_DEVOPS_PAT")
+	flag.StringVar(&azureDevOpsToken, "azure-devops-token", os.Getenv("AZURE_DEVOPS_TOKEN"), "Azure DevOps bearer token; defaults to AZURE_DEVOPS_TOKEN")
 	flag.StringVar(&progressStatePath, "progress-state", "", "write atomic machine-readable scan progress to this path")
 	flag.DurationVar(&progressInterval, "progress-interval", 500*time.Millisecond, "interval for active-item progress snapshots")
 	flag.BoolVar(&showVersion, "version", false, "print version")
@@ -225,7 +283,7 @@ func main() {
 	start := time.Now()
 	console := newConsole(quiet, noColor)
 	if progressStatePath != "" && !listDetectors && !truffleHogParity {
-		reporter, err := progress.New(progressStatePath, progressInterval, progressSourceType(s3Buckets, s3AllBuckets, githubOrgs, githubEnterprise, githubAccessible, repoListPath, cfg.GitHistory, cfg.Target), progressTarget(s3Buckets, s3AllBuckets, githubOrgs, githubEnterprise, githubAccessible, repoListPath, cfg.Target), func(err error) {
+		reporter, err := progress.New(progressStatePath, progressInterval, progressSourceType(s3Buckets, s3AllBuckets, azureBlobContainers, azureBlobAllContainers, azureDevOpsOrgs, githubOrgs, githubEnterprise, githubAccessible, repoListPath, cfg.GitHistory, cfg.Target), progressTarget(s3Buckets, s3AllBuckets, azureBlobContainers, azureBlobAllContainers, azureDevOpsOrgs, githubOrgs, githubEnterprise, githubAccessible, repoListPath, cfg.Target), func(err error) {
 			console.warning("Progress state write failed: %v", err)
 		})
 		if err != nil {
@@ -315,6 +373,44 @@ func main() {
 	runtime.GOMAXPROCS(cfg.Workers)
 
 	console.step("Starting scan")
+	if azureBlobContainers != "" || azureBlobAllContainers {
+		if azureBlobConcurrency < 1 {
+			azureBlobConcurrency = cfg.Workers
+		}
+		findings, err := runAzureBlobScan(ctx, azureRunOptions{
+			ScannerConfig: cfg, Registry: registry, Account: azureStorageAccount, ServiceURL: azureBlobServiceURL,
+			Containers: splitCSV(azureBlobContainers), AllContainers: azureBlobAllContainers, Prefix: azureBlobPrefix,
+			ContainerConcurrency: azureBlobContainerConcurrency, BlobConcurrency: azureBlobConcurrency,
+			Auth: azureStorageAuth, SharedKey: azureStorageKey, ConnectionString: azureStorageConnectionString,
+			SASURL: azureStorageSASURL, Anonymous: azureStorageAnonymous, Format: format, OutputPath: outputPath,
+			TenantID: azureTenantID, ClientID: azureClientID, ClientSecret: azureClientSecret,
+			ClientCertificate: azureClientCertificate, ClientCertPassword: azureClientCertificatePassword,
+			FederatedTokenFile: azureFederatedTokenFile, ManagedIdentityID: azureManagedIdentityID,
+			OutputFlushFindings: outputFlushFindings, IncludeSecrets: noRedact && !redact,
+			BaselinePath: baselinePath, WriteBaselinePath: writeBaselinePath, CustomDetectorsPath: customPath,
+			VerificationStatuses: verificationFilter, MaxObjectBytes: maxObjectBytes,
+			ExactBlobs: append([]string(nil), azureBlobExactNames...), ExcludeContainers: splitCSV(azureBlobExcludeContainers),
+			RetryAttempts: azureBlobRetryAttempts, RetryBaseDelay: azureBlobRetryBaseDelay, Console: console, StartedAt: start,
+		})
+		var scanFailures *azureScanFailuresError
+		if err != nil && !errors.As(err, &scanFailures) {
+			if ctx.Err() != nil {
+				fatal(ctx.Err())
+			}
+			fatal(err)
+		}
+		if ctx.Err() != nil {
+			fatal(ctx.Err())
+		}
+		console.done(findings, time.Since(start).Round(time.Millisecond))
+		exitCode := scanExitCode(failOnScanErrors && scanFailures != nil, failOnFindings, findings)
+		if exitCode != 0 {
+			finishProgress(errors.New(exitReason(exitCode)))
+			os.Exit(exitCode)
+		}
+		finishProgress(nil)
+		return
+	}
 	if s3Buckets != "" || s3AllBuckets {
 		if s3ObjectConcurrency < 1 {
 			s3ObjectConcurrency = cfg.Workers
@@ -362,6 +458,29 @@ func main() {
 	targets, tokenByTarget, _, installationByTarget, summary, err := scanTargets(ctx, cfg.Target, repoListPath, githubOrgs, githubEnterprise, githubAccessible, githubClients, console)
 	if err != nil {
 		fatal(err)
+	}
+	authHeaderByTarget := map[string]string{}
+	azureDevOpsOpts := azureDevOpsOptions{
+		Organizations: splitCSV(azureDevOpsOrgs), Projects: splitCSV(azureDevOpsProjects), BaseURL: azureDevOpsBaseURL,
+		Auth: azureDevOpsAuth, PAT: azureDevOpsPAT, BearerToken: azureDevOpsToken,
+		TenantID: azureTenantID, ClientID: azureClientID, ClientSecret: azureClientSecret,
+		ClientCertificate: azureClientCertificate, ClientCertPassword: azureClientCertificatePassword,
+		FederatedTokenFile: azureFederatedTokenFile, ManagedIdentityID: azureManagedIdentityID, Console: console,
+	}
+	azureDevOpsTargets, azureDevOpsHeaders, err := discoverAzureDevOpsRepositories(ctx, azureDevOpsOpts)
+	if err != nil {
+		fatal(err)
+	}
+	if len(azureDevOpsTargets) > 0 {
+		if len(targets) == 1 && targets[0] == cfg.Target && !isGitHubDiscovery(githubOrgs, githubEnterprise, githubAccessible) && repoListPath == "" {
+			targets = nil
+		}
+		targets = append(targets, azureDevOpsTargets...)
+		targets = dedupeStrings(targets)
+		for target, header := range azureDevOpsHeaders {
+			authHeaderByTarget[target] = header
+		}
+		summary.TotalRepositories = len(targets)
 	}
 	console.discoverySummary(summary)
 	jobPath := ""
@@ -494,6 +613,27 @@ func main() {
 				targetCfg := cfg
 				targetCfg.Target = target
 				targetCfg.GitHubToken = tokenByTarget[target]
+				if authHeader := authHeaderByTarget[target]; authHeader != "" {
+					targetCfg.GitAuthorizationHeader = authHeader
+					if azureDevOpsAuthModeUsesAAD(azureDevOpsAuthMode(azureDevOpsOpts)) {
+						refreshedHeader, err := azureDevOpsAuthHeader(ctx, azureDevOpsOpts)
+						if err != nil {
+							console.repoError(i+1, len(targets), target, err)
+							mu.Lock()
+							summary.addScanFailure(target, err)
+							if jobState != nil {
+								jobState.markFailed(target, err, time.Now())
+								if writeErr := writeScanJobState(jobPath, jobState); writeErr != nil {
+									mu.Unlock()
+									fatal(writeErr)
+								}
+							}
+							mu.Unlock()
+							continue
+						}
+						targetCfg.GitAuthorizationHeader = refreshedHeader
+					}
+				}
 				if installationID := installationByTarget[target]; installationID > 0 && githubAppID != "" && githubAppPrivateKey != "" {
 					token, refreshed, err := cachedInstallationToken(ctx, githubAppID, githubAppPrivateKey, installationID, tokenCache, &tokenMu)
 					if err != nil {
@@ -1759,9 +1899,15 @@ func finishProgress(err error) {
 	close(closing)
 }
 
-func progressSourceType(s3Buckets string, s3AllBuckets bool, orgs, enterprise string, accessible bool, repoListPath string, gitHistory bool, target string) string {
+func progressSourceType(s3Buckets string, s3AllBuckets bool, azureContainers string, azureAllContainers bool, azureDevOpsOrgs string, orgs, enterprise string, accessible bool, repoListPath string, gitHistory bool, target string) string {
 	if s3Buckets != "" || s3AllBuckets {
 		return "s3"
+	}
+	if azureContainers != "" || azureAllContainers {
+		return "azure_blob"
+	}
+	if azureDevOpsOrgs != "" {
+		return "azure_devops"
 	}
 	if isGitHubDiscovery(orgs, enterprise, accessible) || repoListPath != "" || isGitRemoteTarget(target) {
 		return "github"
@@ -1772,12 +1918,18 @@ func progressSourceType(s3Buckets string, s3AllBuckets bool, orgs, enterprise st
 	return "filesystem"
 }
 
-func progressTarget(s3Buckets string, s3AllBuckets bool, orgs, enterprise string, accessible bool, repoListPath, target string) string {
+func progressTarget(s3Buckets string, s3AllBuckets bool, azureContainers string, azureAllContainers bool, azureDevOpsOrgs string, orgs, enterprise string, accessible bool, repoListPath, target string) string {
 	switch {
 	case s3Buckets != "":
 		return strings.Join(splitCSV(s3Buckets), ",")
 	case s3AllBuckets:
 		return "all-owned-buckets"
+	case azureContainers != "":
+		return strings.Join(splitCSV(azureContainers), ",")
+	case azureAllContainers:
+		return "all-azure-blob-containers"
+	case azureDevOpsOrgs != "":
+		return azureDevOpsOrgs
 	case enterprise != "":
 		return enterprise
 	case orgs != "":
