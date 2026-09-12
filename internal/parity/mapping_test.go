@@ -32,6 +32,12 @@ func TestCurrentReportCountsMappings(t *testing.T) {
 	if r.DuplicateMappings != len(r.DuplicateTruffleHogIDs) {
 		t.Fatalf("duplicate count mismatch: %#v", r)
 	}
+	if r.Verification.SecretSnifferVerifiablePatterns != 81 {
+		t.Fatalf("unexpected verifiable pattern count: %#v", r.Verification)
+	}
+	if r.Verification.SecretSnifferVerifiablePatterns+r.Verification.Remaining != r.Verification.TruffleHogVerifiableTypes {
+		t.Fatalf("verification accounting mismatch: %#v", r.Verification)
+	}
 }
 
 func TestCatalogSnapshotMatchesExpectedSize(t *testing.T) {

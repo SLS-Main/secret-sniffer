@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -62,6 +63,40 @@ func verifyStripe(ctx context.Context, secret string) VerificationResult {
 	return verifyBearerGET(ctx, secret, "https://api.stripe.com/v1/balance")
 }
 
+func verifyHeroku(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.heroku.com/account/rate-limits", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Accept", "application/vnd.heroku+json; version=3")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyNewRelic(ctx context.Context, secret string) VerificationResult {
+	if strings.HasPrefix(secret, "NRII-") {
+		return VerificationResult{Status: VerificationUnsupported, Message: "New Relic ingest keys do not have a safe read verifier"}
+	}
+	endpoints := []string{"https://api.newrelic.com/graphql", "https://api.eu.newrelic.com/graphql", "https://api.jp.newrelic.com/graphql"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(`{"query":"{ requestContext { userId } }"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("API-Key", secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, classifyGraphQLIdentity("userId"))
+	})
+}
+
+func verifyDoppler(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.doppler.com/v3/me", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode != http.StatusBadRequest {
+			return VerificationResult{}, false
+		}
+		if strings.Contains(strings.ToLower(string(body)), "invalid auth token") {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+}
+
 func verifyAnthropic(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.anthropic.com/v1/models", nil)
 	req.Header.Set("x-api-key", secret)
@@ -105,6 +140,10 @@ func verifyTelegramBot(ctx context.Context, secret string) VerificationResult {
 
 func verifyNPM(ctx context.Context, secret string) VerificationResult {
 	return verifyBearerGET(ctx, secret, "https://registry.npmjs.org/-/whoami")
+}
+
+func verifyRubyGems(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://rubygems.org/api/v1/gems.json", "Authorization", "")
 }
 
 func verifyDigitalOcean(ctx context.Context, secret string) VerificationResult {
@@ -189,6 +228,156 @@ func verifyBuildkite(ctx context.Context, secret string) VerificationResult {
 	return verifyBearerGET(ctx, secret, "https://api.buildkite.com/v2/access-token")
 }
 
+func verifyPostHog(ctx context.Context, secret string) VerificationResult {
+	return verifyEndpoints(ctx, []string{"https://us.posthog.com/api/users/@me/", "https://eu.posthog.com/api/users/@me/"}, func(endpoint string) VerificationResult {
+		result := verifyBearerGET(ctx, secret, endpoint)
+		if result.Status == VerificationUnverified {
+			result.Status = VerificationUnknown
+			result.ErrorCategory = "endpoint_context"
+			result.Message = "token may belong to another PostHog deployment"
+		}
+		return result
+	})
+}
+
+func verifyLaunchDarkly(ctx context.Context, secret string) VerificationResult {
+	if strings.HasPrefix(secret, "sdk-") {
+		return VerificationResult{Status: VerificationUnsupported, Message: "LaunchDarkly SDK keys do not have a side-effect-free REST verifier"}
+	}
+	endpoints := []string{
+		"https://app.launchdarkly.com/api/v2/caller-identity",
+		"https://app.eu.launchdarkly.com/api/v2/caller-identity",
+		"https://app.launchdarkly.us/api/v2/caller-identity",
+	}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyHeaderGET(ctx, secret, endpoint, "Authorization", "")
+	})
+}
+
+func verifyCoda(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://coda.io/apis/v1/whoami")
+}
+
+func verifyCalendly(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.calendly.com/users/me")
+}
+
+func verifyMonday(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.monday.com/v2", strings.NewReader(`{"query":"query { me { id } }"}`))
+	req.Header.Set("Authorization", secret)
+	req.Header.Set("Content-Type", "application/json")
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyGraphQLIdentity("id"))
+}
+
+func verifyURLScan(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://urlscan.io/user/quotas/", "API-Key", "")
+}
+
+func verifyCircleCI(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://circleci.com/api/v2/me", "Circle-Token", "")
+}
+
+func verifySnyk(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{
+		"https://api.snyk.io/rest/self?version=2024-10-15",
+		"https://api.us.snyk.io/rest/self?version=2024-10-15",
+		"https://api.eu.snyk.io/rest/self?version=2024-10-15",
+		"https://api.au.snyk.io/rest/self?version=2024-10-15",
+	}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyHeaderGET(ctx, secret, endpoint, "Authorization", "token ")
+	})
+}
+
+func verifyVercel(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.vercel.com/v2/user")
+}
+
+func verifyRunpod(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.runpod.io/v2/pods")
+}
+
+func verifyBetterStack(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://betterstack.com/api/v2/team-members", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		response := strings.ToLower(string(body))
+		if statusCode == http.StatusUnprocessableEntity && strings.Contains(response, "global") && strings.Contains(response, "team") {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a multi-team token"}, true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyAiven(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.aiven.io/v1/project", "Authorization", "aivenv1 ")
+}
+
+func verifySourcegraphCody(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://cody-gateway.sourcegraph.com/v1/limits")
+}
+
+func verifyOpenPhone(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.quo.com/v1/users?maxResults=1", "Authorization", "")
+}
+
+func verifyCallRail(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.callrail.com/v3/a.json?per_page=1", nil)
+	req.Header.Set("Authorization", `Token token="`+secret+`"`)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyFront(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api2.frontapp.com/me")
+}
+
+func verifyTypeform(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && strings.Contains(string(body), "AUTHENTICATION_FAILED") {
+			return invalidCredentialResult(), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyMailchimp(ctx context.Context, secret string) VerificationResult {
+	separator := strings.LastIndex(secret, "-")
+	if separator < 0 || separator == len(secret)-1 {
+		return VerificationResult{Status: VerificationUnsupported, Message: "Mailchimp key does not include a data center"}
+	}
+	dataCenter := secret[separator+1:]
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+dataCenter+".api.mailchimp.com/3.0/ping", nil)
+	req.SetBasicAuth("secret-sniffer", secret)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyIterable(ctx context.Context, secret string) VerificationResult {
+	return verifyEndpoints(ctx, []string{"https://api.iterable.com/api/users/getFields", "https://api.eu.iterable.com/api/users/getFields"}, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Api-Key", secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+			if statusCode == http.StatusUnauthorized {
+				return unknownVerificationResult("authorization", "key type, region, or privileges could not be confirmed"), true
+			}
+			return VerificationResult{}, false
+		})
+	})
+}
+
+func verifyLangSmith(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{
+		"https://api.smith.langchain.com/api/v1/workspaces",
+		"https://eu.api.smith.langchain.com/api/v1/workspaces",
+		"https://apac.api.smith.langchain.com/api/v1/workspaces",
+		"https://aws.api.smith.langchain.com/api/v1/workspaces",
+	}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyHeaderGET(ctx, secret, endpoint, "X-API-Key", "")
+	})
+}
+
 func verifyLinear(ctx context.Context, secret string) VerificationResult {
 	return verifyJSONPOST(ctx, secret, "https://api.linear.app/graphql", "Authorization", "", `{"query":"{ viewer { id name } }"}`)
 }
@@ -267,6 +456,35 @@ func verifyKlaviyo(ctx context.Context, secret string) VerificationResult {
 	return verifyHTTPRequest(ctx, req)
 }
 
+func verifyPostmark(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.postmarkapp.com/server", "X-Postmark-Server-Token", "")
+}
+
+func verifyAtlassian(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.atlassian.com/admin/v1/orgs")
+}
+
+func verifyIntercom(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://api.intercom.io/me", "https://api.eu.intercom.io/me", "https://api.au.intercom.io/me"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		req.Header.Set("Intercom-Version", "2.16")
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+			if statusCode != http.StatusUnauthorized {
+				return VerificationResult{}, false
+			}
+			response := strings.ToLower(string(body))
+			for _, code := range []string{"token_revoked", "token_blocked", "token_not_found", "token_expired"} {
+				if strings.Contains(response, code) {
+					return invalidCredentialResult(), true
+				}
+			}
+			return unknownVerificationResult("authorization", "token region or authorization could not be confirmed"), true
+		})
+	})
+}
+
 func verifyPinecone(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pinecone.io/indexes", nil)
 	req.Header.Set("Api-Key", secret)
@@ -308,4 +526,49 @@ func verifyBaseten(ctx context.Context, secret string) VerificationResult {
 
 func verifyOpenRouter(ctx context.Context, secret string) VerificationResult {
 	return verifyBearerGET(ctx, secret, "https://openrouter.ai/api/v1/auth/key")
+}
+
+func invalidCredentialResult() VerificationResult {
+	return VerificationResult{Status: VerificationUnverified, ErrorCategory: "invalid_credentials", Message: "provider rejected credential"}
+}
+
+func unknownVerificationResult(category, message string) VerificationResult {
+	return VerificationResult{Status: VerificationUnknown, ErrorCategory: category, Message: message}
+}
+
+func classifyGraphQLIdentity(field string) verificationResponseClassifier {
+	return func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode < 200 || statusCode >= 300 {
+			return VerificationResult{}, false
+		}
+		var payload map[string]any
+		if json.Unmarshal(body, &payload) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if findJSONField(payload["data"], field) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("authorization", "GraphQL response did not contain authenticated identity"), true
+	}
+}
+
+func findJSONField(value any, field string) bool {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, child := range value {
+			if key == field && child != nil && child != "" {
+				return true
+			}
+			if findJSONField(child, field) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if findJSONField(child, field) {
+				return true
+			}
+		}
+	}
+	return false
 }

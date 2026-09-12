@@ -195,28 +195,28 @@ func DefaultRegistry() []Detector {
 		NewRegex("gitlab-token", "GitLab Token", "critical", []string{"glpat-", "gldt-"}, `\b((?:glpat|gldt)-[A-Za-z0-9_-]{20,128})\b`, 1, verifyGitLab),
 		NewRegex("bitbucket-app-password", "Bitbucket App Password", "high", []string{"bitbucket", "ATBB"}, `\b(ATBB[a-zA-Z0-9_-]{20,80})\b`, 1, nil),
 		NewRegex("box-client-secret", "Box Client Secret", "critical", []string{"boxAppSettings", "api.box.com/oauth2/token", "box_subject_type", "box_subject_id"}, `(?i)\b(?:boxAppSettings|api\.box\.com/oauth2/token|box[_-]?subject[_-]?type|box[_-]?subject[_-]?id)\b[\s\S]{0,500}\b(?:clientSecret|client[_-]?secret|box[_-]?client[_-]?secret)\b['\"]?\s*[:=]\s*['\"]?([A-Za-z0-9._~/-]{32,128})\b`, 1, nil),
-		NewRegex("discord-token", "Discord Token", "critical", []string{"discord", "Bot "}, `\b([MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27,})\b`, 1, nil),
+		NewRegex("discord-token", "Discord Token", "critical", []string{"discord", "Bot "}, `\b([MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27,})\b`, 1, verifyDiscordBot),
 		NewRegex("discord-bot-token", "Discord Bot Token", "critical", []string{"discord", "Bot "}, `(?i)\bBot\s+([A-Za-z0-9._-]{50,90})\b`, 1, verifyDiscordBot),
 		NewRegex("telegram-bot-token", "Telegram Bot Token", "critical", []string{"bot", "telegram"}, `\b(\d{8,10}:[A-Za-z0-9_-]{35})\b`, 1, verifyTelegramBot),
 		NewRegex("npm-token", "npm Token", "critical", []string{"npm_", "//registry.npmjs.org"}, `\b(npm_[A-Za-z0-9]{36})\b`, 1, verifyNPM),
 		NewRegex("pypi-token", "PyPI Token", "critical", []string{"pypi-"}, `\b(pypi-[A-Za-z0-9_-]{50,200})\b`, 1, nil),
 		NewRegex("dockerhub-token", "Docker Hub Token", "high", []string{"dckr_pat_"}, `\b(dckr_pat_[A-Za-z0-9_-]{27,128})\b`, 1, nil),
 		NewRegex("datadog-api-key", "Datadog API Key", "critical", []string{"datadog", "DD_API_KEY"}, `(?i)\b(datadog|dd_api_key).{0,20}['\"\s:=]+([a-f0-9]{32})\b`, 2, verifyDatadog),
-		NewRegex("new-relic-key", "New Relic Key", "high", []string{"NRAK-", "newrelic"}, `\b(NR(?:AK|II)-[A-Za-z0-9]{20,80})\b`, 1, nil),
+		NewRegex("new-relic-key", "New Relic Key", "high", []string{"NRAK-", "newrelic"}, `\b(NR(?:AK|II)-[A-Za-z0-9]{20,80})\b`, 1, verifyNewRelic),
 		NewRegex("pagerduty-token", "PagerDuty Token", "high", []string{"pagerduty"}, `(?i)\bpagerduty.{0,20}['\"\s:=]+([A-Za-z0-9_+=-]{20,128})\b`, 1, verifyPagerDuty),
-		NewRegex("heroku-api-key", "Heroku API Key", "critical", []string{"heroku"}, `(?i)\bheroku.{0,20}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, nil),
+		NewRegex("heroku-api-key", "Heroku API Key", "critical", []string{"heroku"}, `(?i)\bheroku.{0,20}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, verifyHeroku),
 		NewRegex("cloudflare-api-token", "Cloudflare API Token", "critical", []string{"cloudflare"}, `(?i)\bcloudflare.{0,20}['\"\s:=]+([A-Za-z0-9_-]{35,80})\b`, 1, verifyCloudflare),
 		NewRegex("digitalocean-token", "DigitalOcean Token", "critical", []string{"dop_v1_", "digitalocean"}, `\b(dop_v1_[A-Fa-f0-9]{64})\b`, 1, verifyDigitalOcean),
 		NewRegex("azure-devops-pat", "Azure DevOps Personal Access Token", "critical", []string{"AZDO", "azure", "devops"}, `\b([A-Za-z0-9]{75}AZDO[A-Za-z0-9]{5})\b`, 1, verifyAzureDevOpsPAT),
 		NewRegex("terraform-cloud-token", "Terraform Cloud Token", "critical", []string{".atlasv1.", "terraform", "tfe"}, `\b([A-Za-z0-9]{14}\.atlasv1\.[A-Za-z0-9_-]{67})\b`, 1, verifyTerraformCloud),
 		NewRegex("netlify-token", "Netlify Token", "high", []string{"nfp_", "netlify"}, `\b(nfp_[A-Za-z0-9_-]{40,})\b`, 1, verifyNetlify),
 		NewRegex("pulumi-token", "Pulumi Access Token", "critical", []string{"pul-", "pulumi"}, `\b(pul-[a-f0-9]{40})\b`, 1, verifyPulumi),
-		NewRegex("doppler-token", "Doppler Token", "critical", []string{"dp.pt.", "dp.st.", "dp.ct.", "doppler"}, `\b(dp\.(?:pt|st|ct|scim)\.[A-Za-z0-9_-]{20,})\b`, 1, nil),
+		NewRegex("doppler-token", "Doppler Token", "critical", []string{"dp.pt.", "dp.st.", "dp.ct.", "doppler"}, `\b(dp\.(?:pt|st|ct|scim)\.[A-Za-z0-9_-]{20,})\b`, 1, verifyDoppler),
 		NewRegex("tailscale-key", "Tailscale Key", "critical", []string{"tskey-", "tailscale"}, `\b(tskey-(?:api|auth|client)-[A-Za-z0-9_-]{20,})\b`, 1, verifyTailscale),
 		NewRegex("ngrok-token", "ngrok Token", "critical", []string{"ngrok_api_", "ngrok_api_key_", "ngrok_pat_"}, `\b(ngrok_(?:api(?:_key)?|pat)_[A-Za-z0-9_]{20,})\b`, 1, verifyNgrok),
 		NewRegex("buildkite-token", "Buildkite Token", "critical", []string{"bkua_", "bkpa_", "bkca_", "buildkite"}, `\b(bk(?:ua|pa|ca)_[A-Za-z0-9]{30,})\b`, 1, verifyBuildkite),
 		NewRegex("nuget-api-key", "NuGet API Key", "high", []string{"oy2", "nuget"}, `\b(oy2[A-Za-z0-9]{43})\b`, 1, nil),
-		NewRegex("rubygems-api-key", "RubyGems API Key", "high", []string{"rubygems_"}, `\b(rubygems_[a-f0-9]{48})\b`, 1, nil),
+		NewRegex("rubygems-api-key", "RubyGems API Key", "high", []string{"rubygems_"}, `\b(rubygems_[a-f0-9]{48})\b`, 1, verifyRubyGems),
 		NewRegex("linear-api-key", "Linear API Key", "high", []string{"lin_api_"}, `\b(lin_api_[A-Za-z0-9]{40,128})\b`, 1, verifyLinear),
 		NewRegex("notion-token", "Notion Token", "high", []string{"secret_", "notion"}, `\b(secret_[A-Za-z0-9]{32,80})\b`, 1, verifyNotion),
 		NewRegex("postman-api-key", "Postman API Key", "high", []string{"PMAK-"}, `\b(PMAK-[A-Za-z0-9-]{50,120})\b`, 1, verifyPostman),
@@ -248,12 +248,12 @@ func DefaultRegistry() []Detector {
 		NewRegex("airtable-pat", "Airtable Personal Access Token", "critical", []string{"pat", "airtable"}, `\b(pat[A-Za-z0-9]{14}\.[a-f0-9]{64})\b`, 1, verifyAirtable),
 		NewRegex("asana-pat", "Asana Personal Access Token", "critical", []string{"asana"}, `\b([0-9]+/[0-9]{16,}(?:/[0-9]{16,})?:[A-Za-z0-9]{32,})\b`, 1, verifyAsana),
 		NewRegex("clickup-token", "ClickUp Personal Token", "critical", []string{"pk_", "clickup"}, `\b(pk_[0-9]{7,9}_[0-9A-Z]{32})\b`, 1, verifyClickUp),
-		NewRegex("typeform-token", "Typeform Token", "critical", []string{"tfp_", "typeform"}, `\b(tfp_[A-Za-z0-9_]{40,59})\b`, 1, nil),
+		NewRegex("typeform-token", "Typeform Token", "critical", []string{"tfp_", "typeform"}, `\b(tfp_[A-Za-z0-9_]{40,59})\b`, 1, verifyTypeform),
 		NewRegex("hubspot-private-app-token", "HubSpot Private App Token", "critical", []string{"pat-na1-", "pat-eu1-", "hubspot"}, `\b(pat-(?:eu|na)1-[A-Za-z0-9]{8}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{12})\b`, 1, verifyHubSpot),
-		NewRegex("mailchimp-key", "Mailchimp API Key", "high", []string{"mailchimp", "-us"}, `\b([0-9a-f]{32}-us[0-9]{1,2})\b`, 1, nil),
+		NewRegex("mailchimp-key", "Mailchimp API Key", "high", []string{"mailchimp", "-us"}, `\b([0-9a-f]{32}-us[0-9]{1,2})\b`, 1, verifyMailchimp),
 		NewRegex("klaviyo-key", "Klaviyo API Key", "high", []string{"klaviyo", "pk_"}, `\b(pk_(?:[0-9a-f]{34}|[A-Za-z0-9]{6}_[0-9a-f]{34}))\b`, 1, verifyKlaviyo),
 		NewRegex("braze-api-key", "Braze API Key", "critical", []string{"braze", "rest.iad", "rest.fra"}, `(?i)\b(?:braze|rest\.[a-z0-9-]+\.braze\.(?:com|eu))\b[\s\S]{0,160}\b(?:braze[_-]?api[_-]?key|api[_-]?key|rest[_-]?api[_-]?key|bearer|authorization)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,128})\b`, 1, nil),
-		NewRegex("iterable-api-key", "Iterable API Key", "critical", []string{"iterable", "api.iterable.com", "Api-Key"}, `(?i)\b(?:iterable|api\.iterable\.com|api-key)\b[\s\S]{0,160}\b(?:api[_-]?key|iterable[_-]?api[_-]?key|api-key)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,128})\b`, 1, nil),
+		NewRegex("iterable-api-key", "Iterable API Key", "critical", []string{"iterable", "api.iterable.com", "Api-Key"}, `(?i)\b(?:iterable|api\.iterable\.com|api-key)\b[\s\S]{0,160}\b(?:api[_-]?key|iterable[_-]?api[_-]?key|api-key)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,128})\b`, 1, verifyIterable),
 		NewRegex("activecampaign-api-token", "ActiveCampaign API Token", "critical", []string{"activecampaign", "api-us", "Api-Token"}, `(?i)\b(?:activecampaign|api-token|[a-z0-9-]+\.api-us[0-9]+\.com/api/3)\b[\s\S]{0,160}\b(?:api[_-]?key|api[_-]?token|api-token|activecampaign[_-]?api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,128})\b`, 1, nil),
 		NewRegex("marketo-client-secret", "Marketo Client Secret", "critical", []string{"marketo", "mktorest.com"}, `(?i)\b(?:marketo|mktorest\.com)\b[\s\S]{0,240}\b(?:client[_-]?secret|marketo[_-]?client[_-]?secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._~/-]{32,128})\b`, 1, nil),
 		NewRegex("tiktok-business-api-secret", "TikTok Business API Secret", "critical", []string{"tiktok", "business-api.tiktok.com", "Access-Token"}, `(?i)\b(?:tiktok|business-api\.tiktok\.com|access-token)\b[\s\S]{0,200}\b(?:access[_-]?token|access-token|app[_-]?secret|client[_-]?secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
@@ -270,7 +270,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("trufflehog-enterprise-secret", "TruffleHog Enterprise Secret", "critical", []string{"thog-secret-", "thog"}, `\b(thog-secret-[0-9a-f]{32})\b`, 1, nil),
 		NewRegex("tines-webhook", "Tines Webhook URL", "critical", []string{"tines.com/webhook"}, `\b(https://[A-Za-z0-9-]+\.tines\.com/webhook/[a-z0-9]{32}/[a-z0-9]{32})\b`, 1, nil),
 		NewRegex("pinecone-api-key", "Pinecone API Key", "critical", []string{"pcsk_"}, `\b(pcsk_[A-Za-z0-9]{5,6}_[A-Za-z0-9]{63})\b`, 1, verifyPinecone),
-		NewRegex("langsmith-api-key", "LangSmith API Key", "critical", []string{"lsv2_pt_", "lsv2_sk_"}, `\b(lsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10})\b`, 1, nil),
+		NewRegex("langsmith-api-key", "LangSmith API Key", "critical", []string{"lsv2_pt_", "lsv2_sk_"}, `\b(lsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10})\b`, 1, verifyLangSmith),
 		NewRegex("langfuse-secret-key", "Langfuse Secret Key", "critical", []string{"sk-lf-"}, `\b(sk-lf-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, nil),
 		NewRegex("elevenlabs-api-key", "ElevenLabs API Key", "critical", []string{"elevenlabs", "xi-api-key", "xi_api_key"}, `\b(sk_[a-f0-9]{48})\b`, 1, verifyElevenLabs),
 		NewRegex("xai-api-key", "xAI API Key", "critical", []string{"xai-"}, `\b(xai-[0-9A-Za-z_]{80})\b`, 1, verifyXAI),
@@ -284,7 +284,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("ai21-api-key", "AI21 API Key", "critical", []string{"ai21", "api.ai21.com"}, `(?i)\b(?:ai21|api\.ai21\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("cerebras-api-key", "Cerebras API Key", "critical", []string{"cerebras", "api.cerebras.ai"}, `(?i)\b(?:cerebras|api\.cerebras\.ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyCerebras),
 		NewRegex("baseten-api-key", "Baseten API Key", "critical", []string{"baseten", "model-apis.baseten.co"}, `(?i)\b(?:baseten|model-apis\.baseten\.co|app\.baseten\.co)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyBaseten),
-		NewRegex("runpod-api-key", "Runpod API Key", "critical", []string{"runpod", "api.runpod.ai"}, `(?i)\b(?:runpod|api\.runpod\.ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
+		NewRegex("runpod-api-key", "Runpod API Key", "critical", []string{"runpod", "api.runpod.ai"}, `(?i)\b(?:runpod|api\.runpod\.ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyRunpod),
 		NewRegex("modal-api-token", "Modal API Token", "critical", []string{"modal", "api.modal.com"}, `(?i)\b(?:modal|api\.modal\.com|modal\.com)\b[\s\S]{0,160}\b(?:token[_-]?id|token[_-]?secret|api[_-]?token|api[_-]?key|authorization|bearer|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("fal-ai-api-key", "fal.ai API Key", "critical", []string{"fal.ai", "fal_key"}, `(?i)\b(?:fal\.ai|api\.fal\.ai|fal[_-]?key|fal[_-]?ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token|key)\b\s*[:=]\s*['\"]?([A-Za-z0-9._:-]{32,256})\b`, 1, nil),
 		NewRegex("novita-api-key", "Novita AI API Key", "critical", []string{"novita", "api.novita.ai"}, `(?i)\b(?:novita|api\.novita\.ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
@@ -297,15 +297,15 @@ func DefaultRegistry() []Detector {
 		NewRegex("voiceflow-api-key", "Voiceflow API Key", "critical", []string{"VF.", "voiceflow"}, `\b(VF\.(?:(?:DM|WS)\.)?[a-fA-F0-9]{24}\.[A-Za-z0-9]{16})\b`, 1, nil),
 		NewRegex("harness-pat", "Harness Personal Access Token", "critical", []string{"harness"}, `\b(pat\.[A-Za-z0-9]{22}\.[0-9a-f]{24}\.[A-Za-z0-9]{20})\b`, 1, nil),
 		NewRegex("zoho-crm-token", "Zoho CRM Token", "critical", []string{"1000.", "zoho"}, `\b(1000\.[a-f0-9]{32}\.[a-f0-9]{32})\b`, 1, nil),
-		NewRegex("intercom-access-token", "Intercom Access Token", "critical", []string{"intercom", "dG9rO"}, `(?i)\bintercom.{0,40}['\"\s:=]+(dG9rO[A-Za-z0-9+/]{54}=)`, 1, nil),
-		NewRegex("front-api-token", "Front API Token", "critical", []string{"front", "frontapp"}, `(?i)\b(?:front[_-]?token\b\s*[:=]\s*['\"]?|(?:front\b|frontapp\.com|api2\.frontapp\.com|front[_-]?api\b)[\s\S]{0,160}\b(?:api[_-]?token|access[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?)([0-9A-Za-z]{36}\.[0-9A-Za-z._-]{188,244}|[A-Za-z0-9._-]{32,256})\b`, 1, nil),
+		NewRegex("intercom-access-token", "Intercom Access Token", "critical", []string{"intercom", "dG9rO"}, `(?i)\bintercom.{0,40}['\"\s:=]+(dG9rO[A-Za-z0-9+/]{54}=)`, 1, verifyIntercom),
+		NewRegex("front-api-token", "Front API Token", "critical", []string{"front", "frontapp"}, `(?i)\b(?:front[_-]?token\b\s*[:=]\s*['\"]?|(?:front\b|frontapp\.com|api2\.frontapp\.com|front[_-]?api\b)[\s\S]{0,160}\b(?:api[_-]?token|access[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?)([0-9A-Za-z]{36}\.[0-9A-Za-z._-]{188,244}|[A-Za-z0-9._-]{32,256})\b`, 1, verifyFront),
 		NewRegex("segment-api-key", "Segment API Key", "high", []string{"segment"}, `(?i)\bsegment.{0,40}['\"\s:=]+([A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43})\b`, 1, nil),
-		NewRegex("posthog-personal-api-key", "PostHog Personal API Key", "critical", []string{"phx_", "posthog"}, `\b(phx_[A-Za-z0-9_]{43})\b`, 1, nil),
-		NewRegex("launchdarkly-key", "LaunchDarkly Key", "critical", []string{"api-", "sdk-", "launchdarkly"}, `\b((?:api|sdk)-[a-z0-9]{8}-[a-z0-9]{4}-4[a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{12})\b`, 1, nil),
-		NewRegex("postmark-token", "Postmark Server Token", "high", []string{"postmark"}, `(?i)\bpostmark.{0,40}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, nil),
-		NewRegex("coda-api-token", "Coda API Token", "high", []string{"coda"}, `(?i)\bcoda.{0,40}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, nil),
-		NewRegex("calendly-api-key", "Calendly API Key", "high", []string{"calendly"}, `(?i)\bcalendly.{0,40}['\"\s:=]+(eyJ[A-Za-z0-9_-]{100,300}\.eyJ[A-Za-z0-9_-]{100,300}\.[A-Za-z0-9_-]+)\b`, 1, nil),
-		NewRegex("monday-api-token", "Monday.com API Token", "high", []string{"monday"}, `(?i)\bmonday.{0,40}['\"\s:=]+(eyJ[A-Za-z0-9_-]{15,100}\.eyJ[A-Za-z0-9_-]{100,300}\.[A-Za-z0-9_-]{25,100})\b`, 1, nil),
+		NewRegex("posthog-personal-api-key", "PostHog Personal API Key", "critical", []string{"phx_", "posthog"}, `\b(phx_[A-Za-z0-9_]{43})\b`, 1, verifyPostHog),
+		NewRegex("launchdarkly-key", "LaunchDarkly Key", "critical", []string{"api-", "sdk-", "launchdarkly"}, `\b((?:api|sdk)-[a-z0-9]{8}-[a-z0-9]{4}-4[a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{12})\b`, 1, verifyLaunchDarkly),
+		NewRegex("postmark-token", "Postmark Server Token", "high", []string{"postmark"}, `(?i)\bpostmark.{0,40}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, verifyPostmark),
+		NewRegex("coda-api-token", "Coda API Token", "high", []string{"coda"}, `(?i)\bcoda.{0,40}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, verifyCoda),
+		NewRegex("calendly-api-key", "Calendly API Key", "high", []string{"calendly"}, `(?i)\bcalendly.{0,40}['\"\s:=]+(eyJ[A-Za-z0-9_-]{100,300}\.eyJ[A-Za-z0-9_-]{100,300}\.[A-Za-z0-9_-]+)\b`, 1, verifyCalendly),
+		NewRegex("monday-api-token", "Monday.com API Token", "high", []string{"monday"}, `(?i)\bmonday.{0,40}['\"\s:=]+(eyJ[A-Za-z0-9_-]{15,100}\.eyJ[A-Za-z0-9_-]{100,300}\.[A-Za-z0-9_-]{25,100})\b`, 1, verifyMonday),
 		NewRegex("flyio-token", "Fly.io Token", "critical", []string{"FlyV1"}, `\b(FlyV1 fm\d+_[A-Za-z0-9+/=,_-]{500,700})\b`, 1, nil),
 		NewRegex("cloudflare-ca-key", "Cloudflare CA Key", "critical", []string{"cloudflare", "v1.0-"}, `\b(v1\.0-[A-Za-z0-9-]{171})\b`, 1, nil),
 		NewRegex("artifactory-access-token", "Artifactory Access Token", "critical", []string{"AKCp", "jfrog", "artifactory"}, `\b(AKCp[A-Za-z0-9]{69})\b`, 1, nil),
@@ -316,13 +316,13 @@ func DefaultRegistry() []Detector {
 		NewRegex("azure-sas-url", "Azure SAS URL", "critical", []string{".blob.core.windows.net", "sig=", "sp="}, `(https://[a-z0-9][a-z0-9-]{1,22}[a-z0-9]\.blob\.core\.windows\.net/[A-Za-z0-9._~!$&'()*+,;=:@/%-]+\?sp=[racwdli]+&st=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z&se=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z(?:&sip=\d{1,3}(?:\.\d{1,3}){3}(?:-\d{1,3}(?:\.\d{1,3}){3})?)?&spr=https(?:,https)?&sv=\d{4}-\d{2}-\d{2}&sr=[bcfso]&sig=[A-Za-z0-9%+/=]{10,})`, 1, nil),
 		NewRegex("azure-function-key-url", "Azure Function Key URL", "critical", []string{"azurewebsites.net", "code="}, `https://[A-Za-z0-9-]{2,30}\.azurewebsites\.net/api/[A-Za-z0-9-]{2,30}[^\s'\"<>]*[?&]code=([A-Za-z0-9_-]{20,56}={0,2})`, 1, nil),
 		NewRegex("spectralops-token", "SpectralOps Token", "critical", []string{"spu-"}, `\b(spu-[a-z0-9]{32})\b`, 1, nil),
-		NewRegex("atlassian-api-token", "Atlassian API Token", "critical", []string{"ATCTT3xFfG", "atlassian"}, `\b(ATCTT3xFfG[A-Za-z0-9+/=_-]+=[A-Za-z0-9]{8})\b`, 1, nil),
+		NewRegex("atlassian-api-token", "Atlassian API Token", "critical", []string{"ATCTT3xFfG", "atlassian"}, `\b(ATCTT3xFfG[A-Za-z0-9+/=_-]+=[A-Za-z0-9]{8})\b`, 1, verifyAtlassian),
 		NewRegex("jira-api-token", "Jira API Token", "critical", []string{"ATATT", "jira", "atlassian", "confluence"}, `\b(ATATT[A-Za-z0-9+/=_-]+=[A-Za-z0-9]{8})\b`, 1, nil),
 		NewRegex("salesforce-access-token", "Salesforce Access Token", "critical", []string{"salesforce", ".my.salesforce.com", "00"}, `\b(00[A-Za-z0-9]{13}![A-Za-z0-9_.]{96})\b`, 1, nil),
 		NewRegex("salesforce-refresh-token", "Salesforce Refresh Token", "critical", []string{"5AEP861", "salesforce"}, `\b(5AEP861[A-Za-z0-9._=]{80,})\b`, 1, nil),
 		NewRegex("salesforce-consumer-key", "Salesforce Consumer Key", "high", []string{"3MVG9", "salesforce"}, `\b(3MVG9[0-9A-Za-z._+/=]{80,251})\b`, 1, nil),
 		NewRegex("twilio-auth-token", "Twilio Auth Token", "critical", []string{"twilio", "auth_token", "AC"}, `(?i)\bAC[0-9a-f]{32}\b[\s\S]{0,160}\b(?:auth[_-]?token|token|secret)\b\s*[:=]\s*['\"]?([0-9a-f]{32})\b`, 1, nil),
-		NewRegex("openphone-api-key", "OpenPhone API Key", "critical", []string{"openphone", "api.openphone.com"}, `(?i)\b(?:openphone|api\.openphone\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|access[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
+		NewRegex("openphone-api-key", "OpenPhone API Key", "critical", []string{"openphone", "api.openphone.com"}, `(?i)\b(?:openphone|api\.openphone\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|access[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyOpenPhone),
 		NewRegex("aircall-api-token", "Aircall API Token", "critical", []string{"aircall", "api.aircall.io"}, `(?i)\b(?:aircall|api\.aircall\.io)\b[\s\S]{0,160}\b(?:api[_-]?token|api[_-]?id|access[_-]?token|bearer|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("dialpad-api-key", "Dialpad API Key", "critical", []string{"dialpad", "dialpad.com"}, `(?i)\b(?:dialpad|dialpad\.com|dialpad[_-]?api)\b[\s\S]{0,160}\b(?:api[_-]?key|access[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("five9-api-secret", "Five9 API Secret", "critical", []string{"five9", "five9.com"}, `(?i)\b(?:five9|five9\.com)\b[\s\S]{0,160}\b(?:client[_-]?secret|api[_-]?secret|api[_-]?key|password|secret|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._~/-]{32,256})\b`, 1, nil),
@@ -330,12 +330,12 @@ func DefaultRegistry() []Detector {
 		NewRegex("talkdesk-api-token", "Talkdesk API Token", "critical", []string{"talkdesk", "talkdeskapp.com"}, `(?i)\b(?:talkdesk|talkdeskapp\.com|api\.talkdeskapp\.com)\b[\s\S]{0,160}\b(?:api[_-]?token|client[_-]?secret|access[_-]?token|bearer|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._~/-]{32,256})\b`, 1, nil),
 		NewRegex("ringover-api-key", "Ringover API Key", "critical", []string{"ringover", "api.ringover.com"}, `(?i)\b(?:ringover|api\.ringover\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|api[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("justcall-api-key", "JustCall API Key", "critical", []string{"justcall", "api.justcall.io"}, `(?i)\b(?:justcall|api\.justcall\.io)\b[\s\S]{0,160}\b(?:api[_-]?key|api[_-]?secret|bearer|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
-		NewRegex("callrail-api-key", "CallRail API Key", "critical", []string{"callrail", "api.callrail.com"}, `(?i)\b(?:callrail|api\.callrail\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|api[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
+		NewRegex("callrail-api-key", "CallRail API Key", "critical", []string{"callrail", "api.callrail.com"}, `(?i)\b(?:callrail|api\.callrail\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|api[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyCallRail),
 		NewRegex("calltrackingmetrics-api-key", "CallTrackingMetrics API Key", "critical", []string{"calltrackingmetrics", "api.calltrackingmetrics.com"}, `(?i)\b(?:calltrackingmetrics|call[ _-]?tracking[ _-]?metrics|api\.calltrackingmetrics\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|api[_-]?secret|access[_-]?token|bearer|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("mailjet-basic-auth", "Mailjet Basic Auth Credential", "high", []string{"mailjet"}, `(?i)\bmailjet\b[\s\S]{0,80}\b([A-Za-z0-9]{87}=)`, 1, nil),
 		NewRegex("okta-api-token", "Okta API Token", "critical", []string{".okta"}, `(?i)\b[a-z0-9-]{1,40}\.okta(?:preview|-emea)?\.com\b[\s\S]{0,200}\b(00[A-Za-z0-9_-]{40})\b`, 1, nil),
-		NewRegex("urlscan-api-key", "urlscan.io API Key", "high", []string{"urlscan"}, `(?i)\burlscan\b.{0,40}\b([a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12})\b`, 1, nil),
-		NewRegex("openai-admin-key", "OpenAI Admin Key", "critical", []string{"sk-admin-", "T3BlbkFJ"}, `\b(sk-admin-[A-Za-z0-9_-]{58}T3BlbkFJ[A-Za-z0-9_-]{58})\b`, 1, verifyOpenAI),
+		NewRegex("urlscan-api-key", "urlscan.io API Key", "high", []string{"urlscan"}, `(?i)\burlscan\b.{0,40}\b([a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12})\b`, 1, verifyURLScan),
+		NewRegex("openai-admin-key", "OpenAI Admin Key", "critical", []string{"sk-admin-", "T3BlbkFJ"}, `\b(sk-admin-[A-Za-z0-9_-]{58}T3BlbkFJ[A-Za-z0-9_-]{58})\b`, 1, verifyOpenAIAdmin),
 		NewRegex("deepseek-api-key", "DeepSeek API Key", "critical", []string{"deepseek", "DEEPSEEK_API_KEY"}, `(?i)\bdeepseek.{0,40}['\"\s:=]+(sk-[a-z0-9]{32})\b`, 1, nil),
 		NewRegex("weightsandbiases-api-key", "Weights & Biases API Key", "critical", []string{"wandb", "WANDB_API_KEY", "weightsandbiases", "weights & biases"}, `(?i)\b(?:wandb|weights.?and.?biases).{0,40}['\"\s:=]+([0-9a-f]{40})\b`, 1, nil),
 		NewRegex("assemblyai-api-key", "AssemblyAI API Key", "critical", []string{"assemblyai", "ASSEMBLYAI_API_KEY"}, `(?i)\bassemblyai.{0,40}['\"\s:=]+([0-9a-z]{32})\b`, 1, nil),
@@ -403,10 +403,10 @@ func DefaultRegistry() []Detector {
 		NewRegex("etherscan-api-key", "Etherscan API Key", "high", []string{"etherscan", "apikey"}, `(?i)\betherscan.{0,40}\b([0-9A-Z]{34})\b`, 1, nil),
 		NewRegex("bscscan-api-key", "BscScan API Key", "high", []string{"bscscan", "apikey"}, `(?i)\bbscscan.{0,40}\b([0-9A-Z]{34})\b`, 1, nil),
 		NewRegex("guardian-api-key", "Guardian API Key", "high", []string{"guardianapi", "guardian", "content.guardianapis.com"}, `(?i)\b(?:guardianapi|guardian|content\.guardianapis\.com).{0,40}\b([0-9A-Za-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12})\b`, 1, nil),
-		NewRegex("circleci-pat", "CircleCI Personal Access Token", "critical", []string{"CCIPAT_", "circleci"}, `\b(CCIPAT_[A-Za-z0-9]{22}_[A-Fa-f0-9]{40})\b`, 1, nil),
+		NewRegex("circleci-pat", "CircleCI Personal Access Token", "critical", []string{"CCIPAT_", "circleci"}, `\b(CCIPAT_[A-Za-z0-9]{22}_[A-Fa-f0-9]{40})\b`, 1, verifyCircleCI),
 		NewRegex("sourcegraph-token", "Sourcegraph Token", "critical", []string{"sgp_"}, `\b(sgp_(?:[A-Fa-f0-9]{16}|local)_[A-Fa-f0-9]{40}|sgp_[A-Fa-f0-9]{40})\b`, 1, nil),
-		NewRegex("sourcegraph-cody-token", "Sourcegraph Cody Token", "critical", []string{"slk_"}, `\b(slk_[a-f0-9]{64})\b`, 1, nil),
-		NewRegex("snyk-api-key", "Snyk API Key", "critical", []string{"snyk", "SNYK_TOKEN"}, `(?i)\bsnyk.{0,40}['\"\s:=]+([0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12})\b`, 1, nil),
+		NewRegex("sourcegraph-cody-token", "Sourcegraph Cody Token", "critical", []string{"slk_"}, `\b(slk_[a-f0-9]{64})\b`, 1, verifySourcegraphCody),
+		NewRegex("snyk-api-key", "Snyk API Key", "critical", []string{"snyk", "SNYK_TOKEN"}, `(?i)\bsnyk.{0,40}['\"\s:=]+([0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12})\b`, 1, verifySnyk),
 		NewRegex("uptimerobot-api-key", "UptimeRobot API Key", "high", []string{"uptimerobot", "UPTIMEROBOT_API_KEY"}, `(?i)\buptimerobot.{0,40}['\"\s:=]+([A-Za-z0-9]{9}-[A-Za-z0-9]{24})\b`, 1, nil),
 		NewRegex("sumologic-access-id", "Sumo Logic Access ID", "high", []string{"sumo", "accessId", "access_id"}, `(?i)\b(?:sumo(?:logic)?|access[_-]?id).{0,40}['\"\s:=]+(su[A-Za-z0-9]{12})\b`, 1, nil),
 		NewRegex("sumologic-access-key", "Sumo Logic Access Key", "high", []string{"sumo", "accessKey", "access_key"}, `(?i)\b(?:sumo(?:logic)?|access[_-]?key).{0,40}['\"\s:=]+([A-Za-z0-9]{64})\b`, 1, nil),
@@ -512,7 +512,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("braintree-access-token", "Braintree Access Token", "critical", []string{"access_token$production$", "access_token$sandbox$"}, `\b(access_token\$(?:production|sandbox)\$[A-Za-z0-9_]+\$[A-Za-z0-9]{32})\b`, 1, nil),
 		NewRegex("coinbase-cdp-api-key", "Coinbase CDP API Key", "critical", []string{"coinbase", "organizations/", "apiKeys/"}, `\b(organizations/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/apiKeys/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, nil),
 		NewRegex("coinbase-exchange-secret", "Coinbase Exchange/Prime Secret", "critical", []string{"coinbase", "CB-ACCESS-SECRET", "CB-ACCESS-PASSPHRASE"}, `(?i)\b(?:coinbase|prime\.coinbase\.com|api\.exchange\.coinbase\.com|cb-access-secret|cb-access-passphrase)\b[\s\S]{0,200}\b(?:cb-access-secret|cb_access_secret|api[_-]?secret|secret|passphrase)\b\s*[:=]\s*['\"]?([A-Za-z0-9+/=_-]{32,256})\b`, 1, nil),
-		NewRegex("webex-access-token", "Webex Access Token", "critical", []string{"webex", "WEBEX_ACCESS_TOKEN"}, `(?i)\bwebex\b.{0,60}\b(?:access[_-]?token|bearer[_-]?token|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{64}_[A-Za-z0-9]{4}_[A-Za-z0-9_-]{36})\b`, 1, nil),
+		NewRegex("webex-access-token", "Webex Access Token", "critical", []string{"webex", "WEBEX_ACCESS_TOKEN"}, `(?i)\bwebex\b.{0,60}\b(?:access[_-]?token|bearer[_-]?token|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{64}_[A-Za-z0-9]{4}_[A-Za-z0-9_-]{36})\b`, 1, verifyWebex),
 		NewRegex("auth0-client-secret", "Auth0 OAuth Client Secret", "critical", []string{"auth0", "AUTH0_CLIENT_SECRET"}, `(?i)\b(?:auth0|auth0_client_secret)\b[\s\S]{0,120}\bclient[_-]?secret\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{48,128})\b`, 1, nil),
 		NewRegex("onelogin-client-secret", "OneLogin Client Secret", "critical", []string{"onelogin", "ONELOGIN_CLIENT_SECRET"}, `(?i)\b(?:onelogin|one[ _-]?login)\b[\s\S]{0,120}\bclient[_-]?secret\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("detectify-api-key", "Detectify API Key", "high", []string{"detectify"}, `(?i)\bdetectify\b.{0,40}\b(?:api[_-]?key|token|key)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{32,64})\b`, 1, nil),
@@ -1215,7 +1215,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("zipcodeapi-key", "ZipCodeAPI Key", "high", []string{"zipcodeapi", "zipcode api", "zip code api"}, `(?i)\b(?:zipcodeapi|zipcode[ _-]?api|zip[ _-]?code[ _-]?api)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("zonkafeedback-api-key", "Zonka Feedback API Key", "high", []string{"zonkafeedback", "zonka feedback"}, `(?i)\b(?:zonkafeedback|zonka[ _-]?feedback)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("zulipchat-api-key", "Zulip Chat API Key", "critical", []string{"zulipchat", "zulip chat", "zulip"}, `(?i)\b(?:zulipchat|zulip[ _-]?chat|zulip)\b.{0,80}\b(?:api[_-]?key|key|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
-		NewRegex("vercel-token", "Vercel Token", "critical", []string{"vercel", "VERCEL_TOKEN"}, `(?i)\bvercel.{0,40}['\"\s:=]+([A-Za-z0-9_-]{24,64})\b`, 1, nil),
+		NewRegex("vercel-token", "Vercel Token", "critical", []string{"vercel", "VERCEL_TOKEN"}, `(?i)\bvercel.{0,40}['\"\s:=]+([A-Za-z0-9_-]{24,64})\b`, 1, verifyVercel),
 		NewRegex("railway-token", "Railway Token", "critical", []string{"railway"}, `(?i)\brailway.{0,40}['\"\s:=]+([A-Za-z0-9_-]{24,64})\b`, 1, nil),
 		NewRegex("render-api-key", "Render API Key", "critical", []string{"render.com", "render"}, `(?i)\b(?:render\.com|api\.render\.com|render[_-]?api)\b[\s\S]{0,160}\b(?:api[_-]?key|api[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("koyeb-api-token", "Koyeb API Token", "critical", []string{"koyeb", "api.koyeb.com"}, `(?i)\b(?:koyeb|api\.koyeb\.com)\b[\s\S]{0,160}\b(?:api[_-]?token|api[_-]?key|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
@@ -1228,7 +1228,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("flightcontrol-api-key", "Flightcontrol API Key", "critical", []string{"flightcontrol", "app.flightcontrol.dev"}, `(?i)\b(?:flightcontrol|app\.flightcontrol\.dev|api\.flightcontrol\.dev)\b[\s\S]{0,160}\b(?:api[_-]?key|api[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("cleavr-api-key", "Cleavr API Key", "critical", []string{"cleavr", "cleavr.io"}, `(?i)\b(?:cleavr|cleavr\.io)\b[\s\S]{0,160}\b(?:api[_-]?key|api[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("travisci-token", "Travis CI Token", "high", []string{"travis", "TRAVIS_TOKEN"}, `(?i)\btravis(?:ci)?.{0,40}['\"\s:=]+([A-Za-z0-9]{22})\b`, 1, nil),
-		NewRegex("betterstack-api-key", "BetterStack API Key", "high", []string{"betterstack", "better uptime"}, `(?i)\b(?:betterstack|better[ _-]?uptime).{0,40}['\"\s:=]+([A-Za-z0-9]{40})\b`, 1, nil),
+		NewRegex("betterstack-api-key", "BetterStack API Key", "high", []string{"betterstack", "better uptime"}, `(?i)\b(?:betterstack|better[ _-]?uptime).{0,40}['\"\s:=]+([A-Za-z0-9]{40})\b`, 1, verifyBetterStack),
 		NewRegex("customerio-api-key", "Customer.io API Key", "high", []string{"customer.io", "customerio"}, `(?i)\b(?:customer\.io|customerio).{0,40}['\"\s:=]+([A-Za-z0-9]{20,64})\b`, 1, nil),
 		NewRegex("trello-api-key", "Trello API Key", "high", []string{"trello"}, `(?i)\btrello.{0,40}['\"\s:=]+([0-9a-f]{32})\b`, 1, nil),
 		NewRegex("helpscout-api-key", "Help Scout API Key", "high", []string{"helpscout", "help scout"}, `(?i)\b(?:helpscout|help[ _-]?scout).{0,40}['\"\s:=]+([A-Za-z0-9]{40})\b`, 1, nil),
@@ -1255,7 +1255,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("accuweather-api-key", "AccuWeather API Key", "high", []string{"accuweather"}, `(?i)\baccuweather.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, nil),
 		NewRegex("weatherbit-api-key", "Weatherbit API Key", "high", []string{"weatherbit"}, `(?i)\bweatherbit.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, nil),
 		NewRegex("mapquest-api-key", "MapQuest API Key", "high", []string{"mapquest"}, `(?i)\bmapquest.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, nil),
-		NewRegex("aiven-token", "Aiven Token", "high", []string{"aiven"}, `(?i)\baiven.{0,40}['\"\s:=]+([A-Za-z0-9/+=]{372})`, 1, nil),
+		NewRegex("aiven-token", "Aiven Token", "high", []string{"aiven"}, `(?i)\baiven.{0,40}['\"\s:=]+([A-Za-z0-9/+=]{372})`, 1, verifyAiven),
 		NewRegex("abuseipdb-api-key", "AbuseIPDB API Key", "high", []string{"abuseipdb"}, `(?i)\babuseipdb.{0,40}['\"\s:=]+([a-z0-9]{80})\b`, 1, nil),
 		NewRegex("sonarcloud-token", "SonarCloud Token", "high", []string{"sonar", "SONAR_TOKEN"}, `(?i)\bsonar(?:cloud)?.{0,40}['\"\s:=]+([0-9a-z]{40})\b`, 1, nil),
 		NewRegex("jumpcloud-api-key", "JumpCloud API Key", "high", []string{"jumpcloud"}, `(?i)\bjumpcloud.{0,40}['\"\s:=]+([A-Za-z0-9]{40})\b`, 1, nil),
@@ -1851,7 +1851,19 @@ func verifyOpenAI(ctx context.Context, token string) VerificationResult {
 	return verifyHTTPRequest(ctx, req)
 }
 
+func verifyOpenAIAdmin(ctx context.Context, token string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.openai.com/v1/organization/users?limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	return verifyHTTPRequest(ctx, req)
+}
+
 func verifyHTTPRequest(ctx context.Context, req *http.Request) VerificationResult {
+	return verifyHTTPRequestWithClassifier(ctx, req, nil)
+}
+
+type verificationResponseClassifier func(statusCode int, body []byte) (VerificationResult, bool)
+
+func verifyHTTPRequestWithClassifier(ctx context.Context, req *http.Request, classifier verificationResponseClassifier) VerificationResult {
 	client := http.DefaultClient
 	if configured := verificationHTTPClient(ctx); configured != nil {
 		client = configured
@@ -1871,6 +1883,12 @@ func verifyHTTPRequest(ctx context.Context, req *http.Request) VerificationResul
 	response := truncateVerificationResponse(string(body))
 	if readErr != nil {
 		return VerificationResult{Status: VerificationUnknown, ErrorCategory: "network", Message: "provider response could not be read", Response: response}
+	}
+	if classifier != nil {
+		if result, handled := classifier(resp.StatusCode, body); handled {
+			result.Response = response
+			return result
+		}
 	}
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:

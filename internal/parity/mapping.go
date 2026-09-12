@@ -1,5 +1,7 @@
 package parity
 
+import "secret-sniffer/internal/detectors"
+
 type Status string
 
 const (
@@ -17,27 +19,36 @@ type Mapping struct {
 }
 
 type Report struct {
-	SnapshotCommit           string    `json:"snapshot_commit"`
-	CatalogSize              int       `json:"catalog_size"`
-	TotalTracked             int       `json:"total_tracked"`
-	CatalogTracked           int       `json:"catalog_tracked"`
-	SubDetectorTracked       int       `json:"sub_detector_tracked"`
-	DuplicateMappings        int       `json:"duplicate_mappings"`
-	Implemented              int       `json:"implemented"`
-	Partial                  int       `json:"partial"`
-	Planned                  int       `json:"planned"`
-	Untracked                int       `json:"untracked"`
-	UntrackedTruffleHogs     []string  `json:"untracked_trufflehog_ids"`
-	SubDetectorTruffleHogIDs []string  `json:"sub_detector_trufflehog_ids"`
-	DuplicateTruffleHogIDs   []string  `json:"duplicate_trufflehog_ids"`
-	Mappings                 []Mapping `json:"mappings"`
+	SnapshotCommit           string             `json:"snapshot_commit"`
+	CatalogSize              int                `json:"catalog_size"`
+	TotalTracked             int                `json:"total_tracked"`
+	CatalogTracked           int                `json:"catalog_tracked"`
+	SubDetectorTracked       int                `json:"sub_detector_tracked"`
+	DuplicateMappings        int                `json:"duplicate_mappings"`
+	Implemented              int                `json:"implemented"`
+	Partial                  int                `json:"partial"`
+	Planned                  int                `json:"planned"`
+	Untracked                int                `json:"untracked"`
+	UntrackedTruffleHogs     []string           `json:"untracked_trufflehog_ids"`
+	SubDetectorTruffleHogIDs []string           `json:"sub_detector_trufflehog_ids"`
+	DuplicateTruffleHogIDs   []string           `json:"duplicate_trufflehog_ids"`
+	Verification             VerificationParity `json:"verification"`
+	Mappings                 []Mapping          `json:"mappings"`
+}
+
+type VerificationParity struct {
+	SnapshotCommit                  string `json:"snapshot_commit"`
+	TruffleHogVerifiableTypes       int    `json:"trufflehog_verifiable_types"`
+	SecretSnifferVerifiablePatterns int    `json:"secret_sniffer_verifiable_patterns"`
+	Remaining                       int    `json:"remaining"`
+	Note                            string `json:"note"`
 }
 
 const SnapshotCommit = GeneratedSnapshotCommit
 
 func CurrentReport() Report {
 	m := CurrentMappings()
-	r := Report{SnapshotCommit: SnapshotCommit, CatalogSize: len(TruffleHogCatalog), TotalTracked: len(m), Mappings: m}
+	r := Report{SnapshotCommit: SnapshotCommit, CatalogSize: len(TruffleHogCatalog), TotalTracked: len(m), Mappings: m, Verification: currentVerificationParity()}
 	for _, entry := range m {
 		switch entry.Status {
 		case Implemented:
@@ -52,6 +63,28 @@ func CurrentReport() Report {
 	r.UntrackedTruffleHogs = untrackedCatalogIDs(m)
 	r.Untracked = len(r.UntrackedTruffleHogs)
 	return r
+}
+
+const (
+	verificationSnapshotCommit    = "4b7d1d3a6827691637eff750b6482042e06462d0"
+	truffleHogVerifiableTypeCount = 863
+)
+
+func currentVerificationParity() VerificationParity {
+	implemented := 0
+	for _, info := range detectors.RegistryInfo(detectors.DefaultRegistry()) {
+		if info.Verifiable {
+			implemented++
+		}
+	}
+	remaining := max(0, truffleHogVerifiableTypeCount-implemented)
+	return VerificationParity{
+		SnapshotCommit:                  verificationSnapshotCommit,
+		TruffleHogVerifiableTypes:       truffleHogVerifiableTypeCount,
+		SecretSnifferVerifiablePatterns: implemented,
+		Remaining:                       remaining,
+		Note:                            "Pattern and detector-type counts are directional because versioned and multipart detectors do not map one-to-one.",
+	}
 }
 
 func mappedCatalogStats(mappings []Mapping) (catalogTracked, subDetectorTracked, duplicateMappings int, subDetectorIDs, duplicateIDs []string) {

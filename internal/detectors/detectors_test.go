@@ -64,6 +64,51 @@ func TestVerifyHTTPRequestCapturesBoundedResponse(t *testing.T) {
 	}
 }
 
+func TestVerifyHTTPRequestClassifierPreservesAmbiguousAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"code":"token_unauthorized"}`))
+	}))
+	defer server.Close()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := verifyHTTPRequestWithClassifier(context.Background(), req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && strings.Contains(string(body), "token_unauthorized") {
+			return unknownVerificationResult("authorization", "ambiguous authorization"), true
+		}
+		return VerificationResult{}, false
+	})
+	if result.Status != VerificationUnknown || result.ErrorCategory != "authorization" || result.Response != `{"code":"token_unauthorized"}` {
+		t.Fatalf("unexpected classified result: %#v", result)
+	}
+}
+
+func TestGraphQLIdentityClassifierRequiresAuthenticatedData(t *testing.T) {
+	classifier := classifyGraphQLIdentity("id")
+	result, handled := classifier(http.StatusOK, []byte(`{"data":{"me":{"id":"user-1"}}}`))
+	if !handled || result.Status != VerificationVerified {
+		t.Fatalf("expected verified identity: handled=%v result=%#v", handled, result)
+	}
+	result, handled = classifier(http.StatusOK, []byte(`{"data":{"me":null},"errors":[{"message":"Not Authenticated"}]}`))
+	if !handled || result.Status != VerificationUnknown || result.ErrorCategory != "authorization" {
+		t.Fatalf("expected unknown GraphQL auth result: handled=%v result=%#v", handled, result)
+	}
+	if _, handled = classifier(http.StatusUnauthorized, []byte(`{"error":"unauthorized"}`)); handled {
+		t.Fatal("non-success status should use the shared HTTP classifier")
+	}
+}
+
+func TestContextDependentCredentialVariantsRemainUnsupported(t *testing.T) {
+	if result := verifyNewRelic(context.Background(), "NRII-example"); result.Status != VerificationUnsupported {
+		t.Fatalf("New Relic ingest result=%#v", result)
+	}
+	if result := verifyLaunchDarkly(context.Background(), "sdk-example"); result.Status != VerificationUnsupported {
+		t.Fatalf("LaunchDarkly SDK result=%#v", result)
+	}
+}
+
 func TestVerificationProviderFailuresAreUnknown(t *testing.T) {
 	cases := []struct {
 		status   int
