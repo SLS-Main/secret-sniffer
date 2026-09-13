@@ -2,6 +2,7 @@ package detectors
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -107,6 +108,41 @@ func TestContextDependentCredentialVariantsRemainUnsupported(t *testing.T) {
 	if result := verifyLaunchDarkly(context.Background(), "sdk-example"); result.Status != VerificationUnsupported {
 		t.Fatalf("LaunchDarkly SDK result=%#v", result)
 	}
+}
+
+func TestDropboxVerifierUsesReadOnlyRPCAndRecognizesMissingScope(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.String() != "https://api.dropboxapi.com/2/users/get_current_account" {
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+		}
+		if req.Header.Get("Authorization") != "Bearer token" {
+			t.Fatalf("authorization=%q", req.Header.Get("Authorization"))
+		}
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"error_summary":"missing_scope"}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyDropbox(WithVerificationHTTPClient(context.Background(), client), "token")
+	if result.Status != VerificationVerified || result.Response == "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestGoCardlessVerifierSelectsSandboxEndpoint(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host != "api-sandbox.gocardless.com" || req.Header.Get("GoCardless-Version") != "2015-07-06" {
+			t.Fatalf("unexpected request: %s headers=%v", req.URL, req.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"creditors":[]}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyGoCardless(WithVerificationHTTPClient(context.Background(), client), "sandbox_token")
+	if result.Status != VerificationVerified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestVerificationProviderFailuresAreUnknown(t *testing.T) {

@@ -331,6 +331,135 @@ func verifyFront(ctx context.Context, secret string) VerificationResult {
 	return verifyBearerGET(ctx, secret, "https://api2.frontapp.com/me")
 }
 
+func verifyDropbox(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.dropboxapi.com/2/users/get_current_account", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode >= 200 && statusCode < 300 {
+			return VerificationResult{}, false
+		}
+		response := strings.ToLower(string(body))
+		switch {
+		case strings.Contains(response, "missing_scope"):
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
+		case strings.Contains(response, "invalid_access_token"), strings.Contains(response, "expired_access_token"):
+			return invalidCredentialResult(), true
+		default:
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+	})
+}
+
+func verifyFigma(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.figma.com/v1/me", nil)
+	req.Header.Set("X-Figma-Token", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode != http.StatusForbidden {
+			return VerificationResult{}, false
+		}
+		response := strings.ToLower(string(body))
+		switch {
+		case strings.Contains(response, "invalid scope"):
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
+		case strings.Contains(response, "invalid token"):
+			return invalidCredentialResult(), true
+		default:
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+	})
+}
+
+func verifyNeon(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://console.neon.tech/api/v2/auth")
+}
+
+func verifyRender(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.render.com/v1/users")
+}
+
+func verifyResend(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.resend.com/api-keys?limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		response := strings.ToLower(string(body))
+		switch {
+		case statusCode == http.StatusUnauthorized && strings.Contains(response, "restricted_api_key"):
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a restricted key"}, true
+		case statusCode == http.StatusBadRequest && strings.Contains(response, "validation_error"):
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden && strings.Contains(response, "restricted_api_key"):
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		default:
+			return VerificationResult{}, false
+		}
+	})
+}
+
+func verifyShortcut(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.app.shortcut.com/api/v3/member", "Shortcut-Token", "")
+}
+
+func verifyTodoist(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.todoist.com/api/v1/user")
+}
+
+func verifyFastly(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.fastly.com/tokens/self", "Fastly-Key", "")
+}
+
+func verifyBitly(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api-ssl.bitly.com/v4/user", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && strings.Contains(strings.ToLower(string(body)), "token") {
+			return invalidCredentialResult(), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyReadMe(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.readme.com/v2/projects/me")
+}
+
+func verifyGoCardless(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.gocardless.com/creditors?limit=1"
+	if strings.HasPrefix(strings.ToLower(secret), "sandbox_") {
+		endpoint = "https://api-sandbox.gocardless.com/creditors?limit=1"
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("GoCardless-Version", "2015-07-06")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyPipedrive(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.pipedrive.com/v1/users/me?api_token=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyHelpScout(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://docsapi.helpscout.net/v1/collections", nil)
+	req.SetBasicAuth(secret, "X")
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusPaymentRequired {
+			return invalidCredentialResult(), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifySegment(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://platform.segmentapis.com/v1beta/workspaces")
+}
+
+func verifyFullStory(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.fullstory.com/me", "Authorization", "Basic ")
+}
+
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
