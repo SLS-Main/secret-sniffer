@@ -139,6 +139,32 @@ func TestGoCardlessVerifierSelectsSandboxEndpoint(t *testing.T) {
 	}
 }
 
+func TestDeepgramVerifierDistinguishesScopeFromInvalidAuth(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		status VerificationStatus
+	}{
+		{name: "scope", body: `{"err_code":"INSUFFICIENT_PERMISSIONS"}`, status: VerificationVerified},
+		{name: "invalid", body: `{"err_code":"INVALID_AUTH","err_msg":"Invalid credentials."}`, status: VerificationUnverified},
+		{name: "ambiguous", body: `{"error":"forbidden"}`, status: VerificationUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Header.Get("Authorization") != "Token secret" {
+					t.Fatalf("authorization=%q", req.Header.Get("Authorization"))
+				}
+				return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+			})}
+			result := verifyDeepgram(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != test.status {
+				t.Fatalf("status=%q result=%#v", result.Status, result)
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
