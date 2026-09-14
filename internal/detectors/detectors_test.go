@@ -165,6 +165,43 @@ func TestDeepgramVerifierDistinguishesScopeFromInvalidAuth(t *testing.T) {
 	}
 }
 
+func TestDynalistVerifierUsesProviderResultCode(t *testing.T) {
+	tests := []struct {
+		code   string
+		status VerificationStatus
+	}{
+		{code: "OK", status: VerificationVerified},
+		{code: "InvalidToken", status: VerificationUnverified},
+		{code: "TooManyRequests", status: VerificationUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.code, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(req.Body)
+				if err != nil || !strings.Contains(string(body), `"token":"secret"`) {
+					t.Fatalf("request body=%q err=%v", string(body), err)
+				}
+				response := `{"_code":"` + test.code + `"}`
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(response)), Header: make(http.Header)}, nil
+			})}
+			result := verifyDynalist(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != test.status {
+				t.Fatalf("status=%q result=%#v", result.Status, result)
+			}
+		})
+	}
+}
+
+func TestGrafanaVerifierRecognizesAuthenticatedScopeFailure(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"message":"required scope accesspolicies:read"}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyGrafanaCloud(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

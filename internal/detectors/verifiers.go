@@ -624,6 +624,157 @@ func verifyYNAB(ctx context.Context, secret string) VerificationResult {
 	return verifyBearerGET(ctx, secret, "https://api.ynab.com/v1/plans")
 }
 
+func verifyGrafanaCloud(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{
+		"https://grafana.com/api/v1/tokens?region=us&pageSize=1",
+		"https://grafana.com/api/v1/tokens?region=eu&pageSize=1",
+		"https://grafana.com/api/v1/tokens?region=au&pageSize=1",
+	}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+			if statusCode != http.StatusUnauthorized && statusCode != http.StatusForbidden {
+				return VerificationResult{}, false
+			}
+			response := string(body)
+			switch {
+			case containsAnyFold(response, "invalid permission", "required scope"):
+				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
+			case containsAnyFold(response, "InvalidCredentials", "could not be parsed"):
+				return invalidCredentialResult(), true
+			default:
+				return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+			}
+		})
+	})
+}
+
+func verifyLokalise(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.lokalise.com/api2/projects?limit=1", nil)
+	req.Header.Set("X-Api-Token", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode != http.StatusBadRequest {
+			return VerificationResult{}, false
+		}
+		if containsAnyFold(string(body), "Invalid `X-Api-Token` header") {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+}
+
+func verifyShippo(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.goshippo.com/addresses/?results=1", nil)
+	req.Header.Set("Authorization", "ShippoToken "+secret)
+	req.Header.Set("Shippo-API-Version", "2018-02-08")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyTaxJar(ctx context.Context, secret string) VerificationResult {
+	return verifyEndpoints(ctx, []string{"https://api.taxjar.com/v2/categories", "https://api.sandbox.taxjar.com/v2/categories"}, func(endpoint string) VerificationResult {
+		return verifyBearerGET(ctx, secret, endpoint)
+	})
+}
+
+func verifyTogglTrack(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.track.toggl.com/api/v9/me", nil)
+	req.SetBasicAuth(secret, "api_token")
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode != http.StatusForbidden {
+			return VerificationResult{}, false
+		}
+		if containsAnyFold(string(body), "incorrect username and/or password") {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+	})
+}
+
+func verifyTicketmaster(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://app.ticketmaster.com/discovery/v2/events.json?size=1&apikey=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "oauth.v2.InvalidApiKey") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusUnauthorized {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyDynalist(ctx context.Context, secret string) VerificationResult {
+	body, _ := json.Marshal(map[string]string{"token": secret})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://dynalist.io/api/v1/file/list", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 || statusCode >= 300 && statusCode < 400 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Code string `json:"_code"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		switch response.Code {
+		case "OK":
+			return VerificationResult{Status: VerificationVerified}, true
+		case "InvalidToken":
+			return invalidCredentialResult(), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+}
+
+func verifyGyazo(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.gyazo.com/api/users/me")
+}
+
+func verifyLunchMoney(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.lunchmoney.dev/v2/me")
+}
+
+func verifyMeraki(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.meraki.com/api/v1/organizations")
+}
+
+func verifyMiro(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.miro.com/v1/oauth-token")
+}
+
+func verifyRevAI(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.rev.ai/speechtotext/v1/account")
+}
+
+func verifyTwist(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.twist.com/api/v3/users/get_session_user", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		response := string(body)
+		if statusCode == http.StatusForbidden && containsAnyFold(response, "invalid token") && containsAnyFold(response, `"code":200`, `"code": 200`) {
+			return invalidCredentialResult(), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyYousign(ctx context.Context, secret string) VerificationResult {
+	return verifyEndpoints(ctx, []string{"https://api.yousign.app/v3/users?limit=1", "https://api-sandbox.yousign.app/v3/users?limit=1"}, func(endpoint string) VerificationResult {
+		return verifyBearerGET(ctx, secret, endpoint)
+	})
+}
+
+func verifyRootly(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.rootly.com/v1/users?page[number]=1&page[size]=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Accept", "application/vnd.api+json")
+	return verifyHTTPRequest(ctx, req)
+}
+
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
