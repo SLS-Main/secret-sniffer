@@ -1487,6 +1487,149 @@ func verifyLob(ctx context.Context, secret string) VerificationResult {
 	return verifyHTTPRequest(ctx, req)
 }
 
+func verifyMapbox(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.mapbox.com/tokens/v2?access_token=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Code string `json:"code"`
+		}
+		if json.Unmarshal(body, &response) != nil || response.Code == "" {
+			return VerificationResult{}, false
+		}
+		switch response.Code {
+		case "TokenValid":
+			return VerificationResult{Status: VerificationVerified}, true
+		case "TokenMalformed", "TokenInvalid", "TokenExpired", "TokenRevoked":
+			return invalidCredentialResult(), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous token status"), true
+		}
+	})
+}
+
+func verifyQase(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.qase.io/v1/project?limit=1&offset=0", "Token", "")
+}
+
+func verifyProductboard(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.productboard.com/v2/members", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "auth.invalid") {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifySanity(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.sanity.io/v2021-10-21/users/me")
+}
+
+func verifyStoryblokPersonal(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{
+		"https://mapi.storyblok.com/v1/spaces?per_page=1",
+		"https://api-us.storyblok.com/v1/spaces?per_page=1",
+		"https://api-ca.storyblok.com/v1/spaces?per_page=1",
+		"https://api-ap.storyblok.com/v1/spaces?per_page=1",
+		"https://app.storyblokchina.cn/v1/spaces?per_page=1",
+	}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyHeaderGET(ctx, secret, endpoint, "Authorization", "")
+	})
+}
+
+func verifyStoryblokAccess(ctx context.Context, secret string) VerificationResult {
+	hosts := []string{"api.storyblok.com", "api-us.storyblok.com", "api-ca.storyblok.com", "api-ap.storyblok.com", "app.storyblokchina.cn"}
+	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
+		endpoint := "https://" + host + "/v2/cdn/spaces/me?token=" + url.QueryEscape(secret)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		return verifyHTTPRequest(ctx, req)
+	})
+}
+
+func verifyOANDA(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://api-fxpractice.oanda.com/v3/accounts", "https://api-fxtrade.oanda.com/v3/accounts"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyBearerGET(ctx, secret, endpoint)
+	})
+}
+
+func verifyGreenhouse(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://harvest.greenhouse.io/v1/users?per_page=1", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyPivotalTracker(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.pivotaltracker.com/services/v5/me", nil)
+	req.Header.Set("X-TrackerToken", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "invalid authentication credentials") {
+			return invalidCredentialResult(), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyCloudConvert(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.cloudconvert.com/v2/users/me", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "user.read", "scope") {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyBannerbear(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.bannerbear.com/v2/account", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusPaymentRequired {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key with exhausted quota"}, true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyAPIFlash(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.apiflash.com/v1/urltoimage/quota?access_key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusPaymentRequired {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key with exhausted quota"}, true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyIPInfo(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ipinfo.io/lite/me", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "unknown token") {
+			return invalidCredentialResult(), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyBaremetrics(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.baremetrics.com/v1/account")
+}
+
+func verifyScrapingBee(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://app.scrapingbee.com/api/v1/usage?api_key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequest(ctx, req)
+}
+
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)

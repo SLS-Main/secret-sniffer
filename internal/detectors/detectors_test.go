@@ -315,6 +315,42 @@ func TestCoinlayerVerifierRecognizesQuotaAsAuthenticated(t *testing.T) {
 	}
 }
 
+func TestMapboxVerifierUsesProviderTokenStatus(t *testing.T) {
+	for _, test := range []struct {
+		code   string
+		status VerificationStatus
+	}{
+		{code: "TokenValid", status: VerificationVerified},
+		{code: "TokenRevoked", status: VerificationUnverified},
+		{code: "ScopeRequired", status: VerificationUnknown},
+	} {
+		client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Query().Get("access_token") != "secret" {
+				t.Fatalf("access token query=%q", req.URL.RawQuery)
+			}
+			body := `{"code":"` + test.code + `"}`
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		})}
+		result := verifyMapbox(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != test.status {
+			t.Fatalf("code=%s status=%q result=%#v", test.code, result.Status, result)
+		}
+	}
+}
+
+func TestStoryblokAccessVerifierUsesTokenQuery(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Query().Get("token") != "secret" || req.URL.Path != "/v2/cdn/spaces/me" {
+			t.Fatalf("unexpected request: %s", req.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"space":{"id":1,"name":"test","version":1}}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyStoryblokAccess(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
