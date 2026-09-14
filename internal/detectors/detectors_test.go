@@ -264,6 +264,33 @@ func TestMailsacVerifierRejectsNullSuccessBody(t *testing.T) {
 	}
 }
 
+func TestVirusTotalVerifierAcceptsAuthenticatedSentinelMiss(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("x-apikey") != "secret" || !strings.HasSuffix(req.URL.Path, strings.Repeat("0", 64)) {
+			t.Fatalf("unexpected request: %s headers=%v", req.URL, req.Header)
+		}
+		return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"NotFoundError"}}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyVirusTotal(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestWeightsAndBiasesVerifierRejectsNullViewer(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		username, password, ok := req.BasicAuth()
+		if !ok || username != "api" || password != "secret" {
+			t.Fatalf("unexpected basic auth: username=%q password=%q ok=%v", username, password, ok)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":{"viewer":null}}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyWeightsAndBiases(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnverified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

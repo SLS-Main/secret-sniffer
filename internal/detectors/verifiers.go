@@ -1164,6 +1164,170 @@ func verifyCodacy(ctx context.Context, secret string) VerificationResult {
 	return result
 }
 
+func verifyWrike(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{
+		"https://www.wrike.com/api/v4/contacts?me=true",
+		"https://app-eu.wrike.com/api/v4/contacts?me=true",
+		"https://app-us2.wrike.com/api/v4/contacts?me=true",
+	}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+			if statusCode == http.StatusForbidden && containsAnyFold(string(body), "access_forbidden") {
+				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
+			}
+			return VerificationResult{}, false
+		})
+	})
+}
+
+func verifyPrefect(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.prefect.cloud/api/me/workspaces")
+}
+
+func verifyPolar(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.polar.sh/v1/organizations/?page=1&limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "organizations:read", "insufficient scope") {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
+		}
+		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "invalid_token") {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyPaystack(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.paystack.co/balance", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "invalid key", "invalid_Key") {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyFlutterwave(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.flutterwave.com/v3/balances", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "invalid authorization key") {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyVirusTotal(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://www.virustotal.com/api/v3/files/" + strings.Repeat("0", 64)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req.Header.Set("x-apikey", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		response := string(body)
+		switch {
+		case statusCode == http.StatusNotFound && containsAnyFold(response, "NotFoundError"):
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated the sentinel lookup"}, true
+		case statusCode == http.StatusUnauthorized && containsAnyFold(response, "WrongCredentialsError"):
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusUnauthorized || statusCode == http.StatusNotFound:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		default:
+			return VerificationResult{}, false
+		}
+	})
+}
+
+func verifyStatuspage(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.statuspage.io/v1/pages", "Authorization", "OAuth ")
+}
+
+func verifyStatusCake(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.statuscake.com/v1/uptime?limit=1&nouptime=true")
+}
+
+func verifyWeightsAndBiases(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.wandb.ai/graphql", strings.NewReader(`{"query":"query { viewer { id } }"}`))
+	req.SetBasicAuth("api", secret)
+	req.Header.Set("Content-Type", "application/json")
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode < 200 || statusCode >= 300 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Data struct {
+				Viewer *struct {
+					ID string `json:"id"`
+				} `json:"viewer"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if response.Data.Viewer == nil {
+			return invalidCredentialResult(), true
+		}
+		if response.Data.Viewer.ID == "" {
+			return unknownVerificationResult("provider_response", "provider response did not contain an authenticated identity"), true
+		}
+		return VerificationResult{Status: VerificationVerified}, true
+	})
+}
+
+func verifyPipedream(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.pipedream.com/v1/users/me")
+}
+
+func verifyCrowdin(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.crowdin.com/api/v2/user")
+}
+
+func verifyEventbrite(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://www.eventbriteapi.com/v3/users/me/")
+}
+
+func verifyLINEMessaging(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.line.me/v2/bot/info", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a restricted channel token"}, true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyMessageBird(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://rest.messagebird.com/balance", nil)
+	req.Header.Set("Authorization", "AccessKey "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), `"code":2`, "incorrect access_key") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusUnauthorized {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyTelnyx(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.telnyx.com/v2/balance", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), `"10009"`, "authentication failed") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusUnauthorized {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
