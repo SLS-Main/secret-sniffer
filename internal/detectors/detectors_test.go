@@ -406,6 +406,30 @@ func TestNylasRejectionRemainsUnknownForBroadCredentialDetector(t *testing.T) {
 	}
 }
 
+func TestBraintreeVerifierSelectsEnvironmentAndGraphQLAuthError(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host != "payments.sandbox.braintree-api.com" || req.Header.Get("Braintree-Version") != "2019-01-01" {
+			t.Fatalf("unexpected request: %s headers=%v", req.URL, req.Header)
+		}
+		body := `{"errors":[{"extensions":{"errorClass":"AUTHENTICATION"}}]}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyBraintree(WithVerificationHTTPClient(context.Background(), client), "access_token$sandbox$merchant$secret")
+	if result.Status != VerificationUnverified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestTwelveDataVerifierRequiresQuotaFields(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyTwelveData(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnknown {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

@@ -1900,6 +1900,258 @@ func verifyCoinAPI(ctx context.Context, secret string) VerificationResult {
 	return verifyHeaderGET(ctx, secret, "https://rest.coinapi.io/v1/limits", "X-CoinAPI-Key", "")
 }
 
+func verifyPinata(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pinata.cloud/data/testAuthentication", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode >= 200 && statusCode < 300 {
+			var response struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(body, &response) != nil || response.Message != "Congratulations! You are communicating with the Pinata API!" {
+				return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
+			}
+		}
+		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "INVALID_CREDENTIALS") {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyTheOddsAPI(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.the-odds-api.com/v4/sports/?apiKey=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "INVALID_KEY") {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		if statusCode >= 200 && statusCode < 300 && !jsonArray(body) {
+			return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyJotform(ctx context.Context, secret string) VerificationResult {
+	hosts := []string{"api.jotform.com", "eu-api.jotform.com", "hipaa-api.jotform.com"}
+	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
+		return verifyHeaderGET(ctx, secret, "https://"+host+"/user", "APIKEY", "")
+	})
+}
+
+func verifyBraintree(ctx context.Context, secret string) VerificationResult {
+	host := "payments.braintree-api.com"
+	if strings.HasPrefix(secret, "access_token$sandbox$") {
+		host = "payments.sandbox.braintree-api.com"
+	} else if !strings.HasPrefix(secret, "access_token$production$") {
+		return VerificationResult{Status: VerificationUnsupported, Message: "Braintree token environment is not recognized"}
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+host+"/graphql", strings.NewReader(`{"query":"query { ping }"}`))
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Braintree-Version", "2019-01-01")
+	req.Header.Set("Content-Type", "application/json")
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode < 200 || statusCode >= 300 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Data struct {
+				Ping string `json:"ping"`
+			} `json:"data"`
+			Errors []struct {
+				Extensions struct {
+					ErrorClass string `json:"errorClass"`
+				} `json:"extensions"`
+			} `json:"errors"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if response.Data.Ping == "pong" && len(response.Errors) == 0 {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		for _, providerErr := range response.Errors {
+			if providerErr.Extensions.ErrorClass == "AUTHENTICATION" {
+				return invalidCredentialResult(), true
+			}
+		}
+		return unknownVerificationResult("authorization", "provider returned an ambiguous GraphQL response"), true
+	})
+}
+
+func verifyImageKit(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.imagekit.io/v1/files?limit=1", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if (statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden) && containsAnyFold(string(body), "your account cannot be authenticated") {
+			return invalidCredentialResult(), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyAirbrakeUser(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.airbrake.io/api/v4/projects?limit=1&key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyBitGo(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://app.bitgo.com/api/v2/user/me", "https://app.bitgo-test.com/api/v2/user/me"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyBearerGET(ctx, secret, endpoint)
+	})
+}
+
+func verifyPercy(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://percy.io/api/v1/projects", nil)
+	req.Header.Set("Authorization", "Token "+secret)
+	req.Header.Set("Accept", "application/vnd.percy+json; version=3")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyNGC(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.ngc.nvidia.com/v2/users/me")
+}
+
+func verifyWitAI(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.wit.ai/apps?offset=1&limit=2", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if (statusCode == http.StatusBadRequest || statusCode == http.StatusUnauthorized) && containsAnyFold(string(body), "no-auth", "bad auth") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusBadRequest || statusCode == http.StatusUnauthorized {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyRailway(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://backboard.railway.com/graphql/v2"
+	queries := []struct {
+		header string
+		body   string
+		field  string
+	}{
+		{header: "Authorization", body: `{"query":"query { me { name email } }"}`, field: "email"},
+		{header: "Project-Access-Token", body: `{"query":"query { projectToken { projectId environmentId } }"}`, field: "projectId"},
+	}
+	return verifyEndpoints(ctx, []string{"account", "project"}, func(kind string) VerificationResult {
+		query := queries[0]
+		if kind == "project" {
+			query = queries[1]
+		}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(query.body))
+		value := secret
+		if query.header == "Authorization" {
+			value = "Bearer " + secret
+		}
+		req.Header.Set(query.header, value)
+		req.Header.Set("Content-Type", "application/json")
+		return verifyHTTPRequestWithClassifier(ctx, req, classifyGraphQLIdentity(query.field))
+	})
+}
+
+func verifyTwelveData(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.twelvedata.com/api_usage?apikey=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyAPIlayerKey)
+}
+
+func verifyExchangeRateAPI(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://v6.exchangerate-api.com/v6/" + url.PathEscape(secret) + "/quota"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Result    string `json:"result"`
+			ErrorType string `json:"error-type"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if response.Result == "success" {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		switch response.ErrorType {
+		case "invalid-key", "inactive-account":
+			return invalidCredentialResult(), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+}
+
+func verifyGuardian(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://content.guardianapis.com/search?page-size=1&api-key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyNewsAPI(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://newsapi.org/v2/top-headlines?country=us&pageSize=1", nil)
+	req.Header.Set("X-Api-Key", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Status string `json:"status"`
+			Code   string `json:"code"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			if statusCode >= 200 && statusCode < 300 {
+				return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+			}
+			return VerificationResult{}, false
+		}
+		if response.Status == "ok" {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		switch response.Code {
+		case "apiKeyInvalid", "apiKeyDisabled":
+			return invalidCredentialResult(), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+}
+
+func classifyAPIlayerKey(statusCode int, body []byte) (VerificationResult, bool) {
+	if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+		return VerificationResult{}, false
+	}
+	var response struct {
+		Status       string   `json:"status"`
+		Code         int      `json:"code"`
+		CurrentUsage *float64 `json:"current_usage"`
+		PlanLimit    *float64 `json:"plan_limit"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		if statusCode >= 200 && statusCode < 300 {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		return VerificationResult{}, false
+	}
+	if response.Status != "error" && response.CurrentUsage != nil && response.PlanLimit != nil {
+		return VerificationResult{Status: VerificationVerified}, true
+	}
+	if response.Code == http.StatusUnauthorized {
+		return invalidCredentialResult(), true
+	}
+	return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+}
+
+func jsonArray(body []byte) bool {
+	var value []any
+	return json.Unmarshal(body, &value) == nil
+}
+
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
