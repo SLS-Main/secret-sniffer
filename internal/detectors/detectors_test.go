@@ -480,6 +480,30 @@ func TestSourcegraphLocalTokenDoesNotUseCloudEndpoint(t *testing.T) {
 	}
 }
 
+func TestGrowthBookClientKeyDoesNotUseSecretAPI(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("GrowthBook client key should not make a secret API request")
+		return nil, nil
+	})}
+	result := verifyGrowthBook(WithVerificationHTTPClient(context.Background(), client), "sdk-client-key")
+	if result.Status != VerificationUnsupported {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestConfigCatVerifierPreservesEmbeddedPathSegments(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/configuration-files/part-one/part-two/config_v6.json" {
+			t.Fatalf("unexpected path: %s", req.URL.Path)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"f":{}}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyConfigCat(WithVerificationHTTPClient(context.Background(), client), "part-one/part-two")
+	if result.Status != VerificationVerified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

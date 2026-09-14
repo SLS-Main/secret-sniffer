@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -2457,6 +2458,176 @@ func verifyCloudinary(ctx context.Context, secret string) VerificationResult {
 		req.SetBasicAuth(parsed.User.Username(), apiSecret)
 		return verifyHTTPRequest(ctx, req)
 	})
+}
+
+func verifyChartMogul(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.chartmogul.com/v1/account", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyIntrinio(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api-v2.intrinio.com/account/current_usage")
+}
+
+func verifyOmnisend(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.omnisend.com/api/brands/current", nil)
+	req.Header.Set("Authorization", "Omnisend-API-Key "+secret)
+	req.Header.Set("Omnisend-Version", "2026-03-15")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyEasyship(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://public-api.easyship.com/2024-09/account")
+}
+
+func verifyTemporalCloud(ctx context.Context, secret string) VerificationResult {
+	return positiveOnlyVerification(verifyBearerGET(ctx, secret, "https://saas-api.tmprl.cloud/cloud/current-identity"), "credential may be a Temporal client secret")
+}
+
+func verifyCircle(ctx context.Context, secret string) VerificationResult {
+	return positiveOnlyVerification(verifyBearerGET(ctx, secret, "https://api.circle.com/v1/configuration"), "credential may be a Circle webhook secret")
+}
+
+func verifyHightouch(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.hightouch.com/api/v1/workspaces")
+}
+
+func verifyPendo(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://app.pendo.io/api/v1/metadata/schema/account", "x-pendo-integration-key", "")
+}
+
+func verifyNorthflank(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.northflank.com/v1/projects")
+}
+
+func verifyFlagsmith(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://edge.api.flagsmith.com/api/v1/flags/", nil)
+	req.Header.Set("X-Environment-Key", secret)
+	return positiveOnlyVerification(verifyHTTPRequest(ctx, req), "credential subtype could not be confirmed")
+}
+
+func verifyConfigCat(ctx context.Context, secret string) VerificationResult {
+	parts := strings.Split(secret, "/")
+	for i := range parts {
+		if parts[i] == "" {
+			return VerificationResult{Status: VerificationUnsupported, Message: "ConfigCat SDK key path is invalid"}
+		}
+		parts[i] = url.PathEscape(parts[i])
+	}
+	endpoint := "https://cdn-global.configcat.com/configuration-files/" + strings.Join(parts, "/") + "/config_v6.json"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyAfterShip(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.aftership.com/tracking/2026-07/couriers", nil)
+	req.Header.Set("as-api-key", secret)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyGrowthBook(ctx context.Context, secret string) VerificationResult {
+	if !strings.HasPrefix(secret, "secret_") {
+		return VerificationResult{Status: VerificationUnsupported, Message: "GrowthBook client and SDK keys are not secret API keys"}
+	}
+	return verifyBearerGET(ctx, secret, "https://api.growthbook.io/api/v1/projects?limit=1")
+}
+
+func verifyPersona(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.withpersona.com/api/v1/inquiries?page%5Bsize%5D=1&fields%5Binquiry%5D=status"
+	return positiveOnlyVerification(verifyBearerGET(ctx, secret, endpoint), "credential may be a Persona webhook secret")
+}
+
+func verifyIncrease(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://api.increase.com/programs?limit=1", "https://sandbox.increase.com/programs?limit=1"}
+	result := verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyBearerGET(ctx, secret, endpoint)
+	})
+	return positiveOnlyVerification(result, "credential may be an Increase webhook or OAuth client secret")
+}
+
+func verifyAPISports(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://v3.football.api-sports.io/status", nil)
+	req.Header.Set("x-apisports-key", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Results int             `json:"results"`
+			Errors  json.RawMessage `json:"errors"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		errorsText := strings.TrimSpace(string(response.Errors))
+		if response.Results == 1 && (errorsText == "[]" || errorsText == "{}") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if containsAnyFold(errorsText, "missing application key", "token") {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+}
+
+func verifyOpenCage(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.opencagedata.com/geocode/v1/json?q=0%2C0&no_annotations=1&key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyMediastack(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.mediastack.com/v1/news?access_key=" + url.QueryEscape(secret) + "&limit=1"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyAPIlayerAccessKey)
+}
+
+func verifyMailboxlayer(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://apilayer.net/api/check?access_key=" + url.QueryEscape(secret) + "&email=noreply%40example.com&smtp=0"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyAPIlayerAccessKey)
+}
+
+func verifyPhotoRoom(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://image-api.photoroom.com/v1/account", nil)
+	req.Header.Set("x-api-key", secret)
+	return positiveOnlyVerification(verifyHTTPRequest(ctx, req), "credential format could not be confirmed as a PhotoRoom secret key")
+}
+
+func positiveOnlyVerification(result VerificationResult, message string) VerificationResult {
+	if result.Status == VerificationUnverified {
+		result.Status = VerificationUnknown
+		result.ErrorCategory = "credential_type"
+		result.Message = message
+	}
+	return result
+}
+
+func classifyAPIlayerAccessKey(statusCode int, body []byte) (VerificationResult, bool) {
+	if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+		return VerificationResult{}, false
+	}
+	var response struct {
+		Success *bool `json:"success"`
+		Error   struct {
+			Code any    `json:"code"`
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		if statusCode >= 200 && statusCode < 300 {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		return VerificationResult{}, false
+	}
+	if response.Success != nil && !*response.Success {
+		if containsAnyFold(fmt.Sprint(response.Error.Code), "101") || containsAnyFold(response.Error.Type, "invalid_access_key") {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	}
+	return VerificationResult{}, false
 }
 
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
