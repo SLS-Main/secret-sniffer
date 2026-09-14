@@ -430,6 +430,31 @@ func TestTwelveDataVerifierRequiresQuotaFields(t *testing.T) {
 	}
 }
 
+func TestSingleStoreRejectsUnknownCredentialSubtypeWithoutNetwork(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("unsupported SingleStore credential should not make a request")
+		return nil, nil
+	})}
+	result := verifySingleStore(WithVerificationHTTPClient(context.Background(), client), "not-a-management-key")
+	if result.Status != VerificationUnsupported {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestAshbyVerifierDoesNotTrustFalseSuccessFlag(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		username, _, ok := req.BasicAuth()
+		if !ok || username != "secret" {
+			t.Fatalf("unexpected basic auth: username=%q ok=%v", username, ok)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"success":false}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyAshby(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnknown {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

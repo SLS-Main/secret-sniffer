@@ -2152,6 +2152,142 @@ func jsonArray(body []byte) bool {
 	return json.Unmarshal(body, &value) == nil
 }
 
+func verifyElasticEmail(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.elasticemail.com/v4/security/apikeys", nil)
+	req.Header.Set("X-ElasticEmail-ApiKey", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusBadRequest && containsAnyFold(string(body), "apikey expired", "invalid api key") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusBadRequest {
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyImgix(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.imgix.com/api/v1/sources?page[limit]=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequest(ctx, req)
+	if result.Status == VerificationUnverified {
+		result.Status = VerificationUnknown
+		result.ErrorCategory = "credential_type"
+		result.Message = "credential may be an imgix secure URL token"
+	}
+	return result
+}
+
+func verifyKeyCDN(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.keycdn.com/zones.json", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyHarvest(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://id.getharvest.com/api/v2/accounts", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("User-Agent", "secret-sniffer")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyCockroachCloud(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://cockroachlabs.cloud/api/v1/clusters?pagination.limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Cc-Version", "2024-09-16")
+	result := verifyHTTPRequest(ctx, req)
+	if result.Status == VerificationUnverified {
+		result.Status = VerificationUnknown
+		result.ErrorCategory = "credential_type"
+		result.Message = "credential subtype could not be confirmed"
+	}
+	return result
+}
+
+func verifySingleStore(ctx context.Context, secret string) VerificationResult {
+	if len(secret) != 64 || !isHex(secret) {
+		return VerificationResult{Status: VerificationUnsupported, Message: "credential is not a documented SingleStore management API key"}
+	}
+	return verifyBearerGET(ctx, secret, "https://api.singlestore.com/v2/organizations/current")
+}
+
+func verifyPagarMe(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pagar.me/core/v5/orders?page=1&size=1", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyCodemagic(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.codemagic.io/apps", "x-auth-token", "")
+}
+
+func verifyStreak(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.streak.com/api/v1/users/me", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyQovery(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.qovery.com/me")
+}
+
+func verifyFulcrum(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.fulcrumapp.com/api/v2/users.json?page=1&per_page=1", "X-ApiToken", "")
+}
+
+func verifyMavenlink(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.mavenlink.com/api/v1/users.json?limit=1&offset=0")
+}
+
+func verifyAshby(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.ashbyhq.com/user.list", strings.NewReader(`{"limit":1}`))
+	req.SetBasicAuth(secret, "")
+	req.Header.Set("Content-Type", "application/json")
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode < 200 || statusCode >= 300 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Success *bool `json:"success"`
+		}
+		if json.Unmarshal(body, &response) != nil || response.Success == nil {
+			return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
+		}
+		if *response.Success {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+}
+
+func verifySmartRecruiters(ctx context.Context, secret string) VerificationResult {
+	return verifyEndpoints(ctx, []string{"smart-token", "bearer"}, func(kind string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.smartrecruiters.com/users/me", nil)
+		if kind == "smart-token" {
+			req.Header.Set("X-SmartToken", secret)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+secret)
+		}
+		return verifyHTTPRequest(ctx, req)
+	})
+}
+
+func verifyJumpCloud(ctx context.Context, secret string) VerificationResult {
+	hosts := []string{"console.jumpcloud.com", "console.eu.jumpcloud.com", "console.in.jumpcloud.com"}
+	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
+		return verifyHeaderGET(ctx, secret, "https://"+host+"/api/systemusers?limit=1&skip=0", "x-api-key", "")
+	})
+}
+
+func isHex(value string) bool {
+	for _, char := range value {
+		if !(char >= '0' && char <= '9' || char >= 'a' && char <= 'f' || char >= 'A' && char <= 'F') {
+			return false
+		}
+	}
+	return value != ""
+}
+
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
