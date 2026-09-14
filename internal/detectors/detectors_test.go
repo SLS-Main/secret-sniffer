@@ -351,6 +351,38 @@ func TestStoryblokAccessVerifierUsesTokenQuery(t *testing.T) {
 	}
 }
 
+func TestZillizVerifierUsesApplicationCode(t *testing.T) {
+	for _, test := range []struct {
+		body   string
+		status VerificationStatus
+	}{
+		{body: `{"code":0,"data":[]}`, status: VerificationVerified},
+		{body: `{"code":80001}`, status: VerificationUnverified},
+		{body: `not-json`, status: VerificationUnknown},
+	} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+		})}
+		result := verifyZilliz(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != test.status {
+			t.Fatalf("body=%s status=%q result=%#v", test.body, result.Status, result)
+		}
+	}
+}
+
+func TestFlickrVerifierRejectsInvalidKeyCode(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Query().Get("method") != "flickr.test.echo" || req.URL.Query().Get("api_key") != "secret" {
+			t.Fatalf("unexpected query: %q", req.URL.RawQuery)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"stat":"fail","code":100}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyFlickr(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnverified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

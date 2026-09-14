@@ -1498,6 +1498,9 @@ func verifyMapbox(ctx context.Context, secret string) VerificationResult {
 			Code string `json:"code"`
 		}
 		if json.Unmarshal(body, &response) != nil || response.Code == "" {
+			if statusCode >= 200 && statusCode < 300 {
+				return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
+			}
 			return VerificationResult{}, false
 		}
 		switch response.Code {
@@ -1628,6 +1631,164 @@ func verifyScrapingBee(ctx context.Context, secret string) VerificationResult {
 	endpoint := "https://app.scrapingbee.com/api/v1/usage?api_key=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyVoyageAI(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.voyageai.com/v1/files?limit=1")
+}
+
+func verifyPerplexity(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.perplexity.ai/router/v1/models")
+}
+
+func verifyAI21(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.ai21.com/studio/v1/library/files?offset=0&limit=1")
+}
+
+func verifyNovita(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.novita.ai/openai/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode != http.StatusForbidden {
+			return VerificationResult{}, false
+		}
+		response := string(body)
+		switch {
+		case containsAnyFold(response, "INVALID_API_KEY"):
+			return invalidCredentialResult(), true
+		case containsAnyFold(response, "NOT_ENOUGH_BALANCE", "ACCESS_DENY"):
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a restricted or exhausted key"}, true
+		default:
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+	})
+}
+
+func verifyZilliz(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.cloud.zilliz.com/v2/projects", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Code int `json:"code"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			if statusCode >= 200 && statusCode < 300 {
+				return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+			}
+			return VerificationResult{}, false
+		}
+		switch response.Code {
+		case 0:
+			return VerificationResult{Status: VerificationVerified}, true
+		case 80001, 80002, 21119:
+			return invalidCredentialResult(), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+}
+
+func verifyDatoCMS(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://site-api.datocms.com/site", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("X-Api-Version", "3")
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		response := string(body)
+		switch {
+		case containsAnyFold(response, "INSUFFICIENT_PERMISSIONS"):
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
+		case statusCode == http.StatusUnauthorized && containsAnyFold(response, "INVALID_AUTHORIZATION_HEADER"):
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusUnauthorized:
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		default:
+			return VerificationResult{}, false
+		}
+	})
+}
+
+func verifyLocationIQ(ctx context.Context, secret string) VerificationResult {
+	hosts := []string{"us1.locationiq.com", "eu1.locationiq.com"}
+	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
+		endpoint := "https://" + host + "/v1/balance?key=" + url.QueryEscape(secret) + "&format=json"
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		return verifyHTTPRequest(ctx, req)
+	})
+}
+
+func verifyXata(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.xata.tech/organizations", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "invalid api key", "invalid token") {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyVagrantCloud(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://app.vagrantup.com/api/v2/authenticate")
+}
+
+func verifyPaperform(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.paperform.co/v1/forms?limit=1")
+}
+
+func verifyDaily(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.daily.co/v1/rooms?limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "forbidden-error") {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key with insufficient permission"}, true
+		}
+		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "authentication-error") {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyAffinity(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.affinity.co/auth/whoami")
+}
+
+func verifyWise(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://api.wise.com/2026Q3/me", "https://api.wise-sandbox.com/2026Q3/me"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyBearerGET(ctx, secret, endpoint)
+	})
+}
+
+func verifyWistia(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.wistia.com/v1/account.json")
+}
+
+func verifyFlickr(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://www.flickr.com/services/rest/?method=flickr.test.echo&api_key=" + url.QueryEscape(secret) + "&format=json&nojsoncallback=1"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Stat string `json:"stat"`
+			Code int    `json:"code"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if response.Stat == "ok" {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if response.Stat == "fail" && response.Code == 100 {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
 }
 
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
