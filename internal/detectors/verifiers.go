@@ -1328,6 +1328,165 @@ func verifyTelnyx(ctx context.Context, secret string) VerificationResult {
 	})
 }
 
+func verifyFlyIO(ctx context.Context, secret string) VerificationResult {
+	body, _ := json.Marshal(map[string]string{"header": secret})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.machines.dev/v1/tokens/authenticate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusBadRequest && containsAnyFold(string(body), "invalid token", "no tokens found") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusBadRequest {
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyPhrase(ctx context.Context, secret string) VerificationResult {
+	return verifyEndpoints(ctx, []string{"https://api.phrase.com/v2/user", "https://api.us.app.phrase.com/v2/user"}, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", "token "+secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+			if statusCode == http.StatusForbidden && containsAnyFold(string(body), "scope", "permission") {
+				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
+			}
+			return VerificationResult{}, false
+		})
+	})
+}
+
+func verifyLemonSqueezy(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.lemonsqueezy.com/v1/users/me", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Accept", "application/vnd.api+json")
+	req.Header.Set("Content-Type", "application/vnd.api+json")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyRecharge(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.rechargeapps.com/store", nil)
+	req.Header.Set("X-Recharge-Access-Token", secret)
+	req.Header.Set("X-Recharge-Version", "2021-11")
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "permission", "scope") {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifySquare(ctx context.Context, secret string) VerificationResult {
+	if strings.HasPrefix(secret, "sq0csp-") {
+		return VerificationResult{Status: VerificationUnsupported, Message: "Square application secrets are not bearer access tokens"}
+	}
+	endpoints := []string{"https://connect.squareup.com/v2/merchants", "https://connect.squareupsandbox.com/v2/merchants"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		req.Header.Set("Square-Version", "2026-08-19")
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+			if statusCode == http.StatusForbidden && containsAnyFold(string(body), "INSUFFICIENT_SCOPES") {
+				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
+			}
+			if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "AUTHENTICATION_ERROR", "UNAUTHORIZED") {
+				return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+			}
+			return VerificationResult{}, false
+		})
+	})
+}
+
+func verifyAttio(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.attio.com/v2/self", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode < 200 || statusCode >= 300 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Active *bool `json:"active"`
+		}
+		if json.Unmarshal(body, &response) != nil || response.Active == nil {
+			return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
+		}
+		if *response.Active {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return invalidCredentialResult(), true
+	})
+}
+
+func verifyOnfleet(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://onfleet.com/api/v2/auth/test", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyPodio(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.podio.com/user/status")
+}
+
+func verifyGumroad(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.gumroad.com/v2/user")
+}
+
+func verifyPDFShift(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pdfshift.io/v3/credits/usage", nil)
+	req.SetBasicAuth("api", secret)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyTurso(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.turso.tech/v1/organizations")
+}
+
+func verifyDenoDeploy(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.deno.com/v1/organizations")
+}
+
+func verifyCoinlayer(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.coinlayer.com/api/list?access_key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Success *bool `json:"success"`
+			Error   struct {
+				Code int `json:"code"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(body, &response) != nil || response.Success == nil {
+			return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
+		}
+		if *response.Success {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		switch response.Error.Code {
+		case 101, 102:
+			return invalidCredentialResult(), true
+		case 104, 105:
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a restricted or exhausted key"}, true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+}
+
+func verifyEasyPost(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.easypost.com/v2/metadata/carriers?carriers=usps&types=service_levels", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyLob(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.lob.com/v1/addresses?limit=1", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequest(ctx, req)
+}
+
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)

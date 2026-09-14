@@ -291,6 +291,30 @@ func TestWeightsAndBiasesVerifierRejectsNullViewer(t *testing.T) {
 	}
 }
 
+func TestSquareApplicationSecretDoesNotMakeNetworkRequest(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("Square application secret should not make a bearer request")
+		return nil, nil
+	})}
+	result := verifySquare(WithVerificationHTTPClient(context.Background(), client), "sq0csp-secret")
+	if result.Status != VerificationUnsupported {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestCoinlayerVerifierRecognizesQuotaAsAuthenticated(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Query().Get("access_key") != "secret" {
+			t.Fatalf("access key query=%q", req.URL.RawQuery)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"success":false,"error":{"code":104}}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyCoinlayer(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
