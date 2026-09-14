@@ -455,6 +455,31 @@ func TestAshbyVerifierDoesNotTrustFalseSuccessFlag(t *testing.T) {
 	}
 }
 
+func TestCloudinaryVerifierUsesSelfContainedCredentials(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		username, password, ok := req.BasicAuth()
+		if !ok || username != "123456789012345" || password != "abcdefghijklmnopqrstuvwxyz1" || req.URL.Path != "/v1_1/cloud/config" {
+			t.Fatalf("unexpected request: %s username=%q password=%q ok=%v", req.URL, username, password, ok)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"cloud_name":"cloud"}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyCloudinary(WithVerificationHTTPClient(context.Background(), client), "cloudinary://123456789012345:abcdefghijklmnopqrstuvwxyz1@cloud")
+	if result.Status != VerificationVerified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestSourcegraphLocalTokenDoesNotUseCloudEndpoint(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("local Sourcegraph token should not make a cloud request")
+		return nil, nil
+	})}
+	result := verifySourcegraphCloud(WithVerificationHTTPClient(context.Background(), client), "sgp_local_secret")
+	if result.Status != VerificationUnsupported {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

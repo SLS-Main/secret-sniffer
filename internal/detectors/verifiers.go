@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -2286,6 +2288,175 @@ func isHex(value string) bool {
 		}
 	}
 	return value != ""
+}
+
+func verifyHarness(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://app.harness.io/ng/api/user/currentUser", "x-api-key", "")
+}
+
+func verifySourcegraphCloud(ctx context.Context, secret string) VerificationResult {
+	if strings.HasPrefix(secret, "sgp_local_") {
+		return VerificationResult{Status: VerificationUnsupported, Message: "self-hosted Sourcegraph token requires instance context"}
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://sourcegraph.com/.api/graphql", strings.NewReader(`{"query":"query { currentUser { username } }"}`))
+	req.Header.Set("Authorization", "token "+secret)
+	req.Header.Set("Content-Type", "application/json")
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyGraphQLIdentity("username"))
+}
+
+func verifySemaphore(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.semaphore.co/api/v4/account?apikey=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyHunter(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.hunter.io/v2/account", "X-API-KEY", "")
+}
+
+func verifyRocketReach(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.rocketreach.co/api/v2/account/", "Api-Key", "")
+}
+
+func verifyZeroBounce(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.zerobounce.net/v2/getcredits?api_key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.UseNumber()
+		if decoder.Decode(&response) != nil {
+			return VerificationResult{}, false
+		}
+		var credits int64
+		var err error
+		switch value := response["Credits"].(type) {
+		case json.Number:
+			credits, err = value.Int64()
+		case string:
+			credits, err = strconv.ParseInt(value, 10, 64)
+		default:
+			err = errors.New("missing credits")
+		}
+		if err != nil {
+			return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
+		}
+		if credits >= 0 {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if credits == -1 {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+}
+
+func verifyDetectify(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.detectify.com/rest/v3/ips?limit=1", "Authorization", "")
+}
+
+func verifyMixmax(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.mixmax.com/v1/users/me", "X-API-Token", "")
+}
+
+func verifyBunny(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.bunny.net/user", nil)
+	req.Header.Set("AccessKey", secret)
+	result := verifyHTTPRequest(ctx, req)
+	if result.Status == VerificationUnverified {
+		result.Status = VerificationUnknown
+		result.ErrorCategory = "credential_type"
+		result.Message = "credential may be a Bunny storage password"
+	}
+	return result
+}
+
+func verifyUbidots(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://industrial.api.ubidots.com/api/v1.6/users/me/", "X-Auth-Token", "")
+}
+
+func verifyZohoCRM(ctx context.Context, secret string) VerificationResult {
+	hosts := []string{"www.zohoapis.com", "www.zohoapis.eu", "www.zohoapis.in", "www.zohoapis.com.au", "www.zohoapis.jp", "www.zohoapis.ca", "www.zohoapis.sa"}
+	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/crm/v8/users?type=CurrentUser", nil)
+		req.Header.Set("Authorization", "Zoho-oauthtoken "+secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+			if containsAnyFold(string(body), "OAUTH_SCOPE_MISMATCH") {
+				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
+			}
+			if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "INVALID_TOKEN") {
+				return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+			}
+			return VerificationResult{}, false
+		})
+	})
+}
+
+func verifyTatum(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.tatum.io/v3/tatum/version", nil)
+	req.Header.Set("x-api-key", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "subscription.invalid", "subscription.not.active") {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyDialpad(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://dialpad.com/api/v2/company", "https://sandbox.dialpad.com/api/v2/company"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyBearerGET(ctx, secret, endpoint)
+	})
+}
+
+func verifyCryptoCompare(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://min-api.cryptocompare.com/data/blockchain/latest?fsym=BTC", nil)
+	req.Header.Set("Authorization", "Apikey "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Response string `json:"Response"`
+			Message  string `json:"Message"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if response.Response == "Success" {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if response.Response == "Error" && containsAnyFold(response.Message, "valid auth key", "valid api key") {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+}
+
+func verifyCloudinary(ctx context.Context, secret string) VerificationResult {
+	parsed, err := url.Parse(secret)
+	if err != nil || parsed.Scheme != "cloudinary" || parsed.User == nil || parsed.Host == "" {
+		return VerificationResult{Status: VerificationUnsupported, Message: "Cloudinary URL could not be parsed safely"}
+	}
+	apiSecret, ok := parsed.User.Password()
+	if !ok || parsed.User.Username() == "" {
+		return VerificationResult{Status: VerificationUnsupported, Message: "Cloudinary URL is missing credentials"}
+	}
+	cloudName := parsed.Host
+	if strings.ContainsAny(cloudName, ".:/\\") {
+		return VerificationResult{Status: VerificationUnsupported, Message: "Cloudinary cloud name is invalid"}
+	}
+	hosts := []string{"api.cloudinary.com", "api-eu.cloudinary.com", "api-ap.cloudinary.com"}
+	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
+		endpoint := "https://" + host + "/v1_1/" + url.PathEscape(cloudName) + "/config"
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.SetBasicAuth(parsed.User.Username(), apiSecret)
+		return verifyHTTPRequest(ctx, req)
+	})
 }
 
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
