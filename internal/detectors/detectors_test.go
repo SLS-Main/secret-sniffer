@@ -235,6 +235,35 @@ func TestUptimeRobotVerifierUsesApplicationStatus(t *testing.T) {
 	}
 }
 
+func TestProtocolsIOVerifierRequiresAuthenticatedUser(t *testing.T) {
+	for _, test := range []struct {
+		body   string
+		status VerificationStatus
+	}{
+		{body: `{"status_code":0,"user":{"id":1}}`, status: VerificationVerified},
+		{body: `{"status_code":0}`, status: VerificationUnknown},
+		{body: `{"status_code":1218}`, status: VerificationUnverified},
+	} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+		})}
+		result := verifyProtocolsIO(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != test.status {
+			t.Fatalf("body=%s status=%q result=%#v", test.body, result.Status, result)
+		}
+	}
+}
+
+func TestMailsacVerifierRejectsNullSuccessBody(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("null")), Header: make(http.Header)}, nil
+	})}
+	result := verifyMailsac(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnverified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
