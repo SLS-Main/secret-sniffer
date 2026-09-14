@@ -1791,6 +1791,115 @@ func verifyFlickr(ctx context.Context, secret string) VerificationResult {
 	})
 }
 
+func verifyHelloSign(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.hellosign.com/v3/account", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyParseHub(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://www.parsehub.com/api/v2/projects?api_key=" + url.QueryEscape(secret) + "&offset=0&limit=1"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyPackagecloud(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://packagecloud.io/api/v1/repos.json?per_page=1", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyOnfido(ctx context.Context, secret string) VerificationResult {
+	host := "api.eu.onfido.com"
+	low := strings.ToLower(secret)
+	if strings.HasPrefix(low, "api_live_us.") || strings.HasPrefix(low, "api_sandbox_us.") {
+		host = "api.us.onfido.com"
+	} else if strings.HasPrefix(low, "api_live_ca.") || strings.HasPrefix(low, "api_sandbox_ca.") {
+		host = "api.ca.onfido.com"
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/v3.6/applicants?page=1&per_page=1", nil)
+	req.Header.Set("Authorization", "Token token="+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "authorization_error", "expired_token") {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyNylas(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://api.us.nylas.com/v3/grants?limit=1&offset=0", "https://api.eu.nylas.com/v3/grants?limit=1&offset=0"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		result := verifyBearerGET(ctx, secret, endpoint)
+		if result.Status == VerificationUnverified {
+			result.Status = VerificationUnknown
+			result.ErrorCategory = "credential_type"
+			result.Message = "credential may be a Nylas OAuth client secret"
+		}
+		return result
+	})
+}
+
+func verifyCapsuleCRM(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.capsulecrm.com/api/v2/users/current", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyPandaDoc(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.pandadoc.com/public/v1/members/current", "Authorization", "API-Key ")
+}
+
+func verifySparkPost(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://api.sparkpost.com/api/v1/account", "https://api.eu.sparkpost.com/api/v1/account"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+			if statusCode == http.StatusForbidden && containsAnyFold(string(body), "permission", "scope") {
+				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key with insufficient permission"}, true
+			}
+			return VerificationResult{}, false
+		})
+	})
+}
+
+func verifyAirbyte(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.airbyte.com/v1/workspaces?limit=1")
+}
+
+func verifyShipEngine(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://api.shipengine.com/v1/account/settings", "https://api.eu.shipengine.com/v1/account/settings"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyHeaderGET(ctx, secret, endpoint, "API-Key", "")
+	})
+}
+
+func verifyGetResponse(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.getresponse.com/v3/accounts", "X-Auth-Token", "api-key ")
+}
+
+func verifyMailerLite(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://connect.mailerlite.com/api/timezones")
+}
+
+func verifyKoyeb(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://app.koyeb.com/v1/account/profile")
+}
+
+func verifyRebrandly(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.rebrandly.com/v1/account", "apikey", "")
+}
+
+func verifyCoinAPI(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://rest.coinapi.io/v1/limits", "X-CoinAPI-Key", "")
+}
+
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)

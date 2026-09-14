@@ -383,6 +383,29 @@ func TestFlickrVerifierRejectsInvalidKeyCode(t *testing.T) {
 	}
 }
 
+func TestOnfidoVerifierDerivesCanadianEndpoint(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host != "api.ca.onfido.com" || req.Header.Get("Authorization") != "Token token=api_live_ca.secret" {
+			t.Fatalf("unexpected request: %s headers=%v", req.URL, req.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"applicants":[]}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyOnfido(WithVerificationHTTPClient(context.Background(), client), "api_live_ca.secret")
+	if result.Status != VerificationVerified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestNylasRejectionRemainsUnknownForBroadCredentialDetector(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"error":"unauthorized"}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyNylas(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnknown || result.ErrorCategory != "credential_type" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
