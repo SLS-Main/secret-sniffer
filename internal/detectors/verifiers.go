@@ -775,6 +775,191 @@ func verifyRootly(ctx context.Context, secret string) VerificationResult {
 	return verifyHTTPRequest(ctx, req)
 }
 
+func verifyIncidentIO(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.incident.io/v1/identity")
+}
+
+func verifyFireHydrant(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.firehydrant.io/v1/ping")
+}
+
+func verifySocketDev(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.socket.dev/v0/organizations")
+}
+
+func verifySemgrep(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://semgrep.dev/api/v1/deployments", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized {
+			return unknownVerificationResult("authorization", "token may lack Web API access"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyThousandEyes(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.thousandeyes.com/v7/account-groups", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyVultr(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.vultr.com/v2/account")
+}
+
+func verifyAssemblyAI(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://api.assemblyai.com/v2/transcript?limit=1", "https://api.eu.assemblyai.com/v2/transcript?limit=1"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyHeaderGET(ctx, secret, endpoint, "Authorization", "")
+	})
+}
+
+func verifyLiveblocks(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.liveblocks.io/v2/rooms?limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode != http.StatusUnauthorized && statusCode != http.StatusForbidden {
+			return VerificationResult{}, false
+		}
+		if containsAnyFold(string(body), "MISSING_SECRET_KEY", "WRONG_KEY_USED", "INVALID_SECRET_KEY", "INVALID_PUBLIC_KEY") {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+	})
+}
+
+func verifyClerk(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.clerk.com/v1/clients?limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "clerk_key_invalid") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusUnauthorized {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyUptimeRobot(ctx context.Context, secret string) VerificationResult {
+	body := "api_key=" + url.QueryEscape(secret) + "&format=json&limit=1"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.uptimerobot.com/v2/getMonitors", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Stat  string `json:"stat"`
+			Error struct {
+				ParameterName string `json:"parameter_name"`
+				Message       string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		switch {
+		case response.Stat == "ok":
+			return VerificationResult{Status: VerificationVerified}, true
+		case response.Stat == "fail" && response.Error.ParameterName == "api_key" && containsAnyFold(response.Error.Message, "invalid"):
+			return invalidCredentialResult(), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+}
+
+func verifyApollo(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.apollo.io/api/v1/auth/health", nil)
+	req.Header.Set("x-api-key", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode < 200 || statusCode >= 300 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Healthy    bool `json:"healthy"`
+			IsLoggedIn bool `json:"is_logged_in"`
+		}
+		if json.Unmarshal(body, &response) != nil || !response.Healthy {
+			return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
+		}
+		if response.IsLoggedIn {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return invalidCredentialResult(), true
+	})
+}
+
+func verifySonarCloud(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://sonarcloud.io/api/authentication/validate", "https://sonarqube.us/api/authentication/validate"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+			if statusCode < 200 || statusCode >= 300 {
+				return VerificationResult{}, false
+			}
+			var response struct {
+				Valid *bool `json:"valid"`
+			}
+			if json.Unmarshal(body, &response) != nil || response.Valid == nil {
+				return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
+			}
+			if *response.Valid {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return invalidCredentialResult(), true
+		})
+	})
+}
+
+func verifyAlienVaultOTX(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://otx.alienvault.com/api/v1/user/me", nil)
+	req.Header.Set("X-OTX-API-KEY", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "authentication required") {
+			return invalidCredentialResult(), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyLemlist(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.lemlist.com/api/team", nil)
+	req.SetBasicAuth("", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusNotFound && containsAnyFold(string(body), "no user found") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusNotFound {
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyZeroTier(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.zerotier.com/api/v1/network", nil)
+	req.Header.Set("Authorization", "token "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "access denied") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusUnauthorized {
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)

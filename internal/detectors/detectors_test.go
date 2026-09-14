@@ -202,6 +202,39 @@ func TestGrafanaVerifierRecognizesAuthenticatedScopeFailure(t *testing.T) {
 	}
 }
 
+func TestApolloVerifierUsesLoginStateInsideSuccessResponse(t *testing.T) {
+	for _, test := range []struct {
+		body   string
+		status VerificationStatus
+	}{
+		{body: `{"healthy":true,"is_logged_in":true}`, status: VerificationVerified},
+		{body: `{"healthy":true,"is_logged_in":false}`, status: VerificationUnverified},
+		{body: `{"healthy":false,"is_logged_in":false}`, status: VerificationUnknown},
+	} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+		})}
+		result := verifyApollo(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != test.status {
+			t.Fatalf("body=%s status=%q result=%#v", test.body, result.Status, result)
+		}
+	}
+}
+
+func TestUptimeRobotVerifierUsesApplicationStatus(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil || !strings.Contains(string(body), "api_key=secret") {
+			t.Fatalf("request body=%q err=%v", string(body), err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"stat":"fail","error":{"parameter_name":"api_key","message":"invalid api key"}}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyUptimeRobot(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnverified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
