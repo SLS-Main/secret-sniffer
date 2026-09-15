@@ -2795,6 +2795,147 @@ func verifyEtherscan(ctx context.Context, secret string) VerificationResult {
 	})
 }
 
+func verifyOpenWeather(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.openweathermap.org/data/2.5/weather?q=London&appid="+url.QueryEscape(secret), []string{"weather", "main"}, "invalid api key")
+}
+
+func verifyTomorrowIO(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.tomorrow.io/v4/weather/realtime?location=0%2C0&apikey="+url.QueryEscape(secret), []string{"data", "location"}, "invalid auth", "invalid api key")
+}
+
+func verifyHERE(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://geocode.search.hereapi.com/v1/geocode?q=Berlin&limit=1&apiKey="+url.QueryEscape(secret), []string{"items"}, "apikey invalid", "apikey not found")
+}
+
+func verifyPolygon(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.polygon.io/v3/reference/tickers?limit=1&apiKey="+url.QueryEscape(secret), []string{"request_id", "results"}, "unknown api key")
+}
+
+func verifyAbuseIPDB(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.abuseipdb.com/api/v2/check?ipAddress=192.0.2.1&maxAgeInDays=1", nil)
+	req.Header.Set("Key", secret)
+	req.Header.Set("Accept", "application/json")
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"ipAddress", "abuseConfidenceScore"}, "authentication failed. your api key is either missing, incorrect, or revoked"))
+}
+
+func verifyIPStack(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.ipstack.com/192.0.2.1?access_key="+url.QueryEscape(secret), []string{"ip"}, "invalid_access_key")
+}
+
+func verifyIPGeolocation(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.ipgeolocation.io/v3/ipgeo?ip=192.0.2.1&fields=ip&apiKey="+url.QueryEscape(secret), []string{"ip"}, "provided api key is not valid")
+}
+
+func verifyWeatherstack(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.weatherstack.com/current?query=London&access_key="+url.QueryEscape(secret), []string{"request", "location", "current"}, "invalid_access_key")
+}
+
+func verifyAccuWeather(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://dataservice.accuweather.com/locations/v1/cities/search?q=London&apikey=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if statusCode == http.StatusUnauthorized {
+			var response struct {
+				Code    string `json:"Code"`
+				Message string `json:"Message"`
+			}
+			if json.Unmarshal(body, &response) == nil && strings.EqualFold(response.Code, "Unauthorized") && containsAnyFold(response.Message, "API authorization failed") {
+				return invalidCredentialResult(), true
+			}
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonArray(body) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+}
+
+func verifyMapQuest(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://www.mapquestapi.com/geocoding/v1/address?location=Washington%2CDC&thumbMaps=false&maxResults=1&key="+url.QueryEscape(secret), []string{"info", "results"}, "the appkey submitted with this request is invalid")
+}
+
+func verifyFixer(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://data.fixer.io/api/symbols?access_key="+url.QueryEscape(secret), []string{"success", "symbols"}, "invalid_access_key")
+}
+
+func verifyCurrencyLayer(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.currencylayer.com/list?access_key="+url.QueryEscape(secret), []string{"success", "currencies"}, "invalid_access_key")
+}
+
+func verifyExchangeRatesAPI(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.exchangeratesapi.io/v1/symbols?access_key="+url.QueryEscape(secret), []string{"success", "symbols"}, "invalid_access_key", "not supplied a valid api access key")
+}
+
+func verifyMarketstack(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.marketstack.com/v2/tickers?limit=1&access_key="+url.QueryEscape(secret), []string{"pagination", "data"}, "invalid_access_key")
+}
+
+func verifyPositionstack(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.positionstack.com/v1/forward?query=Berlin&limit=1&access_key="+url.QueryEscape(secret), []string{"data"}, "invalid_access_key")
+}
+
+func verifyFinnhub(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://finnhub.io/api/v1/quote?symbol=AAPL&token="+url.QueryEscape(secret), []string{"c", "t"}, "invalid api key")
+}
+
+func verifyTradier(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.tradier.com/v1/user/profile", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Accept", "application/json")
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"profile"}, "invalid access token", "keymanagement.service.invalid_access_token"))
+}
+
+func verifyGeocodio(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.geocod.io/v2/geocode?q=Washington%2CDC&limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"results"}, "invalid api key"))
+}
+
+func verifyWorldWeather(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.worldweatheronline.com/premium/v1/weather.ashx?q=London&num_of_days=0&format=json&key="+url.QueryEscape(secret), []string{"request", "current_condition"}, "api key is invalid")
+}
+
+func verifyFinancialModelingPrep(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://financialmodelingprep.com/stable/available-exchanges?apikey=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if containsAnyFold(string(body), "invalid api key") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonArray(body) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+}
+
+func verifyQueryAPI(ctx context.Context, endpoint string, validFields []string, invalidMarkers ...string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI(validFields, invalidMarkers...))
+}
+
+func classifyReadOnlyAPI(validFields []string, invalidMarkers ...string) verificationResponseClassifier {
+	return func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if containsAnyFold(string(body), invalidMarkers...) {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonHasAllFields(body, validFields...) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	}
+}
+
 func classifyTokenExchange(invalidMarkers ...string) verificationResponseClassifier {
 	return func(statusCode int, body []byte) (VerificationResult, bool) {
 		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
@@ -3047,6 +3188,19 @@ func jsonHasAnyField(body []byte, fields ...string) bool {
 		}
 	}
 	return false
+}
+
+func jsonHasAllFields(body []byte, fields ...string) bool {
+	var payload any
+	if json.Unmarshal(body, &payload) != nil {
+		return false
+	}
+	for _, field := range fields {
+		if !findJSONField(payload, field) {
+			return false
+		}
+	}
+	return true
 }
 
 func classifyGraphQLIdentity(field string) verificationResponseClassifier {

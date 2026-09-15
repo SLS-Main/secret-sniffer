@@ -533,6 +533,68 @@ func TestEtherscanVerifierUsesApplicationStatus(t *testing.T) {
 	}
 }
 
+func TestReadOnlyAPIClassifier(t *testing.T) {
+	classifier := classifyReadOnlyAPI([]string{"data", "location"}, "invalid api key")
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		status     VerificationStatus
+		handled    bool
+	}{
+		{name: "valid", statusCode: http.StatusOK, body: `{"data":{"time":"now"},"location":{"lat":0}}`, status: VerificationVerified, handled: true},
+		{name: "invalid in successful response", statusCode: http.StatusOK, body: `{"error":"Invalid API key"}`, status: VerificationUnverified, handled: true},
+		{name: "quota", statusCode: http.StatusOK, body: `{"error":"quota exhausted"}`, status: VerificationUnknown, handled: true},
+		{name: "malformed", statusCode: http.StatusOK, body: `{`, status: VerificationUnknown, handled: true},
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, body: `{}`, handled: false},
+		{name: "server error", statusCode: http.StatusBadGateway, body: `{}`, handled: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, handled := classifier(tt.statusCode, []byte(tt.body))
+			if handled != tt.handled || result.Status != tt.status {
+				t.Fatalf("result=%#v handled=%v", result, handled)
+			}
+		})
+	}
+}
+
+func TestVerificationMappingBatchIsRegistered(t *testing.T) {
+	want := map[string]bool{
+		"abuseipdb-api-key": false, "accuweather-api-key": false, "currencylayer-api-key": false,
+		"exchangeratesapi-api-key": false, "financialmodelingprep-api-key": false, "finnhub-api-key": false,
+		"fixerio-api-key": false, "geocodio-api-key": false, "here-api-key": false,
+		"ipgeolocation-api-key": false, "ipstack-api-key": false, "mapquest-api-key": false,
+		"marketstack-api-key": false, "openweather-api-key": false, "polygon-api-key": false,
+		"positionstack-api-key": false, "tomorrowio-api-key": false, "tradier-token": false,
+		"weatherstack-api-key": false, "worldweather-api-key": false,
+	}
+	for _, info := range RegistryInfo(DefaultRegistry()) {
+		if _, ok := want[info.ID]; ok {
+			want[info.ID] = info.Verifiable
+		}
+	}
+	for id, registered := range want {
+		if !registered {
+			t.Errorf("%s is not registered with a verifier", id)
+		}
+	}
+}
+
+func TestAbuseIPDBVerifierUsesKeyHeader(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Key") != "secret" || req.Header.Get("Accept") != "application/json" {
+			t.Fatalf("unexpected headers: %#v", req.Header)
+		}
+		body := `{"data":{"ipAddress":"192.0.2.1","abuseConfidenceScore":0}}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyAbuseIPDB(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
