@@ -2,6 +2,7 @@ package detectors
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -590,6 +591,93 @@ func TestAbuseIPDBVerifierUsesKeyHeader(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
 	result := verifyAbuseIPDB(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestNextVerificationMappingBatchIsRegistered(t *testing.T) {
+	want := map[string]bool{
+		"aviationstack-api-key": false, "calendarific-api-key": false, "commodities-api-key": false,
+		"countrylayer-api-key": false, "currencyfreaks-api-key": false, "currencyscoop-api-key": false,
+		"ethplorer-api-key": false, "fastforex-api-key": false, "geoapify-api-key": false,
+		"graphhopper-api-key": false, "ipqualityscore-api-key": false, "kickbox-api-key": false,
+		"numverify-api-key": false, "openuv-api-key": false, "pandascore-api-key": false,
+		"vatlayer-api-key": false, "veriphone-api-key": false, "vpnapi-key": false,
+		"walkscore-api-key": false, "weatherbit-api-key": false,
+	}
+	for _, info := range RegistryInfo(DefaultRegistry()) {
+		if _, ok := want[info.ID]; ok {
+			want[info.ID] = info.Verifiable
+		}
+	}
+	for id, registered := range want {
+		if !registered {
+			t.Errorf("%s is not registered with a verifier", id)
+		}
+	}
+}
+
+func TestIPQualityScoreVerifierClassifiesApplicationStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		status VerificationStatus
+	}{
+		{name: "valid", body: `{"success":true,"message":"Success.","fraud_score":0}`, status: VerificationVerified},
+		{name: "invalid", body: `{"success":false,"message":"Invalid or unauthorized key. Please check the API key and try again."}`, status: VerificationUnverified},
+		{name: "no credits", body: `{"success":false,"message":"You have insufficient credits to make this query."}`, status: VerificationVerified},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.EscapedPath() != "/api/json/ip/secret/8.8.8.8" {
+					t.Fatalf("path=%q", req.URL.EscapedPath())
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
+			})}
+			result := verifyIPQualityScore(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != tt.status {
+				t.Fatalf("unexpected result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestWalkScoreVerifierClassifiesProviderStatus(t *testing.T) {
+	tests := []struct {
+		status int
+		want   VerificationStatus
+	}{
+		{status: 1, want: VerificationVerified},
+		{status: 2, want: VerificationVerified},
+		{status: 40, want: VerificationUnverified},
+		{status: 41, want: VerificationVerified},
+		{status: 42, want: VerificationUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("status_%d", tt.status), func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				body := fmt.Sprintf(`{"status":%d}`, tt.status)
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+			})}
+			result := verifyWalkScore(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != tt.want {
+				t.Fatalf("unexpected result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestOpenUVVerifierUsesAccessTokenHeader(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("x-access-token") != "secret" {
+			t.Fatalf("x-access-token=%q", req.Header.Get("x-access-token"))
+		}
+		body := `{"result":{"uv":0,"uv_time":"now"}}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyOpenUV(WithVerificationHTTPClient(context.Background(), client), "secret")
 	if result.Status != VerificationVerified {
 		t.Fatalf("unexpected result: %#v", result)
 	}

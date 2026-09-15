@@ -2916,6 +2916,173 @@ func verifyFinancialModelingPrep(ctx context.Context, secret string) Verificatio
 	})
 }
 
+func verifyCurrencyFreaks(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.currencyfreaks.com/v2.0/rates/latest?symbols=EUR&apikey="+url.QueryEscape(secret), []string{"date", "base", "rates"}, "provided api key is invalid")
+}
+
+func verifyCurrencyScoop(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.currencybeacon.com/v1/currencies?api_key="+url.QueryEscape(secret), []string{"meta", "response"}, "missing or invalid api credentials")
+}
+
+func verifyFastForex(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.fastforex.io/fetch-one?from=USD&to=EUR&api_key="+url.QueryEscape(secret), []string{"base", "result", "updated"}, "api key not valid")
+}
+
+func verifyVATLayer(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://apilayer.net/api/rate?country_code=GB&access_key="+url.QueryEscape(secret), []string{"success", "country_code", "standard_rate"}, "invalid_access_key", "not supplied a valid api access key")
+}
+
+func verifyAviationstack(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.aviationstack.com/v1/flights?limit=1&access_key="+url.QueryEscape(secret), []string{"pagination", "data"}, "invalid_access_key", "not supplied a valid api access key")
+}
+
+func verifyCalendarific(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://calendarific.com/api/v2/countries?api_key="+url.QueryEscape(secret), []string{"meta", "response", "countries"}, "missing or invalid api credentials")
+}
+
+func verifyEthplorer(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.ethplorer.io/getLastBlock?apiKey="+url.QueryEscape(secret), []string{"lastBlock"}, "invalid api key")
+}
+
+func verifyWeatherbit(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.weatherbit.io/v2.0/current?lat=0&lon=0&key="+url.QueryEscape(secret), []string{"count", "data"}, "api key not valid, or not yet activated")
+}
+
+func verifyVPNAPI(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://vpnapi.io/api/8.8.8.8?key="+url.QueryEscape(secret), []string{"ip", "security", "location", "network"}, "invalid api key")
+}
+
+func verifyIPQualityScore(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://www.ipqualityscore.com/api/json/ip/" + url.PathEscape(secret) + "/8.8.8.8"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Success bool   `json:"success"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		switch {
+		case response.Success:
+			return VerificationResult{Status: VerificationVerified}, true
+		case containsAnyFold(response.Message, "invalid or unauthorized key"):
+			return invalidCredentialResult(), true
+		case containsAnyFold(response.Message, "insufficient credits"):
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key with insufficient credits"}, true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+}
+
+func verifyNumverify(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://apilayer.net/api/validate?number=14155552671&access_key="+url.QueryEscape(secret), []string{"valid", "number", "country_code"}, "invalid_access_key", "not supplied a valid api access key")
+}
+
+func verifyGeoapify(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.geoapify.com/v1/geocode/search?text=Berlin&limit=1&apiKey="+url.QueryEscape(secret), []string{"type", "features"}, "invalid apikey")
+}
+
+func verifyGraphHopper(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://graphhopper.com/api/1/geocode?q=Berlin&limit=1&key="+url.QueryEscape(secret), []string{"hits"}, "wrong credentials")
+}
+
+func verifyKickbox(ctx context.Context, secret string) VerificationResult {
+	return verifyEndpoints(ctx, []string{"https://api.kickbox.com", "https://api.eu.kickbox.com"}, func(baseURL string) VerificationResult {
+		endpoint := baseURL + "/v2/verify?email=deliverable%40example.com&apikey=" + url.QueryEscape(secret)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+			if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+				return VerificationResult{}, false
+			}
+			response := string(body)
+			switch {
+			case containsAnyFold(response, "invalid api key"):
+				return invalidCredentialResult(), true
+			case containsAnyFold(response, "insufficient balance"):
+				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key with insufficient balance"}, true
+			case statusCode >= 200 && statusCode < 300 && jsonHasAllFields(body, "success", "result", "email"):
+				return VerificationResult{Status: VerificationVerified}, true
+			default:
+				return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+			}
+		})
+	})
+}
+
+func verifyOpenUV(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.openuv.io/api/v1/uv?lat=0&lng=0", nil)
+	req.Header.Set("x-access-token", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"result", "uv", "uv_time"}, "user with api key not found"))
+}
+
+func verifyPandaScore(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pandascore.co/videogames?per_page=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyJSONArrayAPI("invalid credentials"))
+}
+
+func verifyCountryLayer(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.countrylayer.com/v2/all?access_key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyJSONArrayAPI("invalid_access_key", "not supplied a valid api access key"))
+}
+
+func verifyCommoditiesAPI(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://commodities-api.com/api/symbols?access_key="+url.QueryEscape(secret), []string{"success", "symbols"}, "invalid_access_key", "invalid api key was specified")
+}
+
+func verifyWalkScore(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.walkscore.com/score?format=json&address=1%20Main%20St&lat=47.6&lon=-122.3&wsapikey=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Status int `json:"status"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		switch response.Status {
+		case 1, 2:
+			return VerificationResult{Status: VerificationVerified}, true
+		case 40:
+			return invalidCredentialResult(), true
+		case 41:
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key with exhausted quota"}, true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+}
+
+func verifyVeriphone(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.veriphone.io/v2/credits", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"email", "counter", "active"}, "invalid api key"))
+}
+
+func classifyJSONArrayAPI(invalidMarkers ...string) verificationResponseClassifier {
+	return func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if containsAnyFold(string(body), invalidMarkers...) {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonArray(body) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	}
+}
+
 func verifyQueryAPI(ctx context.Context, endpoint string, validFields []string, invalidMarkers ...string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI(validFields, invalidMarkers...))
