@@ -1155,6 +1155,86 @@ func TestSpectralOpsVerifierRejectsEmpty401(t *testing.T) {
 	}
 }
 
+func TestEighthVerificationMappingBatchIsRegistered(t *testing.T) {
+	want := map[string]bool{
+		"chroma-cloud-api-key": false, "convertkit-api-secret": false, "deel-api-token": false,
+		"fal-ai-api-key": false, "ilert-api-key": false, "instantly-api-key": false,
+		"lithic-api-key": false, "motherduck-token": false, "opticodds-api-key": false,
+		"paymongo-secret-key": false, "planhat-api-token": false, "salesflare-api-key": false,
+		"scaleway-secret-key": false, "scrutinizer-token": false, "slack-webhook": false,
+		"smartlead-api-key": false, "trayio-api-token": false, "triggerdev-api-key": false,
+		"trulioo-api-key": false, "unit-api-token": false,
+	}
+	for _, info := range RegistryInfo(DefaultRegistry()) {
+		if _, ok := want[info.ID]; ok {
+			want[info.ID] = info.Verifiable
+		}
+	}
+	for id, registered := range want {
+		if !registered {
+			t.Errorf("%s is not registered with a verifier", id)
+		}
+	}
+}
+
+func TestSlackWebhookVerifierUsesInvalidPayload(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil || string(body) != `{}` || req.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("body=%q content-type=%q err=%v", body, req.Header.Get("Content-Type"), err)
+		}
+		return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader("no_text")), Header: make(http.Header)}, nil
+	})}
+	ctx := WithVerificationHTTPClient(context.Background(), client)
+	result := verifySlackWebhook(ctx, "https://hooks.slack.com/services/T1/B1/abcdefghijklmnopqrstuvwxyz")
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestUnitVerifierTriesSandbox(t *testing.T) {
+	var requests int
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		if req.Header.Get("Authorization") != "Bearer secret" {
+			t.Fatalf("Authorization=%q", req.Header.Get("Authorization"))
+		}
+		if req.URL.Host == "api.unit.co" {
+			body := `{"errors":[{"title":"Bearer token is invalid or expired"}]}`
+			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyUnit(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" || requests != 2 {
+		t.Fatalf("result=%#v requests=%d", result, requests)
+	}
+}
+
+func TestMotherDuckVerifierRecognizesNonAdminToken(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		body := `{"code":"FORBIDDEN","message":"Admin access required"}`
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyMotherDuck(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestTruliooVerifierUsesDedicatedAuthenticationEndpoint(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/v3/connection/testauthentication" || req.Header.Get("Authorization") != "Bearer secret" {
+			t.Fatalf("unexpected request: %s %#v", req.URL.Path, req.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`"Hello account"`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyTrulioo(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -1285,7 +1365,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"baseten-api-key", "model-apis.baseten.co api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"runpod-api-key", "api.runpod.ai api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"modal-api-token", "api.modal.com token_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"fal-ai-api-key", "api.fal.ai api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"fal-ai-api-key", "api.fal.ai api_key=\"12345678-1234-1234-1234-123456789abc:" + strings.Repeat("A", 32) + "\"", "12345678-1234-1234-1234-123456789abc:" + strings.Repeat("A", 32)},
 		{"novita-api-key", "api.novita.ai api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"predibase-api-token", "serving.app.predibase.com api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"octoai-api-token", "api.octoai.cloud api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -1401,7 +1481,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"tink-client-secret", "oauth.tink.com client_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"seon-api-key", "api.seon.io X-API-Key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"jumio-client-secret", "api.jumio.com client_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"trulioo-api-key", "api.trulioo.com x-trulioo-api-key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"trulioo-api-key", "api.trulioo.com bearer=\"eyJ" + strings.Repeat("A", 20) + ".eyJ" + strings.Repeat("A", 20) + "." + strings.Repeat("A", 20) + "\"", "eyJ" + strings.Repeat("A", 20) + ".eyJ" + strings.Repeat("A", 20) + "." + strings.Repeat("A", 20)},
 		{"sardine-client-secret", "api.sardine.ai client_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"sift-api-key", "api.sift.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"forter-api-key", "api.forter.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -1429,7 +1509,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"windmill-api-token", "app.windmill.dev api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"n8n-api-key", "n8n.io api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"workato-api-token", "apim.workato.com api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"trayio-api-token", "api.tray.io api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"trayio-api-token", "api.tray.io api_token=\"" + strings.Repeat("a", 40) + "\"", strings.Repeat("a", 40)},
 		{"airbyte-api-token", "api.airbyte.com api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"fivetran-api-secret", "api.fivetran.com api_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"hightouch-api-key", "api.hightouch.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -1623,7 +1703,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"packagecloud-token", "packagecloud token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"phrase-access-token", "phrase access_token=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"semaphore-api-token", "semaphore api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"scrutinizer-token", "scrutinizer token=\"" + strings.Repeat("a", 40) + "\"", strings.Repeat("a", 40)},
+		{"scrutinizer-token", "scrutinizer token=\"" + strings.Repeat("a", 64) + "\"", strings.Repeat("a", 64)},
 		{"saucelabs-access-key", "saucelabs access_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"lessannoyingcrm-api-key", "lessannoyingcrm api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"meaningcloud-api-key", "meaningcloud api_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
@@ -1714,7 +1794,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"restpack-screenshot-api-key", "restpack screenshot api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"rocketreach-api-key", "rocketreach api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"route4me-api-key", "route4me api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
-		{"salesflare-api-key", "salesflare api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"salesflare-api-key", "salesflare api_key=\"" + strings.Repeat("A", 45) + "\"", strings.Repeat("A", 45)},
 		{"attio-api-key", "api.attio.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"affinity-api-key", "api.affinity.co api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"height-api-key", "api.height.app api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},

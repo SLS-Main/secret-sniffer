@@ -4139,6 +4139,215 @@ func classifyBinaryResponse(magics [][]byte, invalidMarkers ...string) verificat
 	}
 }
 
+func verifyScaleway(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.scaleway.com/account/v3/projects?per_page=1", nil)
+	req.Header.Set("X-Auth-Token", secret)
+	return verifyPrivateCollection(ctx, req, "denied_authentication", "authentication is denied")
+}
+
+func verifyPayMongo(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.paymongo.com/v1/webhooks?limit=1", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyPrivateCollection(ctx, req, "authentication_invalid", "authentication is invalid")
+}
+
+func verifyUnit(ctx context.Context, secret string) VerificationResult {
+	result := verifyEndpoints(ctx, []string{"https://api.unit.co/accounts?page%5Blimit%5D=1", "https://api.s.unit.sh/accounts?page%5Blimit%5D=1"}, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("bearer token is invalid or expired"))
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyLithic(ctx context.Context, secret string) VerificationResult {
+	result := verifyEndpoints(ctx, []string{"https://api.lithic.com/v1/account_holders?limit=1", "https://sandbox.lithic.com/v1/account_holders?limit=1"}, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"data", "has_more"}, "could not find the provided api key"))
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyFalAI(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.fal.ai/v1/models", nil)
+	req.Header.Set("Authorization", "Key "+secret)
+	return verifyPrivateCollection(ctx, req, "authorization_error", "invalid api key")
+}
+
+func verifyChromaCloud(ctx context.Context, secret string) VerificationResult {
+	result := verifyEndpoints(ctx, []string{"https://api.trychroma.com/api/v2/auth/identity", "https://europe-west1.gcp.trychroma.com/api/v2/auth/identity"}, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("X-Chroma-Token", secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"user_id"}, "permission denied"))
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyTrulioo(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.trulioo.com/v3/connection/testauthentication", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "not authorized") {
+			return invalidCredentialResult(), true
+		}
+		var message string
+		if json.Unmarshal(body, &message) == nil && statusCode >= 200 && statusCode < 300 && strings.HasPrefix(message, "Hello ") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyOpticOdds(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.opticodds.com/api/v3/sports", nil)
+	req.Header.Set("X-Api-Key", secret)
+	return verifyPrivateCollection(ctx, req, "invalid or inactive api key")
+}
+
+func verifyTriggerDev(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.trigger.dev/api/v1/runs?page%5Bsize%5D=10", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"data", "pagination"}, "invalid api key"))
+	result.Response = ""
+	return result
+}
+
+func verifyTrayIO(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.tray.io/core/v1/connectors", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"elements"}, "request is unauthorized"))
+	result.Response = ""
+	return result
+}
+
+func verifyMotherDuck(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.motherduck.com/v1/active_accounts", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		response := string(body)
+		if containsAnyFold(response, "authentication_error", "invalid authentication token") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusForbidden && containsAnyFold(response, "forbidden") {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a non-admin token"}, true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonHasAnyField(body, "accounts") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyPlanhat(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.planhat.com/users?limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyPrivateCollection(ctx, req, "invalid token")
+}
+
+func verifySlackWebhook(ctx context.Context, secret string) VerificationResult {
+	if !strings.HasPrefix(secret, "https://hooks.slack.com/") {
+		return VerificationResult{Status: VerificationUnsupported, Message: "unexpected Slack webhook host"}
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, secret, strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		response := strings.TrimSpace(string(body))
+		switch {
+		case statusCode == http.StatusBadRequest && containsAnyFold(response, "no_text", "invalid_payload"):
+			return VerificationResult{Status: VerificationVerified, Message: "provider recognized the webhook but rejected an empty payload"}, true
+		case containsAnyFold(response, "no_team", "no_service", "invalid_token"):
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusTooManyRequests || statusCode >= 500:
+			return VerificationResult{}, false
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous webhook response"), true
+		}
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyConvertKit(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.convertkit.com/v3/account?api_secret=" + url.QueryEscape(secret)
+	result := verifyQueryAPI(ctx, endpoint, []string{"id"}, "authorization failed", "api key not valid")
+	result.Response = ""
+	return result
+}
+
+func verifyScrutinizer(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://scrutinizer-ci.com/api/user/repositories?access_token=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("invalid_grant", "access token provided is invalid"))
+	result.Response = ""
+	return result
+}
+
+func verifyInstantly(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.instantly.ai/api/v2/workspaces/current", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusPaymentRequired && containsAnyFold(string(body), "active paid plan") {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a workspace without an active paid plan"}, true
+		}
+		return classifyReadOnlyAPI([]string{"id", "name", "owner"}, "invalid api key")(statusCode, body)
+	})
+	result.Response = ""
+	return result
+}
+
+func verifySmartlead(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://server.smartlead.ai/api/v1/campaigns/?api_key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyJSONArrayAPI("invalid api key"))
+	result.Response = ""
+	return result
+}
+
+func verifyDeel(ctx context.Context, secret string) VerificationResult {
+	result := verifyEndpoints(ctx, []string{"https://api.letsdeel.com/rest/contracts?limit=1", "https://api-staging.letsdeel.com/rest/contracts?limit=1"}, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("invalid_token", "unauthorized call: invalid token"))
+	})
+	result.Response = ""
+	return result
+}
+
+func verifySalesflare(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.salesflare.com/me/contacts", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "missing authentication") {
+			return invalidCredentialResult(), true
+		}
+		return classifyCollectionResponse()(statusCode, body)
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyIlert(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ilert.com/api/users/current", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "provided credentials are invalid", "key_error"))
+	result.Response = ""
+	return result
+}
+
 func verifyFetchedExample(ctx context.Context, endpoint string, invalidMarker string, authenticatedMarkers ...string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
@@ -4169,7 +4378,8 @@ func classifyCollectionResponse(invalidMarkers ...string) verificationResponseCl
 		}
 		if statusCode >= 200 && statusCode < 300 && (jsonArray(body) || jsonHasAnyField(body,
 			"data", "results", "lists", "addresses", "templates", "orders", "answers", "applications",
-			"partnerships", "transcriptions", "iconsets", "carriers", "checks", "people", "detectionRules", "signatures")) {
+			"partnerships", "transcriptions", "iconsets", "carriers", "checks", "people", "detectionRules", "signatures",
+			"projects", "models", "sports", "repositories", "contracts", "contacts", "webhooks", "account_holders", "connectors")) {
 			return VerificationResult{Status: VerificationVerified}, true
 		}
 		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
