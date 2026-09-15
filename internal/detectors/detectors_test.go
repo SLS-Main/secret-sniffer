@@ -683,6 +683,107 @@ func TestOpenUVVerifierUsesAccessTokenHeader(t *testing.T) {
 	}
 }
 
+func TestThirdVerificationMappingBatchIsRegistered(t *testing.T) {
+	want := map[string]bool{
+		"abstract-api-key": false, "apilayer-key": false, "browshot-api-key": false,
+		"buttercms-api-token": false, "datagov-api-key": false, "diffbot-api-token": false,
+		"infura-project-id": false, "ipapi-api-key": false, "languagelayer-api-key": false,
+		"mailmodo-api-key": false, "moralis-api-key": false, "pixabay-api-key": false,
+		"rawg-api-key": false, "restpack-screenshot-api-key": false, "route4me-api-key": false,
+		"salesblink-api-key": false, "spoonacular-api-key": false, "tomtom-api-key": false,
+		"unsplash-access-key": false, "visualcrossing-api-key": false,
+	}
+	for _, info := range RegistryInfo(DefaultRegistry()) {
+		if _, ok := want[info.ID]; ok {
+			want[info.ID] = info.Verifiable
+		}
+	}
+	for id, registered := range want {
+		if !registered {
+			t.Errorf("%s is not registered with a verifier", id)
+		}
+	}
+}
+
+func TestInfuraVerifierRequiresJSONRPCResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   int
+		body   string
+		status VerificationStatus
+	}{
+		{name: "valid", code: http.StatusOK, body: `{"jsonrpc":"2.0","id":1,"result":"0x1234"}`, status: VerificationVerified},
+		{name: "invalid", code: http.StatusUnauthorized, body: `invalid project id`, status: VerificationUnverified},
+		{name: "missing result", code: http.StatusOK, body: `{"jsonrpc":"2.0","id":1,"error":{"code":-32000}}`, status: VerificationUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodPost || req.URL.EscapedPath() != "/v3/secret" || req.Header.Get("Content-Type") != "application/json" {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.EscapedPath(), req.Header)
+				}
+				return &http.Response{StatusCode: tt.code, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
+			})}
+			result := verifyInfura(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != tt.status {
+				t.Fatalf("unexpected result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestTomTomVerifierRequiresPNG(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   int
+		body   string
+		status VerificationStatus
+	}{
+		{name: "valid", code: http.StatusOK, body: "\x89PNG\r\n\x1a\ncontent", status: VerificationVerified},
+		{name: "invalid", code: http.StatusUnauthorized, body: `{"detailedError":{"message":"You are missing valid authentication credentials"}}`, status: VerificationUnverified},
+		{name: "unexpected success", code: http.StatusOK, body: `not an image`, status: VerificationUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tt.code, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
+			})}
+			result := verifyTomTom(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != tt.status {
+				t.Fatalf("unexpected result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestDiffbotVerifierSuppressesAccountResponse(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Query().Get("token") != "secret" {
+			t.Fatalf("token query=%q", req.URL.Query().Get("token"))
+		}
+		body := `{"token":"secret","status":"active","plan":"paid","planCredits":100,"email":"private@example.com"}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyDiffbot(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestRestpackScreenshotVerifierPreservesSubscriptionAmbiguity(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("X-Access-Token") != "secret" {
+			t.Fatalf("X-Access-Token=%q", req.Header.Get("X-Access-Token"))
+		}
+		body := `{"error":"The access token is invalid or you are not subscribed to any plan.","extensions":{"code":"InvalidAccessToken","status":403}}`
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyRestpackScreenshot(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnknown || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -1280,7 +1381,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"ayrshare-api-key", "ayrshare api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"besttime-api-key", "besttime api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"brandfetch-api-key", "brandfetch token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"browshot-api-key", "browshot api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
+		{"browshot-api-key", "browshot api_key=\"" + strings.Repeat("A", 13) + "-" + strings.Repeat("A", 14) + "\"", strings.Repeat("A", 13) + "-" + strings.Repeat("A", 14)},
 		{"calendarific-api-key", "calendarific api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"carboninterface-api-key", "carbon interface token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"craftmypdf-api-key", "craftmypdf api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -1369,7 +1470,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"pdflayer-api-key", "pdflayer access_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"pepipost-api-key", "pepipost api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"pivotaltracker-api-token", "pivotal tracker api_token=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
-		{"pixabay-api-key", "pixabay api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"pixabay-api-key", "pixabay api_key=\"" + strings.Repeat("a", 16) + "-" + strings.Repeat("a", 17) + "\"", strings.Repeat("a", 16) + "-" + strings.Repeat("a", 17)},
 		{"podio-api-token", "podio access_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"pubnub-publish-key", "pubnub publish_key=pub-c-" + strings.Repeat("A", 36), "pub-c-" + strings.Repeat("A", 36)},
 		{"pubnub-subscribe-key", "pubnub subscribe_key=sub-c-" + strings.Repeat("A", 36), "sub-c-" + strings.Repeat("A", 36)},
@@ -1391,7 +1492,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"simplesat-api-key", "simplesat api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"smartystreets-auth-token", "smarty streets auth_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"snipcart-api-key", "snipcart secret_api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"spoonacular-api-key", "spoonacular api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"spoonacular-api-key", "spoonacular api_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"sportsmonk-api-token", "sportsmonk api_token=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"spotify-client-secret", "spotify client_secret=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"statuscake-api-key", "statuscake api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -1416,11 +1517,11 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"timecamp-api-token", "timecamp token=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"timezoneapi-key", "timezoneapi api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"toggltrack-api-token", "toggltrack api_token=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
-		{"tomtom-api-key", "tomtom key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"tomtom-api-key", "tomtom key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"transferwise-api-token", "transferwise api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"unsplash-access-key", "unsplash access_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"unsplash-access-key", "unsplash access_key=\"" + strings.Repeat("A", 43) + "\"", strings.Repeat("A", 43)},
 		{"userstack-api-key", "userstack access_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
-		{"visualcrossing-api-key", "visual crossing api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"visualcrossing-api-key", "visual crossing api_key=\"" + strings.Repeat("A", 25) + "\"", strings.Repeat("A", 25)},
 		{"voicegain-api-key", "voicegain api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"wepay-client-secret", "wepay client_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"yandex-api-key", "yandex api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -1562,7 +1663,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"d7network-api-token", "d7 network api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"dandelion-api-key", "dandelion app_id=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"dareboost-api-key", "dareboost api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"datagov-api-key", "data.gov api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"datagov-api-key", "data.gov api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"demio-api-key", "demio secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"dfuse-api-key", "dfuse token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"diggernaut-api-key", "diggernaut api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -1691,7 +1792,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"mixmax-api-key", "mixmax api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"moderation-api-key", "moderation api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"moonclerk-api-key", "moon clerk secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"moralis-api-key", "moralis api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"moralis-api-key", "moralis api_key=\"" + strings.Repeat("A", 64) + "\"", strings.Repeat("A", 64)},
 		{"mrticktock-api-key", "mr tick tock api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"myfreshworks-api-key", "myfreshworks api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"myintervals-api-key", "my intervals api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},

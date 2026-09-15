@@ -3068,6 +3068,181 @@ func verifyVeriphone(ctx context.Context, secret string) VerificationResult {
 	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"email", "counter", "active"}, "invalid api key"))
 }
 
+func verifyRAWG(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.rawg.io/api/platforms?page_size=1&key="+url.QueryEscape(secret), []string{"count", "results"}, "api key is not found")
+}
+
+func verifyMailmodo(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.mailmodo.com/api/v1/campaigns?type=CONTACT_LIST", nil)
+	req.Header.Set("mmApiKey", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"data"}, "wrong api key", "unauthorized login"))
+	result.Response = ""
+	return result
+}
+
+func verifySalesblink(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://run.salesblink.io/api/public/lists", nil)
+	req.Header.Set("Authorization", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("unauthorized api key"))
+	result.Response = ""
+	return result
+}
+
+func verifyRoute4Me(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.route4me.com/api.v4/address_book.php?api_key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("invalid api key"))
+	result.Response = ""
+	return result
+}
+
+func verifyButterCMS(ctx context.Context, secret string) VerificationResult {
+	result := verifyQueryAPI(ctx, "https://api.buttercms.com/v2/posts/?page_size=1&auth_token="+url.QueryEscape(secret), []string{"data", "meta"}, "invalid token")
+	result.Response = ""
+	return result
+}
+
+func verifyLanguageLayer(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.languagelayer.com/languages?access_key="+url.QueryEscape(secret), []string{"results"}, "invalid_access_key", "not supplied a valid api access key")
+}
+
+func verifyIPAPI(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://api.ipapi.com/8.8.8.8?access_key="+url.QueryEscape(secret), []string{"ip", "continent_code"}, "invalid_access_key", "not supplied a valid api access key")
+}
+
+func verifyTomTom(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.tomtom.com/map/1/tile/basic/main/0/0/0.png?view=Unified&key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if containsAnyFold(string(body), "missing valid authentication credentials") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && bytes.HasPrefix(body, []byte("\x89PNG\r\n\x1a\n")) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+}
+
+func verifyVisualCrossing(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/LA/today?include=current&contentType=json&key=" + url.QueryEscape(secret)
+	return verifyQueryAPI(ctx, endpoint, []string{"resolvedAddress", "timezone"}, "no account found with api key")
+}
+
+func verifyPixabay(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://pixabay.com/api/?q=test&per_page=3&safesearch=true&key="+url.QueryEscape(secret), []string{"total", "totalHits", "hits"}, "invalid or missing api key")
+}
+
+func verifySpoonacular(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.spoonacular.com/recipes/complexSearch?query=pasta&number=1&apiKey=" + url.QueryEscape(secret)
+	return verifyQueryAPI(ctx, endpoint, []string{"offset", "number", "results", "totalResults"}, "you are not authorized")
+}
+
+func verifyUnsplash(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.unsplash.com/photos?per_page=1", nil)
+	req.Header.Set("Authorization", "Client-ID "+secret)
+	req.Header.Set("Accept-Version", "v1")
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyJSONArrayAPI("access token is invalid", "invalid access key"))
+}
+
+func verifyDataGov(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.ers.usda.gov/data/arms/state?api_key=" + url.QueryEscape(secret)
+	return verifyQueryAPI(ctx, endpoint, []string{"data"}, "api_key_invalid", "invalid api_key was supplied")
+}
+
+func verifyAbstractAPI(ctx context.Context, secret string) VerificationResult {
+	return verifyQueryAPI(ctx, "https://exchange-rates.abstractapi.com/v1/live/?base=USD&api_key="+url.QueryEscape(secret), []string{"base", "exchange_rates"}, "invalid api key provided")
+}
+
+func verifyAPILayer(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.apilayer.com/number_verification/countries", nil)
+	req.Header.Set("apikey", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"country_code", "country_name"}, "invalid authentication credentials"))
+}
+
+func verifyInfura(ctx context.Context, secret string) VerificationResult {
+	body := `{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`
+	endpoint := "https://mainnet.infura.io/v3/" + url.PathEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyJSONRPC("invalid project id"))
+}
+
+func verifyMoralis(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://deep-index.moralis.io/api/v2/0xd8da6bf26964af9d7eed9e03e53415d37aa96045/nft?chain=eth&format=decimal&limit=1"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req.Header.Set("X-API-Key", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"result"}, "api key is not valid"))
+}
+
+func verifyDiffbot(ctx context.Context, secret string) VerificationResult {
+	result := verifyQueryAPI(ctx, "https://api.diffbot.com/v4/account?days=1&token="+url.QueryEscape(secret), []string{"token", "status", "planCredits"}, "not authorized api token")
+	result.Response = ""
+	return result
+}
+
+func verifyRestpackScreenshot(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://restpack.io/api/screenshot/usage", nil)
+	req.Header.Set("X-Access-Token", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if containsAnyFold(string(body), "invalidaccesstoken", "access token is invalid") {
+			return unknownVerificationResult("authorization", "token validity and subscription status could not be distinguished"), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonHasAnyField(body, "usage", "limit", "remaining") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyBrowshot(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.browshot.com/api/v1/account/info?key=" + url.QueryEscape(secret)
+	return verifyQueryAPI(ctx, endpoint, []string{"balance"}, "wrong or missing api key")
+}
+
+func classifyCollectionResponse(invalidMarkers ...string) verificationResponseClassifier {
+	return func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if containsAnyFold(string(body), invalidMarkers...) {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && (jsonArray(body) || jsonHasAnyField(body, "data", "results", "lists", "addresses")) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	}
+}
+
+func classifyJSONRPC(invalidMarkers ...string) verificationResponseClassifier {
+	return func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if containsAnyFold(string(body), invalidMarkers...) {
+			return invalidCredentialResult(), true
+		}
+		var response struct {
+			JSONRPC string `json:"jsonrpc"`
+			Result  string `json:"result"`
+			ID      int    `json:"id"`
+		}
+		if json.Unmarshal(body, &response) == nil && statusCode >= 200 && statusCode < 300 && response.JSONRPC == "2.0" && response.ID == 1 && strings.HasPrefix(response.Result, "0x") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous JSON-RPC response"), true
+	}
+}
+
 func classifyJSONArrayAPI(invalidMarkers ...string) verificationResponseClassifier {
 	return func(statusCode int, body []byte) (VerificationResult, bool) {
 		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
