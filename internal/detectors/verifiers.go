@@ -3710,6 +3710,190 @@ func verifyShotstack(ctx context.Context, secret string) VerificationResult {
 	return result
 }
 
+func verifyUpLead(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.uplead.com/v2/credits", nil)
+	req.Header.Set("Authorization", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"credits"}, "api key is invalid"))
+	result.Response = ""
+	return result
+}
+
+func verifyConvertAPI(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://v2.convertapi.com/user?auth=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if containsAnyFold(string(body), "invalid or missing api credentials") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonHasAnyField(body, "Id", "id", "SecondsLeft", "seconds_left", "ConversionsTotal") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyBestTime(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://besttime.app/api/v1/keys/" + url.PathEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Status  string `json:"status"`
+			Valid   bool   `json:"valid"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if response.Status == "OK" && response.Valid {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if !response.Valid && containsAnyFold(response.Message, "invalid api_key_private") {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyAPITemplate(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.apitemplate.io/v1/list-templates", nil)
+	req.Header.Set("X-API-KEY", secret)
+	return verifyPrivateCollection(ctx, req, "invalid api key")
+}
+
+func verifyAutoklose(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.autoklose.com/api/me/?api_token=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"email"}, "api key is invalid"))
+	result.Response = ""
+	return result
+}
+
+func verifyTicketTailor(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.tickettailor.com/v1/orders?limit=1", nil)
+	req.SetBasicAuth(secret, "")
+	req.Header.Set("Accept", "application/json")
+	return verifyPrivateCollection(ctx, req)
+}
+
+func verifyNightfall(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.nightfall.ai/v3/detection-rules", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyPrivateCollection(ctx, req, `"code":40101`, "unauthorized")
+}
+
+func verifyReplyIO(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.reply.io/v1/people?limit=1", nil)
+	req.Header.Set("X-Api-Key", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized {
+			return invalidCredentialResult(), true
+		}
+		return classifyCollectionResponse()(statusCode, body)
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyPartnerStack(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.partnerstack.com/api/v2/partnerships", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyPrivateCollection(ctx, req, "token invalid or archived")
+}
+
+func verifyPepipost(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pepipost.com/v5.1/domain/getDomains?domain=pepisandbox.com", nil)
+	req.Header.Set("api_key", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"data"}, "invalid api_key"))
+	result.Response = ""
+	return result
+}
+
+func verifySignable(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.signable.co.uk/v1/templates?offset=0&limit=1", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyPrivateCollection(ctx, req, "authentication failed", `"code":10002`)
+}
+
+func verifySnipcart(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.snipcart.com/api/orders?limit=1", nil)
+	req.SetBasicAuth(secret, "")
+	req.Header.Set("Accept", "application/json")
+	return verifyPrivateCollection(ctx, req)
+}
+
+func verifySimpleSat(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.simplesat.io/api/answers/?page_size=1", nil)
+	req.Header.Set("X-Simplesat-Token", secret)
+	return verifyPrivateCollection(ctx, req, "invalid token")
+}
+
+func verifySendbirdOrganization(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://gate.sendbird.com/api/v2/applications", nil)
+	req.Header.Set("SENDBIRDORGANIZATIONAPITOKEN", secret)
+	return verifyPrivateCollection(ctx, req, "authentication information invalid")
+}
+
+func verifyShipday(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.shipday.com/carriers", nil)
+	req.Header.Set("Authorization", "Basic "+secret)
+	return verifyPrivateCollection(ctx, req)
+}
+
+func verifySignaturit(ctx context.Context, secret string) VerificationResult {
+	result := verifyEndpoints(ctx, []string{"https://api.signaturit.com/v3/signatures.json?limit=1", "https://api.sandbox.signaturit.com/v3/signatures.json?limit=1"}, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("invalid_grant", "access token provided is invalid"))
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyIconfinder(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.iconfinder.com/v4/iconsets?count=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyPrivateCollection(ctx, req, "provided api key is invalid")
+}
+
+func verifyHappyScribe(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.happyscribe.com/api/v1/transcriptions", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyPrivateCollection(ctx, req, "invalid api key")
+}
+
+func verifyNimble(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.nimble.com/api/v1/myself", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "access token is invalid or expired"))
+	result.Response = ""
+	return result
+}
+
+func verifyZenkit(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://base.zenkit.com/api/v1/users/me", nil)
+	req.Header.Set("Zenkit-API-Key", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "unauthenticated"))
+	result.Response = ""
+	return result
+}
+
+func verifyPrivateCollection(ctx context.Context, req *http.Request, invalidMarkers ...string) VerificationResult {
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse(invalidMarkers...))
+	result.Response = ""
+	return result
+}
+
 func verifyFetchedExample(ctx context.Context, endpoint string, invalidMarker string, authenticatedMarkers ...string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
@@ -3738,7 +3922,9 @@ func classifyCollectionResponse(invalidMarkers ...string) verificationResponseCl
 		if containsAnyFold(string(body), invalidMarkers...) {
 			return invalidCredentialResult(), true
 		}
-		if statusCode >= 200 && statusCode < 300 && (jsonArray(body) || jsonHasAnyField(body, "data", "results", "lists", "addresses")) {
+		if statusCode >= 200 && statusCode < 300 && (jsonArray(body) || jsonHasAnyField(body,
+			"data", "results", "lists", "addresses", "templates", "orders", "answers", "applications",
+			"partnerships", "transcriptions", "iconsets", "carriers", "checks", "people", "detectionRules", "signatures")) {
 			return VerificationResult{Status: VerificationVerified}, true
 		}
 		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
