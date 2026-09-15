@@ -504,6 +504,35 @@ func TestConfigCatVerifierPreservesEmbeddedPathSegments(t *testing.T) {
 	}
 }
 
+func TestIBMCloudVerifierSuppressesMintedAccessToken(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		username, password, ok := req.BasicAuth()
+		if !ok || username != "bx" || password != "bx" {
+			t.Fatalf("unexpected basic auth: username=%q password=%q ok=%v", username, password, ok)
+		}
+		body := `{"access_token":"new-sensitive-token","token_type":"Bearer","expires_in":3600}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyIBMCloud(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestEtherscanVerifierUsesApplicationStatus(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Query().Get("apikey") != "secret" {
+			t.Fatalf("api key query=%q", req.URL.RawQuery)
+		}
+		body := `{"status":"0","message":"NOTOK","result":"Invalid API Key"}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyEtherscan(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnverified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

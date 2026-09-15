@@ -2630,6 +2630,197 @@ func classifyAPIlayerAccessKey(statusCode int, body []byte) (VerificationResult,
 	return VerificationResult{}, false
 }
 
+func verifySaladCloud(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.salad.com/api/public", "Salad-Api-Key", "")
+}
+
+func verifyAyrshare(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ayrshare.com/api/user", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), `"code":102`, "api key not valid") {
+			return invalidCredentialResult(), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyBitBar(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://cloud.bitbar.com/api/me", nil)
+	req.SetBasicAuth(secret, "")
+	return verifyHTTPRequest(ctx, req)
+}
+
+func verifyRestpack(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://restpack.io/api/html2pdf/usage", "X-Access-Token", "")
+}
+
+func verifyTMetric(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://app.tmetric.com/api/v3/user")
+}
+
+func verifyFlat(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.flat.io/v2/me")
+}
+
+func verifySupernotes(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.supernotes.app/v1/user/token", "Api-Key", "")
+}
+
+func verifyStormboard(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.stormboard.com/users/profile", nil)
+	req.Header.Set("X-API-Key", secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "invalid api key") {
+			return invalidCredentialResult(), true
+		}
+		return VerificationResult{}, false
+	})
+}
+
+func verifyCloudplan(ctx context.Context, secret string) VerificationResult {
+	return verifyHeaderGET(ctx, secret, "https://api.cloudplan.biz/api/user/me", "session_id", "")
+}
+
+func verifyClustdoc(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://app.clustdoc.com/api/users")
+}
+
+func verifyCheckly(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.checklyhq.com/v1/accounts")
+}
+
+func verifyKustomer(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://api.kustomerapp.com/v1/users/current")
+}
+
+func verifySalesloft(ctx context.Context, secret string) VerificationResult {
+	return positiveOnlyVerification(verifyBearerGET(ctx, secret, "https://api.salesloft.com/v2/me"), "credential subtype could not be confirmed as a bearer token")
+}
+
+func verifyTiingo(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.tiingo.com/api/test", nil)
+	req.Header.Set("Authorization", "Token "+secret)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		switch response.Message {
+		case "You successfully sent a request":
+			return VerificationResult{Status: VerificationVerified}, true
+		case "Auth Token was not correct":
+			return invalidCredentialResult(), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+}
+
+func verifyWorkable(ctx context.Context, secret string) VerificationResult {
+	return verifyBearerGET(ctx, secret, "https://workable.com/spi/v3/accounts")
+}
+
+func verifySalesforce(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://login.salesforce.com/services/oauth2/userinfo", "https://test.salesforce.com/services/oauth2/userinfo"}
+	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+			if statusCode == http.StatusForbidden && strings.TrimSpace(string(body)) == "Bad_OAuth_Token" {
+				return invalidCredentialResult(), true
+			}
+			return VerificationResult{}, false
+		})
+	})
+}
+
+func verifyGusto(ctx context.Context, secret string) VerificationResult {
+	endpoints := []string{"https://api.gusto.com/v1/token_info", "https://api.gusto-demo.com/v1/token_info"}
+	result := verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		req.Header.Set("X-Gusto-API-Version", "2026-06-15")
+		return verifyHTTPRequest(ctx, req)
+	})
+	return positiveOnlyVerification(result, "credential may be a Gusto OAuth client secret")
+}
+
+func verifyIBMCloud(ctx context.Context, secret string) VerificationResult {
+	body := "grant_type=" + url.QueryEscape("urn:ibm:params:oauth:grant-type:apikey") + "&apikey=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://iam.cloud.ibm.com/identity/token", strings.NewReader(body))
+	req.SetBasicAuth("bx", "bx")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyTokenExchange("BXNIM0415E"))
+	result.Response = ""
+	return result
+}
+
+func verifyPlatformSH(ctx context.Context, secret string) VerificationResult {
+	body := "grant_type=api_token&api_token=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://auth.api.platform.sh/oauth2/token", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyTokenExchange("invalid_grant", "invalid_token"))
+	result.Response = ""
+	return result
+}
+
+func verifyEtherscan(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.etherscan.io/v2/api?chainid=1&module=account&action=balance&address=0x0000000000000000000000000000000000000000&tag=latest&apikey=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+			Result  string `json:"result"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if response.Status == "1" && response.Message == "OK" {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if response.Status == "0" && containsAnyFold(response.Result, "invalid api key") {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+}
+
+func classifyTokenExchange(invalidMarkers ...string) verificationResponseClassifier {
+	return func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			AccessToken  string `json:"access_token"`
+			TokenType    string `json:"token_type"`
+			Error        string `json:"error"`
+			ErrorCode    string `json:"errorCode"`
+			ErrorMessage string `json:"errorMessage"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if statusCode >= 200 && statusCode < 300 && response.AccessToken != "" && strings.EqualFold(response.TokenType, "Bearer") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		combined := response.Error + " " + response.ErrorCode + " " + response.ErrorMessage
+		if containsAnyFold(combined, invalidMarkers...) {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous token exchange response"), true
+	}
+}
+
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
