@@ -784,6 +784,106 @@ func TestRestpackScreenshotVerifierPreservesSubscriptionAmbiguity(t *testing.T) 
 	}
 }
 
+func TestFourthVerificationMappingBatchIsRegistered(t *testing.T) {
+	want := map[string]bool{
+		"alchemy-api-key": false, "canny-api-key": false, "codequiry-api-key": false,
+		"detectlanguage-api-key": false, "dyspatch-api-key": false, "geckoboard-api-key": false,
+		"ip2location-api-key": false, "ipinfodb-api-key": false, "klipfolio-api-key": false,
+		"linkpreview-api-key": false, "moosend-api-key": false, "proxycrawl-api-token": false,
+		"scraperapi-key": false, "scrapestack-api-key": false, "serpstack-api-key": false,
+		"signupgenius-api-key": false, "twitter-bearer-token": false, "userstack-api-key": false,
+		"whoxy-api-key": false, "yelp-api-key": false,
+	}
+	for _, info := range RegistryInfo(DefaultRegistry()) {
+		if _, ok := want[info.ID]; ok {
+			want[info.ID] = info.Verifiable
+		}
+	}
+	for id, registered := range want {
+		if !registered {
+			t.Errorf("%s is not registered with a verifier", id)
+		}
+	}
+}
+
+func TestAlchemyVerifierUsesReadOnlyJSONRPC(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.EscapedPath() != "/v2/secret" {
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.EscapedPath())
+		}
+		body, err := io.ReadAll(req.Body)
+		if err != nil || !strings.Contains(string(body), `"method":"eth_blockNumber"`) {
+			t.Fatalf("body=%q err=%v", body, err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","id":1,"result":"0x1234"}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyAlchemy(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestIPInfoDBVerifierUsesApplicationStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		status VerificationStatus
+	}{
+		{name: "valid", body: `{"statusCode":"OK","ipAddress":"8.8.8.8","countryCode":"US"}`, status: VerificationVerified},
+		{name: "invalid", body: `{"statusCode":"ERROR","message":"Invalid API key.","ipAddress":"8.8.8.8"}`, status: VerificationUnverified},
+		{name: "ambiguous", body: `{"statusCode":"ERROR","message":"Quota exceeded"}`, status: VerificationUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
+			})}
+			result := verifyIPInfoDB(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != tt.status {
+				t.Fatalf("unexpected result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestFetchedExampleVerifierRequiresSentinelContent(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   int
+		body   string
+		status VerificationStatus
+	}{
+		{name: "valid", code: http.StatusOK, body: `<html><title>Example Domain</title></html>`, status: VerificationVerified},
+		{name: "invalid", code: http.StatusUnauthorized, body: `Unauthorized request, please make sure your API key is valid.`, status: VerificationUnverified},
+		{name: "unexpected success", code: http.StatusOK, body: `<html>proxy error</html>`, status: VerificationUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tt.code, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
+			})}
+			result := verifyScraperAPI(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != tt.status || result.Response != "" {
+				t.Fatalf("unexpected result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestCannyVerifierSuppressesPrivateBoardResponse(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil || !strings.Contains(string(body), `"apiKey":"secret"`) {
+			t.Fatalf("body=%q err=%v", body, err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"boards":[{"name":"private"}]}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyCanny(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -1396,13 +1496,13 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"edamam-api-key", "edamam app_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"ethplorer-api-key", "ethplorer api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"faceplusplus-api-key", "faceplusplus api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"geckoboard-api-key", "geckoboard api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"geckoboard-api-key", "geckoboard api_key=\"" + strings.Repeat("A", 44) + "\"", strings.Repeat("A", 44)},
 		{"hasura-admin-secret", "hasura admin_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"holidayapi-key", "holidayapi key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"html2pdf-api-key", "html2pdf api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
-		{"ip2location-api-key", "ip2location api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"ip2location-api-key", "ip2location api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"ipapi-api-key", "ipapi access_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
-		{"ipinfodb-api-key", "ipinfodb api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"ipinfodb-api-key", "ipinfodb api_key=\"" + strings.Repeat("A", 64) + "\"", strings.Repeat("A", 64)},
 		{"jotform-api-key", "jotform api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"keenio-api-key", "keen.io master_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"languagelayer-api-key", "languagelayer access_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
@@ -1525,7 +1625,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"voicegain-api-key", "voicegain api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"wepay-client-secret", "wepay client_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"yandex-api-key", "yandex api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"yelp-api-key", "yelp bearer_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"yelp-api-key", "yelp bearer_token=\"" + strings.Repeat("A", 128) + "\"", strings.Repeat("A", 128)},
 		{"ynab-api-token", "ynab personal_access_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"zenrows-api-key", "zenrows api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"zenscrape-api-key", "zenscrape api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
@@ -1559,14 +1659,14 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"veriphone-api-key", "veriphone api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"walkscore-api-key", "walk score api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"websitepulse-api-key", "websitepulse api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
-		{"whoxy-api-key", "whoxy api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"whoxy-api-key", "whoxy api_key=\"" + strings.Repeat("A", 33) + "\"", strings.Repeat("A", 33)},
 		{"wistia-api-token", "wistia api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"wit-ai-token", "wit.ai server_access_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"ticket-tailor-api-key", "ticket tailor api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"tmetric-api-token", "tmetric api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"teamgate-api-key", "teamgate api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"teamworkspaces-token", "teamwork spaces token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"signupgenius-api-key", "signup genius api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"signupgenius-api-key", "signup genius api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"speechtextai-api-key", "speechtext.ai api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"sirv-api-token", "sirv api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"siteleaf-api-key", "siteleaf api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -1649,7 +1749,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"cloverly-api-key", "cloverly api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"cloze-api-key", "cloze api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"clustdoc-api-key", "clustdoc api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"codequiry-api-key", "codequiry api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"codequiry-api-key", "codequiry api_key=\"" + strings.Repeat("A", 64) + "\"", strings.Repeat("A", 64)},
 		{"collect2-api-key", "collect2 api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"column-api-key", "column secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"commercejs-api-key", "commerce.js secret_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -1678,7 +1778,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"droneci-token", "drone ci token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"duply-api-key", "duply api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"dynalist-api-token", "dynalist api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"dyspatch-api-key", "dyspatch api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"dyspatch-api-key", "dyspatch api_key=\"" + strings.Repeat("A", 52) + "\"", strings.Repeat("A", 52)},
 		{"eagleeyenetworks-api-key", "eagle eye networks secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"easyinsight-api-key", "easy insight api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"ecostruxureit-api-key", "ecostruxure it api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
