@@ -2,10 +2,17 @@ package detectors
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1665,6 +1672,119 @@ func TestSelectPDFVerifierUsesReadOnlyUsageEndpoint(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompositeVerificationMappingsAreRegistered(t *testing.T) {
+	want := map[string]bool{
+		"azure-app-config-connection-string":  false,
+		"azure-storage-connection-string":     false,
+		"gcp-application-default-credentials": false,
+		"gcp-service-account-json":            false,
+		"mailjet-basic-auth":                  false,
+	}
+	for _, info := range RegistryInfo(DefaultRegistry()) {
+		if _, ok := want[info.ID]; ok {
+			want[info.ID] = info.Verifiable
+		}
+	}
+	for id, registered := range want {
+		if !registered {
+			t.Errorf("%s is not registered with a verifier", id)
+		}
+	}
+}
+
+func TestGCPAuthorizedUserVerifierExchangesAndSuppressesToken(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		values, err := url.ParseQuery(string(body))
+		if err != nil || values.Get("grant_type") != "refresh_token" || values.Get("client_id") != "client" || values.Get("client_secret") != "secret+value" || values.Get("refresh_token") != "refresh/value" {
+			t.Fatalf("form=%q err=%v", body, err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"sensitive","token_type":"Bearer","expires_in":3600}`)), Header: make(http.Header)}, nil
+	})}
+	credential := `{"type":"authorized_user","client_id":"client","client_secret":"secret+value","refresh_token":"refresh/value"}`
+	result := verifyGCPAuthorizedUser(WithVerificationHTTPClient(context.Background(), client), credential)
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestGCPServiceAccountVerifierSignsAssertion(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mustMarshalPKCS8(t, key)})
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		values, _ := url.ParseQuery(string(body))
+		if values.Get("grant_type") != "urn:ietf:params:oauth:grant-type:jwt-bearer" || len(strings.Split(values.Get("assertion"), ".")) != 3 {
+			t.Fatalf("unexpected form: %q", body)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"sensitive","token_type":"Bearer","expires_in":3600}`)), Header: make(http.Header)}, nil
+	})}
+	credential, _ := json.Marshal(map[string]string{"type": "service_account", "private_key_id": "kid", "private_key": string(keyPEM), "client_email": "test@example.iam.gserviceaccount.com"})
+	result := verifyGCPServiceAccount(WithVerificationHTTPClient(context.Background(), client), string(credential))
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestAzureCompositeVerifiersSignRequests(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("\x01", 64)))
+	tests := []struct {
+		name       string
+		credential string
+		verify     Verifier
+		authPrefix string
+	}{
+		{name: "app config", credential: "Endpoint=https://example.azconfig.io;Id=id;Secret=" + key, verify: verifyAzureAppConfiguration, authPrefix: "HMAC-SHA256 Credential=id&"},
+		{name: "storage", credential: "DefaultEndpointsProtocol=https;AccountName=example;AccountKey=" + key + ";EndpointSuffix=core.windows.net", verify: verifyAzureStorageConnectionString, authPrefix: "SharedKey example:"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if !strings.HasPrefix(req.Header.Get("Authorization"), tt.authPrefix) || req.Header.Get("x-ms-date") == "" {
+					t.Fatalf("unexpected headers: %#v", req.Header)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"secret":"private"}`)), Header: make(http.Header)}, nil
+			})}
+			result := tt.verify(WithVerificationHTTPClient(context.Background(), client), tt.credential)
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestMailjetBasicVerifierPreservesEncodedCredential(t *testing.T) {
+	credential := base64.StdEncoding.EncodeToString([]byte("api-key:private-key"))
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Authorization") != "Basic "+credential || req.URL.Query().Get("Limit") != "1" {
+			t.Fatalf("unexpected request: %s %#v", req.URL.String(), req.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"Count":0,"Data":[]}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyMailjetBasicAuth(WithVerificationHTTPClient(context.Background(), client), credential)
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func mustMarshalPKCS8(t *testing.T, key *rsa.PrivateKey) []byte {
+	t.Helper()
+	value, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

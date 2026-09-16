@@ -3,8 +3,15 @@ package detectors
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"mime/multipart"
@@ -12,6 +19,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func verifyBearerGET(ctx context.Context, secret, endpoint string) VerificationResult {
@@ -5358,6 +5366,248 @@ func verifySelectPDF(ctx context.Context, secret string) VerificationResult {
 		}
 		if json.Unmarshal(body, &response) == nil && statusCode >= 200 && statusCode < 300 && response.Status != "" && response.Limit != nil && response.Used != nil && response.Available != nil {
 			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyGCPAuthorizedUser(ctx context.Context, secret string) VerificationResult {
+	var credential struct {
+		Type         string `json:"type"`
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if json.Unmarshal([]byte(secret), &credential) != nil || (credential.Type != "" && credential.Type != "authorized_user") || credential.ClientID == "" || credential.ClientSecret == "" || credential.RefreshToken == "" {
+		return invalidCredentialResult()
+	}
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {credential.ClientID},
+		"client_secret": {credential.ClientSecret},
+		"refresh_token": {credential.RefreshToken},
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyGoogleTokenExchange(false))
+	result.Response = ""
+	return result
+}
+
+func verifyGCPServiceAccount(ctx context.Context, secret string) VerificationResult {
+	var credential struct {
+		Type         string `json:"type"`
+		PrivateKeyID string `json:"private_key_id"`
+		PrivateKey   string `json:"private_key"`
+		ClientEmail  string `json:"client_email"`
+	}
+	if json.Unmarshal([]byte(secret), &credential) != nil || credential.Type != "service_account" || credential.PrivateKey == "" || credential.ClientEmail == "" {
+		return invalidCredentialResult()
+	}
+	key, err := parseRSAPrivateKey([]byte(credential.PrivateKey))
+	if err != nil {
+		return invalidCredentialResult()
+	}
+	assertion, err := signGoogleServiceAccountJWT(key, credential.ClientEmail, credential.PrivateKeyID, time.Now().UTC())
+	if err != nil {
+		return unknownVerificationResult("provider", "failed to sign service account assertion")
+	}
+	form := url.Values{
+		"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
+		"assertion":  {assertion},
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyGoogleTokenExchange(true))
+	result.Response = ""
+	return result
+}
+
+func classifyGoogleTokenExchange(serviceAccount bool) verificationResponseClassifier {
+	return func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			AccessToken      string `json:"access_token"`
+			TokenType        string `json:"token_type"`
+			ExpiresIn        int    `json:"expires_in"`
+			Error            string `json:"error"`
+			ErrorDescription string `json:"error_description"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if statusCode >= 200 && statusCode < 300 && response.AccessToken != "" && strings.EqualFold(response.TokenType, "Bearer") && response.ExpiresIn > 0 {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if serviceAccount && response.Error == "invalid_grant" && containsAnyFold(response.ErrorDescription, "iat", "exp", "clock", "timeframe") {
+			return unknownVerificationResult("clock", "provider rejected assertion timing"), true
+		}
+		switch response.Error {
+		case "invalid_grant", "invalid_client", "deleted_client", "disabled_client":
+			return invalidCredentialResult(), true
+		case "temporarily_unavailable", "server_error":
+			return unknownVerificationResult("provider", "provider temporarily unavailable"), true
+		case "invalid_scope", "unauthorized_client":
+			return unknownVerificationResult("authorization", "provider rejected credential authorization"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous token response"), true
+		}
+	}
+}
+
+func parseRSAPrivateKey(pemData []byte) (*rsa.PrivateKey, error) {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, errors.New("invalid PEM")
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	key, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		return nil, errors.New("private key is not RSA")
+	}
+	return key, nil
+}
+
+func signGoogleServiceAccountJWT(key *rsa.PrivateKey, email, keyID string, now time.Time) (string, error) {
+	header := map[string]string{"alg": "RS256", "typ": "JWT"}
+	if keyID != "" {
+		header["kid"] = keyID
+	}
+	claims := map[string]any{
+		"iss":   email,
+		"scope": "https://www.googleapis.com/auth/cloud-platform.read-only",
+		"aud":   "https://oauth2.googleapis.com/token",
+		"iat":   now.Unix(),
+		"exp":   now.Add(time.Hour).Unix(),
+	}
+	headerJSON, _ := json.Marshal(header)
+	claimsJSON, _ := json.Marshal(claims)
+	unsigned := base64.RawURLEncoding.EncodeToString(headerJSON) + "." + base64.RawURLEncoding.EncodeToString(claimsJSON)
+	digest := sha256.Sum256([]byte(unsigned))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+	if err != nil {
+		return "", err
+	}
+	return unsigned + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+}
+
+func verifyAzureAppConfiguration(ctx context.Context, secret string) VerificationResult {
+	parts := parseConnectionString(secret)
+	endpoint, err := url.Parse(parts["Endpoint"])
+	key, keyErr := base64.StdEncoding.DecodeString(parts["Secret"])
+	if err != nil || keyErr != nil || endpoint.Scheme != "https" || endpoint.User != nil || !strings.HasSuffix(endpoint.Hostname(), ".azconfig.io") || parts["Id"] == "" {
+		return invalidCredentialResult()
+	}
+	endpoint.Path = "/kv"
+	endpoint.RawQuery = "api-version=1.0"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	date := time.Now().UTC().Format(http.TimeFormat)
+	emptyHash := sha256.Sum256(nil)
+	contentHash := base64.StdEncoding.EncodeToString(emptyHash[:])
+	stringToSign := req.Method + "\n" + req.URL.RequestURI() + "\n" + date + ";" + req.URL.Host + ";" + contentHash
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(stringToSign))
+	signature := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	req.Header.Set("x-ms-date", date)
+	req.Header.Set("x-ms-content-sha256", contentHash)
+	req.Header.Set("Authorization", "HMAC-SHA256 Credential="+parts["Id"]+"&SignedHeaders=x-ms-date;host;x-ms-content-sha256&Signature="+signature)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyAzureSignedRequest)
+	result.Response = ""
+	return result
+}
+
+func verifyAzureStorageConnectionString(ctx context.Context, secret string) VerificationResult {
+	parts := parseConnectionString(secret)
+	account := parts["AccountName"]
+	key, err := base64.StdEncoding.DecodeString(parts["AccountKey"])
+	if err != nil || parts["DefaultEndpointsProtocol"] != "https" || parts["EndpointSuffix"] != "core.windows.net" || account == "" {
+		return invalidCredentialResult()
+	}
+	endpoint := "https://" + account + ".blob.core.windows.net/?comp=list&maxresults=1"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	date := time.Now().UTC().Format(http.TimeFormat)
+	version := "2023-11-03"
+	canonicalHeaders := "x-ms-date:" + date + "\n" + "x-ms-version:" + version + "\n"
+	canonicalResource := "/" + account + "/\ncomp:list\nmaxresults:1"
+	fields := []string{http.MethodGet, "", "", "", "", "", "", "", "", "", "", "", canonicalHeaders + canonicalResource}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(strings.Join(fields, "\n")))
+	req.Header.Set("x-ms-date", date)
+	req.Header.Set("x-ms-version", version)
+	req.Header.Set("Authorization", "SharedKey "+account+":"+base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyAzureSignedRequest)
+	result.Response = ""
+	return result
+}
+
+func parseConnectionString(value string) map[string]string {
+	parts := map[string]string{}
+	for _, field := range strings.Split(value, ";") {
+		key, item, ok := strings.Cut(field, "=")
+		if ok {
+			parts[key] = item
+		}
+	}
+	return parts
+}
+
+func classifyAzureSignedRequest(statusCode int, body []byte) (VerificationResult, bool) {
+	if statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+		return VerificationResult{}, false
+	}
+	if statusCode >= 200 && statusCode < 300 {
+		return VerificationResult{Status: VerificationVerified}, true
+	}
+	response := string(body)
+	if containsAnyFold(response, "date header", "request date", "clock skew", "request time") {
+		return unknownVerificationResult("clock", "provider rejected request timing"), true
+	}
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+		if containsAnyFold(response, "signature did not match", "invalid signature", "invalid credential", "authenticationfailed", "invalidauthenticationinfo") {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("authorization", "provider authorization response was ambiguous"), true
+	}
+	if statusCode == http.StatusNotFound {
+		return unknownVerificationResult("endpoint_context", "provider endpoint was not found"), true
+	}
+	return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+}
+
+func verifyMailjetBasicAuth(ctx context.Context, secret string) VerificationResult {
+	decoded, err := base64.StdEncoding.DecodeString(secret)
+	if err != nil || strings.Count(string(decoded), ":") != 1 {
+		return invalidCredentialResult()
+	}
+	username, password, _ := strings.Cut(string(decoded), ":")
+	if username == "" || password == "" {
+		return invalidCredentialResult()
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.mailjet.com/v3/REST/message?Limit=1", nil)
+	req.Header.Set("Authorization", "Basic "+secret)
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonHasAnyField(body, "Data", "Count", "Total") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if statusCode == http.StatusUnauthorized {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusForbidden {
+			return unknownVerificationResult("authorization", "provider authenticated response was permission denied"), true
 		}
 		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
 	})
