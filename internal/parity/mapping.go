@@ -217,7 +217,7 @@ func CurrentMappings() []Mapping {
 		mapImplemented("incident-management", "pagerdutyapikey", "pagerduty-token", "PagerDuty key coverage."),
 		mapImplemented("observability", "datadogapikey", "datadog-api-key", "Datadog API key coverage."),
 		mapImplemented("observability", "newrelicpersonalapikey", "new-relic-key", "New Relic key coverage."),
-		mapPartial("communication", "twilio", "twilio-auth-token", "Account SID plus auth token coverage; live verification planned."),
+		mapImplemented("communication", "twilio", "twilio-auth-token", "Account SID and auth token are correlated and verified together."),
 		mapImplemented("communication", "slackwebhook", "slack-webhook", "Slack webhook URL coverage."),
 		mapImplemented("communication", "discordwebhook", "discord-webhook", "Discord webhook URL coverage."),
 		mapImplemented("communication", "microsoftteamswebhook", "microsoft-teams-webhook", "Microsoft Teams webhook URL coverage."),

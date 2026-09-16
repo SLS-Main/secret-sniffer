@@ -32,6 +32,7 @@ func NewJSONLWriter(w io.Writer, includeSecrets bool) *JSONLWriter {
 func (w *JSONLWriter) Write(finding detectors.Finding) error {
 	if !w.includeSecrets {
 		finding.Secret = ""
+		finding.SecretParts = nil
 	}
 	return w.encoder.Encode(finding)
 }
@@ -94,6 +95,7 @@ func prepareFindings(findings []detectors.Finding, includeSecrets bool) []detect
 	copy(out, findings)
 	for i := range out {
 		out[i].Secret = ""
+		out[i].SecretParts = nil
 	}
 	return out
 }

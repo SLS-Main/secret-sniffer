@@ -126,6 +126,33 @@ func verifySendGrid(ctx context.Context, secret string) VerificationResult {
 	return verifyBearerGET(ctx, secret, "https://api.sendgrid.com/v3/scopes")
 }
 
+func verifyTwilio(ctx context.Context, candidate Candidate) VerificationResult {
+	sid := candidate.SecretParts["account_sid"]
+	token := candidate.SecretParts["auth_token"]
+	if sid == "" || token == "" {
+		return invalidCredentialResult()
+	}
+	endpoint := "https://api.twilio.com/2010-04-01/Accounts/" + url.PathEscape(sid) + ".json"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req.SetBasicAuth(sid, token)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300:
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider denied account access"), true
+		case statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests || statusCode >= 500:
+			return VerificationResult{}, false
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
+}
+
 func verifyMailgun(ctx context.Context, secret string) VerificationResult {
 	return verifyEndpoints(ctx, []string{"https://api.mailgun.net/v3/domains", "https://api.eu.mailgun.net/v3/domains"}, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

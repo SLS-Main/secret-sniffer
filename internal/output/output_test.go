@@ -76,3 +76,33 @@ func TestWriteJSONCanIncludeRawSecret(t *testing.T) {
 		t.Fatalf("raw secret missing from output: %s", b.String())
 	}
 }
+
+func TestMultipartPartsFollowOutputRedaction(t *testing.T) {
+	finding := detectors.Finding{
+		DetectorID: "twilio-auth-token", Name: "Twilio", Severity: "critical", File: "x", Line: 1, Column: 1,
+		Secret: "raw-token", Redacted: "raw-*****", SecretParts: map[string]string{"account_sid": "raw-sid", "auth_token": "raw-token"}, RedactedParts: map[string]string{"account_sid": "sid-***", "auth_token": "tok-***"},
+	}
+	var redacted bytes.Buffer
+	if err := Write(&redacted, "json", []detectors.Finding{finding}, Meta{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(redacted.String(), "raw-token") || strings.Contains(redacted.String(), "raw-sid") || !strings.Contains(redacted.String(), "sid-***") {
+		t.Fatalf("unexpected redacted output: %s", redacted.String())
+	}
+
+	var raw bytes.Buffer
+	if err := Write(&raw, "json", []detectors.Finding{finding}, Meta{}, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(raw.String(), "raw-token") || !strings.Contains(raw.String(), "raw-sid") {
+		t.Fatalf("raw multipart values missing: %s", raw.String())
+	}
+
+	var human bytes.Buffer
+	if err := WriteFindingHuman(&human, finding); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(human.String(), "raw-token") {
+		t.Fatalf("human output missing raw secret: %s", human.String())
+	}
+}

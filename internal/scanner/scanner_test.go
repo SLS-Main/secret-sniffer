@@ -570,6 +570,23 @@ func TestVerificationServiceDeduplicatesAcrossConcurrentScanners(t *testing.T) {
 	}
 }
 
+func TestVerificationCacheSeparatesMultipartCredentials(t *testing.T) {
+	cache := newVerificationCache()
+	var calls int32
+	verifier := func(context.Context, detectors.Candidate) detectors.VerificationResult {
+		atomic.AddInt32(&calls, 1)
+		return detectors.VerificationResult{Status: detectors.VerificationVerified}
+	}
+	first := detectors.Candidate{Secret: "same-token", SecretParts: map[string]string{"account_sid": "first", "auth_token": "same-token"}, CompositeVerifier: verifier}
+	second := detectors.Candidate{Secret: "same-token", SecretParts: map[string]string{"account_sid": "second", "auth_token": "same-token"}, CompositeVerifier: verifier}
+	if cache.verify(context.Background(), first).Status != detectors.VerificationVerified || cache.verify(context.Background(), first).Status != detectors.VerificationVerified || cache.verify(context.Background(), second).Status != detectors.VerificationVerified {
+		t.Fatal("unexpected multipart verification result")
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("verifier calls=%d, want 2", got)
+	}
+}
+
 func TestScannerAllowedRelPathAppliesGitHistoryFilters(t *testing.T) {
 	s := New(Config{Include: []string{"*.txt"}, Exclude: []string{"ignored.*"}}, nil)
 	if !s.allowedRelPath("config.txt") {

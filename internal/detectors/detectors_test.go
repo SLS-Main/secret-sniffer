@@ -1778,6 +1778,53 @@ func TestMailjetBasicVerifierPreservesEncodedCredential(t *testing.T) {
 	}
 }
 
+func TestTwilioMultipartCredentialExtractionAndVerification(t *testing.T) {
+	input := []byte(`AC0123456789abcdef0123456789abcdef auth_token="0123456789abcdef0123456789abcdef"`)
+	var candidate Candidate
+	for _, detector := range DefaultRegistry() {
+		for _, found := range detector.Detect(input) {
+			if found.DetectorID == "twilio-auth-token" {
+				candidate = found
+			}
+		}
+	}
+	if candidate.Secret != "0123456789abcdef0123456789abcdef" || candidate.SecretParts["account_sid"] != "AC0123456789abcdef0123456789abcdef" || candidate.SecretParts["auth_token"] != candidate.Secret || candidate.CompositeVerifier == nil {
+		t.Fatalf("unexpected candidate: %#v", candidate)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		username, password, ok := req.BasicAuth()
+		if !ok || username != candidate.SecretParts["account_sid"] || password != candidate.SecretParts["auth_token"] || !strings.Contains(req.URL.Path, username) {
+			t.Fatalf("unexpected request: %s username=%q password=%q", req.URL.String(), username, password)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"friendly_name":"private"}`)), Header: make(http.Header)}, nil
+	})}
+	result := candidate.Verify(WithVerificationHTTPClient(context.Background(), client))
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+
+	finding := ToFindingAt(candidate, "config.env", "", 1, 1, false)
+	legacy := findingFingerprint(candidate.DetectorID, candidate.Secret, "config.env", "")
+	if finding.Fingerprint == legacy || finding.LegacyFingerprint != legacy || finding.SecretParts["account_sid"] == "" || finding.RedactedParts["account_sid"] == finding.SecretParts["account_sid"] {
+		t.Fatalf("unexpected multipart finding: %#v", finding)
+	}
+}
+
+func TestMultipartVerificationIdentityIsDeterministic(t *testing.T) {
+	verifier := func(context.Context, Candidate) VerificationResult {
+		return VerificationResult{Status: VerificationVerified}
+	}
+	first := Candidate{Secret: "token", SecretParts: map[string]string{"account_sid": "sid", "auth_token": "token"}, CompositeVerifier: verifier}
+	second := Candidate{Secret: "token", SecretParts: map[string]string{"auth_token": "token", "account_sid": "sid"}, CompositeVerifier: verifier}
+	if first.VerificationCacheKey() != second.VerificationCacheKey() {
+		t.Fatal("map insertion order changed multipart verification identity")
+	}
+	second.SecretParts["account_sid"] = "other"
+	if first.VerificationCacheKey() == second.VerificationCacheKey() {
+		t.Fatal("different multipart credentials shared verification identity")
+	}
+}
+
 func mustMarshalPKCS8(t *testing.T, key *rsa.PrivateKey) []byte {
 	t.Helper()
 	value, err := x509.MarshalPKCS8PrivateKey(key)

@@ -22,7 +22,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -276,7 +275,7 @@ func detectPlanned(d plannedDetector, b []byte) []detectors.Candidate {
 
 type verificationCache struct {
 	mu      sync.Mutex
-	entries map[string]*verificationEntry
+	entries map[[32]byte]*verificationEntry
 }
 
 type verificationRunner interface {
@@ -289,23 +288,22 @@ type verificationEntry struct {
 }
 
 func newVerificationCache() *verificationCache {
-	return &verificationCache{entries: map[string]*verificationEntry{}}
+	return &verificationCache{entries: map[[32]byte]*verificationEntry{}}
 }
 
 func (c *verificationCache) verify(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
 	return c.verifyWith(ctx, candidate, func(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
 		verifyCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 		defer cancel()
-		return candidate.Verifier(verifyCtx, candidate.Secret)
+		return candidate.Verify(verifyCtx)
 	})
 }
 
 func (c *verificationCache) verifyWith(ctx context.Context, candidate detectors.Candidate, execute func(context.Context, detectors.Candidate) detectors.VerificationResult) detectors.VerificationResult {
-	if candidate.Verifier == nil {
+	if !candidate.Verifiable() {
 		return detectors.VerificationResult{Status: detectors.VerificationUnsupported}
 	}
-	verifierID := reflect.ValueOf(candidate.Verifier).Pointer()
-	key := candidate.Secret + "\x00" + strconv.FormatUint(uint64(verifierID), 16)
+	key := candidate.VerificationCacheKey()
 	c.mu.Lock()
 	if entry, ok := c.entries[key]; ok {
 		c.mu.Unlock()
@@ -395,7 +393,7 @@ func (s *VerificationService) worker() {
 	for job := range s.jobs {
 		verifyCtx, cancel := context.WithTimeout(job.ctx, 8*time.Second)
 		verifyCtx = detectors.WithVerificationHTTPClient(verifyCtx, s.client)
-		result := job.candidate.Verifier(verifyCtx, job.candidate.Secret)
+		result := job.candidate.Verify(verifyCtx)
 		cancel()
 		job.result <- result
 	}
@@ -800,7 +798,7 @@ func (s *Scanner) scanByteView(ctx context.Context, file, commit string, view []
 				f.Verification = s.verification.verify(ctx, c)
 				f.Verified = f.Verification.Status == detectors.VerificationVerified
 			}
-			key := f.DetectorID + "\x00" + f.Secret + "\x00" + f.File + "\x00" + f.Commit
+			key := f.Fingerprint
 			if _, ok := seen[key]; ok {
 				continue
 			}
@@ -850,7 +848,7 @@ func (s *Scanner) scanDecodedBase64(ctx context.Context, file, commit string, b 
 					f.Verification = s.verification.verify(ctx, c)
 					f.Verified = f.Verification.Status == detectors.VerificationVerified
 				}
-				key := f.DetectorID + "\x00" + f.Secret + "\x00" + f.File + "\x00" + f.Commit
+				key := f.Fingerprint
 				if _, ok := seen[key]; ok {
 					continue
 				}

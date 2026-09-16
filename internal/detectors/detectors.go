@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,7 +12,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -26,6 +29,8 @@ type Finding struct {
 	Column            int                `json:"column"`
 	Secret            string             `json:"secret"`
 	Redacted          string             `json:"redacted"`
+	SecretParts       map[string]string  `json:"secret_parts,omitempty"`
+	RedactedParts     map[string]string  `json:"redacted_parts,omitempty"`
 	Verified          bool               `json:"verified"`
 	Verification      VerificationResult `json:"verification"`
 	Fingerprint       string             `json:"fingerprint"`
@@ -73,16 +78,64 @@ type VerificationResult struct {
 }
 
 type Candidate struct {
-	DetectorID string
-	Name       string
-	Severity   string
-	Secret     string
-	Start      int
-	End        int
-	Verifier   Verifier
+	DetectorID        string
+	Name              string
+	Severity          string
+	Secret            string
+	SecretParts       map[string]string
+	Start             int
+	End               int
+	Verifier          Verifier
+	CompositeVerifier CompositeVerifier
 }
 
 type Verifier func(context.Context, string) VerificationResult
+type CompositeVerifier func(context.Context, Candidate) VerificationResult
+
+func (c Candidate) Verifiable() bool {
+	return c.CompositeVerifier != nil || c.Verifier != nil
+}
+
+func (c Candidate) Verify(ctx context.Context) VerificationResult {
+	if c.CompositeVerifier != nil {
+		return c.CompositeVerifier(ctx, c)
+	}
+	if c.Verifier != nil {
+		return c.Verifier(ctx, c.Secret)
+	}
+	return VerificationResult{Status: VerificationUnsupported}
+}
+
+func (c Candidate) VerificationCacheKey() [32]byte {
+	h := sha256.New()
+	if c.CompositeVerifier != nil {
+		_, _ = h.Write([]byte{2})
+		writeVerificationIdentityField(h, fmt.Sprintf("%x", reflect.ValueOf(c.CompositeVerifier).Pointer()))
+		keys := make([]string, 0, len(c.SecretParts))
+		for key := range c.SecretParts {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			writeVerificationIdentityField(h, key)
+			writeVerificationIdentityField(h, c.SecretParts[key])
+		}
+	} else {
+		_, _ = h.Write([]byte{1})
+		if c.Verifier != nil {
+			writeVerificationIdentityField(h, fmt.Sprintf("%x", reflect.ValueOf(c.Verifier).Pointer()))
+		}
+		writeVerificationIdentityField(h, c.Secret)
+	}
+	var key [32]byte
+	copy(key[:], h.Sum(nil))
+	return key
+}
+
+func writeVerificationIdentityField(h io.Writer, value string) {
+	_ = binary.Write(h, binary.BigEndian, uint32(len(value)))
+	_, _ = io.WriteString(h, value)
+}
 
 type Detector interface {
 	Detect([]byte) []Candidate
@@ -103,14 +156,16 @@ type Info struct {
 }
 
 type RegexDetector struct {
-	ID           string
-	Name         string
-	Severity     string
-	Keywords     []string
-	Regex        *regexp.Regexp
-	SecretGroup  int
-	Verifier     Verifier
-	BroadContext bool
+	ID                string
+	Name              string
+	Severity          string
+	Keywords          []string
+	Regex             *regexp.Regexp
+	SecretGroup       int
+	PartGroups        map[string]int
+	Verifier          Verifier
+	CompositeVerifier CompositeVerifier
+	BroadContext      bool
 }
 
 func (d RegexDetector) Detect(b []byte) []Candidate {
@@ -148,18 +203,33 @@ func (d RegexDetector) detectContent(content string) []Candidate {
 		}
 		start, end := m[group*2], m[group*2+1]
 		secret := content[start:end]
+		var secretParts map[string]string
+		if len(d.PartGroups) > 0 {
+			secretParts = make(map[string]string, len(d.PartGroups))
+			valid := true
+			for name, partGroup := range d.PartGroups {
+				if partGroup < 0 || partGroup*2+1 >= len(m) || m[partGroup*2] < 0 {
+					valid = false
+					break
+				}
+				secretParts[name] = content[m[partGroup*2]:m[partGroup*2+1]]
+			}
+			if !valid {
+				continue
+			}
+		}
 		if d.BroadContext && hasContextBoundary(content[m[0]:start]) {
 			continue
 		}
 		if plausibleSecret(secret) && !(d.ID == "generic-assigned-secret" && looksLikeAssignedReference(content, start)) {
-			out = append(out, Candidate{DetectorID: d.ID, Name: d.Name, Severity: d.Severity, Secret: secret, Start: start, End: end, Verifier: d.Verifier})
+			out = append(out, Candidate{DetectorID: d.ID, Name: d.Name, Severity: d.Severity, Secret: secret, SecretParts: secretParts, Start: start, End: end, Verifier: d.Verifier, CompositeVerifier: d.CompositeVerifier})
 		}
 	}
 	return out
 }
 
 func (d RegexDetector) Info() Info {
-	return Info{ID: d.ID, Name: d.Name, Severity: d.Severity, Keywords: d.Keywords, Verifiable: d.Verifier != nil}
+	return Info{ID: d.ID, Name: d.Name, Severity: d.Severity, Keywords: d.Keywords, Verifiable: d.Verifier != nil || d.CompositeVerifier != nil}
 }
 
 func RegistryInfo(ds []Detector) []Info {
@@ -172,6 +242,10 @@ func RegistryInfo(ds []Detector) []Info {
 
 func NewRegex(id, name, severity string, keywords []string, expr string, group int, verifier Verifier) Detector {
 	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: group, Verifier: verifier, BroadContext: strings.Contains(expr, `[\s\S]{0,`)}
+}
+
+func NewMultipartRegex(id, name, severity string, keywords []string, expr string, secretGroup int, partGroups map[string]int, verifier CompositeVerifier) Detector {
+	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: secretGroup, PartGroups: partGroups, CompositeVerifier: verifier, BroadContext: strings.Contains(expr, `[\s\S]{0,`)}
 }
 
 func DefaultRegistry() []Detector {
@@ -321,7 +395,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("salesforce-access-token", "Salesforce Access Token", "critical", []string{"salesforce", ".my.salesforce.com", "00"}, `\b(00[A-Za-z0-9]{13}![A-Za-z0-9_.]{96})\b`, 1, verifySalesforce),
 		NewRegex("salesforce-refresh-token", "Salesforce Refresh Token", "critical", []string{"5AEP861", "salesforce"}, `\b(5AEP861[A-Za-z0-9._=]{80,})\b`, 1, nil),
 		NewRegex("salesforce-consumer-key", "Salesforce Consumer Key", "high", []string{"3MVG9", "salesforce"}, `\b(3MVG9[0-9A-Za-z._+/=]{80,251})\b`, 1, nil),
-		NewRegex("twilio-auth-token", "Twilio Auth Token", "critical", []string{"twilio", "auth_token", "AC"}, `(?i)\bAC[0-9a-f]{32}\b[\s\S]{0,160}\b(?:auth[_-]?token|token|secret)\b\s*[:=]\s*['\"]?([0-9a-f]{32})\b`, 1, nil),
+		NewMultipartRegex("twilio-auth-token", "Twilio Auth Token", "critical", []string{"twilio", "auth_token", "AC"}, `(?i)\b(AC[0-9a-f]{32})\b[\s\S]{0,160}\b(?:auth[_-]?token|token|secret)\b\s*[:=]\s*['\"]?([0-9a-f]{32})\b`, 2, map[string]int{"account_sid": 1, "auth_token": 2}, verifyTwilio),
 		NewRegex("openphone-api-key", "OpenPhone API Key", "critical", []string{"openphone", "api.openphone.com"}, `(?i)\b(?:openphone|api\.openphone\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|access[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyOpenPhone),
 		NewRegex("aircall-api-token", "Aircall API Token", "critical", []string{"aircall", "api.aircall.io"}, `(?i)\b(?:aircall|api\.aircall\.io)\b[\s\S]{0,160}\b(?:api[_-]?token|api[_-]?id|access[_-]?token|bearer|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("dialpad-api-key", "Dialpad API Key", "critical", []string{"dialpad", "dialpad.com"}, `(?i)\b(?:dialpad|dialpad\.com|dialpad[_-]?api)\b[\s\S]{0,160}\b(?:api[_-]?key|access[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyDialpad),
@@ -1283,18 +1357,37 @@ func ToFinding(c Candidate, file, commit string, b []byte, verify bool) Finding 
 }
 
 func ToFindingAt(c Candidate, file, commit string, line, col int, verify bool) Finding {
-	f := Finding{DetectorID: c.DetectorID, Name: c.Name, Severity: c.Severity, File: file, Commit: commit, Line: line, Column: col, Secret: c.Secret, Redacted: Redact(c.Secret), Verification: VerificationResult{Status: VerificationNotAttempted}}
-	f.Fingerprint = findingFingerprint(c.DetectorID, c.Secret, file, commit)
+	secretParts := cloneStringMap(c.SecretParts)
+	redactedParts := make(map[string]string, len(secretParts))
+	for key, value := range secretParts {
+		redactedParts[key] = Redact(value)
+	}
+	f := Finding{DetectorID: c.DetectorID, Name: c.Name, Severity: c.Severity, File: file, Commit: commit, Line: line, Column: col, Secret: c.Secret, Redacted: Redact(c.Secret), SecretParts: secretParts, RedactedParts: redactedParts, Verification: VerificationResult{Status: VerificationNotAttempted}}
+	f.Fingerprint = findingFingerprintWithParts(c.DetectorID, c.Secret, c.SecretParts, file, commit)
+	if legacy := findingFingerprint(c.DetectorID, c.Secret, file, commit); legacy != f.Fingerprint {
+		f.LegacyFingerprint = legacy
+	}
 	f.Provenance = baseProvenance(file, commit)
-	if verify && c.Verifier == nil {
+	if verify && !c.Verifiable() {
 		f.Verification.Status = VerificationUnsupported
 	} else if verify {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		f.Verification = c.Verifier(ctx, c.Secret)
+		f.Verification = c.Verify(ctx)
 		f.Verified = f.Verification.Status == VerificationVerified
 	}
 	return f
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	copy := make(map[string]string, len(values))
+	for key, value := range values {
+		copy[key] = value
+	}
+	return copy
 }
 
 func baseProvenance(file, commit string) *Provenance {
@@ -1337,11 +1430,7 @@ func SetS3Provenance(finding Finding, bucket, key, versionID, etag, region strin
 	if versionID != "" {
 		identity += "?versionId=" + versionID
 	}
-	newFingerprint := findingFingerprint(finding.DetectorID, finding.Secret, identity, finding.Commit)
-	if newFingerprint != finding.Fingerprint {
-		finding.LegacyFingerprint = finding.Fingerprint
-		finding.Fingerprint = newFingerprint
-	}
+	updateFindingFingerprint(&finding, identity, finding.Commit)
 	return finding
 }
 
@@ -1359,11 +1448,7 @@ func SetAzureBlobProvenance(finding Finding, account, container, blob, versionID
 	if versionID != "" {
 		identity += "?versionId=" + versionID
 	}
-	newFingerprint := findingFingerprint(finding.DetectorID, finding.Secret, identity, finding.Commit)
-	if newFingerprint != finding.Fingerprint {
-		finding.LegacyFingerprint = finding.Fingerprint
-		finding.Fingerprint = newFingerprint
-	}
+	updateFindingFingerprint(&finding, identity, finding.Commit)
 	return finding
 }
 
@@ -1374,11 +1459,7 @@ func SetRepositoryProvenance(finding Finding, repository, ref string) Finding {
 	finding.Provenance.Provider = "git"
 	finding.Provenance.Repository = repository
 	finding.Provenance.Ref = ref
-	newFingerprint := findingFingerprint(finding.DetectorID, finding.Secret, repository+"\x00"+finding.File, finding.Commit)
-	if newFingerprint != finding.Fingerprint {
-		finding.LegacyFingerprint = finding.Fingerprint
-		finding.Fingerprint = newFingerprint
-	}
+	updateFindingFingerprint(&finding, repository+"\x00"+finding.File, finding.Commit)
 	return finding
 }
 
@@ -1425,7 +1506,7 @@ func ReidentifyFindingWithIdentity(f Finding, file, commit, identity string) Fin
 	}
 	f.File = file
 	f.Commit = commit
-	f.Fingerprint = findingFingerprint(f.DetectorID, f.Secret, identity, commit)
+	updateFindingFingerprint(&f, identity, commit)
 	if f.Provenance != nil {
 		f.Provenance.CommitSHA = commit
 		parts := strings.Split(file, "!/")
@@ -1448,6 +1529,42 @@ func findingFingerprint(detectorID, secret, file, commit string) string {
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(commit))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func findingFingerprintWithParts(detectorID, secret string, parts map[string]string, file, commit string) string {
+	if len(parts) == 0 {
+		return findingFingerprint(detectorID, secret, file, commit)
+	}
+	h := sha256.New()
+	writeVerificationIdentityField(h, "multipart-v1")
+	writeVerificationIdentityField(h, detectorID)
+	keys := make([]string, 0, len(parts))
+	for key := range parts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		writeVerificationIdentityField(h, key)
+		writeVerificationIdentityField(h, parts[key])
+	}
+	writeVerificationIdentityField(h, file)
+	writeVerificationIdentityField(h, commit)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func updateFindingFingerprint(f *Finding, identity, commit string) {
+	previous := f.Fingerprint
+	f.Fingerprint = findingFingerprintWithParts(f.DetectorID, f.Secret, f.SecretParts, identity, commit)
+	if previous != "" && previous != f.Fingerprint {
+		f.LegacyFingerprint = previous
+		return
+	}
+	legacy := findingFingerprint(f.DetectorID, f.Secret, identity, commit)
+	if legacy != f.Fingerprint {
+		f.LegacyFingerprint = legacy
+	} else {
+		f.LegacyFingerprint = ""
+	}
 }
 
 func Redact(s string) string {
