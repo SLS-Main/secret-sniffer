@@ -4823,6 +4823,234 @@ func verifyCloudflareCA(ctx context.Context, secret string) VerificationResult {
 	return result
 }
 
+func verifyGTmetrix(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://gtmetrix.com/api/2.0/status", nil)
+	req.SetBasicAuth(secret, "")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		response := string(body)
+		if statusCode == http.StatusUnauthorized && containsAnyFold(response, "e40100", "invalid api key") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusForbidden && containsAnyFold(response, "e40300", "e40301") {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a restricted account"}, true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonHasAllFields(body, "data", "type") && containsAnyFold(response, `"type":"status"`) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyHybiscus(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.hybiscus.dev/api/v1/get-remaining-quota", nil)
+	req.Header.Set("X-API-KEY", secret)
+	req.Header.Set("Accept", "application/vnd.hybiscus+json; version=3")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "api key supplied is invalid") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonObject(body) && !jsonHasAnyField(body, "error", "detail") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return VerificationResult{}, false
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyMailjetSMS(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.mailjet.com/v4/sms", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Accept", "application/vnd.mailjetsms+json; version=3")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "api key authentication/authorization failure") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonObject(body) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return VerificationResult{}, false
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyCalorieNinjas(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.calorieninjas.com/v1/nutrition?query=", nil)
+	req.Header.Set("X-Api-Key", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"items"}, "invalid api key"))
+	result.Response = ""
+	return result
+}
+
+func verifyAletheia(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.aletheiaapi.com/StockData?symbol=msft&summary=true", nil)
+	req.Header.Set("Key", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "api key invalid") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonObject(body) && !jsonHasAnyField(body, "error") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return VerificationResult{}, false
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyAllSports(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://apiv2.allsportsapi.com/football/?met=Countries&APIkey=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Error  string `json:"error"`
+			Result []struct {
+				Code int    `json:"cod"`
+				Msg  string `json:"msg"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if response.Error == "1" && len(response.Result) > 0 && response.Result[0].Code == 1004 && containsAnyFold(response.Result[0].Msg, "wrong login credentials") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && response.Error != "1" && len(response.Result) > 0 {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyFinage(ctx context.Context, secret string) VerificationResult {
+	result := verifyQueryAPI(ctx, "https://api.finage.co.uk/symbol-list/crypto?apikey="+url.QueryEscape(secret), []string{"symbols"}, "do not have permission to make a request")
+	result.Response = ""
+	return result
+}
+
+func verifyDandelion(ctx context.Context, secret string) VerificationResult {
+	result := verifyQueryAPI(ctx, "https://api.dandelion.eu/datatxt/li/v1/?text=Smart&token="+url.QueryEscape(secret), []string{"annotations"}, "no such token")
+	result.Response = ""
+	return result
+}
+
+func verifyApacta(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.apacta.com/api/v1/time_entries", nil)
+	req.Header.Set("Authorization", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "not authenticated", "set `authorization` http header") {
+			return invalidCredentialResult(), true
+		}
+		return classifyCollectionResponse()(statusCode, body)
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyLeadfeeder(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.leadfeeder.com/accounts", nil)
+	req.Header.Set("Authorization", "Token token="+secret)
+	return verifyPrivateCollection(ctx, req, "invalid access token")
+}
+
+func verifyKnapsackPro(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.knapsackpro.com/v1/builds?page=1", nil)
+	req.Header.Set("KNAPSACK-PRO-TEST-SUITE-TOKEN", secret)
+	return verifyPrivateCollection(ctx, req, "invalid test suite token")
+}
+
+func verifyTLY(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.t.ly/api/v1/link/list", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Accept", "application/json")
+	return verifyPrivateCollection(ctx, req, "unauthenticated")
+}
+
+func verifyWebScraper(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.webscraper.io/api/v1/sitemaps?api_token=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("invalid api_token", "unauthorized"))
+	result.Response = ""
+	return result
+}
+
+func verifyEnvoy(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.envoy.com/v1/locations", nil)
+	req.Header.Set("X-Api-Key", secret)
+	req.Header.Set("Accept", "application/vnd.envoy+json; version=3")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "unauthenticated", "status code 401") {
+			return invalidCredentialResult(), true
+		}
+		return classifyCollectionResponse()(statusCode, body)
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyDocparser(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.docparser.com/v1/parsers?api_key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("api key not valid"))
+	result.Response = ""
+	return result
+}
+
+func verifyInterseller(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://interseller.io/api/campaigns/list", nil)
+	req.Header.Set("X-API-Key", secret)
+	req.Header.Set("Accept", "application/json")
+	return verifyPrivateCollection(ctx, req, "unauthorizederror", `"message":"unauthorized"`)
+}
+
+func verifySquarespace(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.squarespace.com/1.0/authorization/website", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("User-Agent", "secret-sniffer credential verifier")
+	req.Header.Set("Content-Type", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id", "siteId"}, "authorization_error", "not authorized to do that"))
+	result.Response = ""
+	return result
+}
+
+func verifyAppFollow(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.appfollow.io/api/v2/account/users", nil)
+	req.Header.Set("X-AppFollow-API-Token", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusPaymentRequired && containsAnyFold(string(body), "not enough credits") {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated an account without credits"}, true
+		}
+		return classifyCollectionResponse("invalid api token")(statusCode, body)
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyOptimizely(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.optimizely.com/v2/projects", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyPrivateCollection(ctx, req, "invalid_credentials", "malformed or invalid authorization header")
+}
+
+func verifyCliengo(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.cliengo.com/1.0/account?api_key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "invalid credentials"))
+	result.Response = ""
+	return result
+}
+
 func verifyFetchedExample(ctx context.Context, endpoint string, invalidMarker string, authenticatedMarkers ...string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
@@ -4856,7 +5084,8 @@ func classifyCollectionResponse(invalidMarkers ...string) verificationResponseCl
 			"partnerships", "transcriptions", "iconsets", "carriers", "checks", "people", "detectionRules", "signatures",
 			"projects", "models", "sports", "repositories", "contracts", "contacts", "webhooks", "account_holders", "connectors",
 			"departments", "companies", "labels", "users", "sources", "workspaces", "slots", "stories", "forms", "cards",
-			"surveys", "events", "identifiers", "monitors", "calls", "preferences", "sections")) {
+			"surveys", "events", "identifiers", "monitors", "calls", "preferences", "sections", "time_entries", "accounts",
+			"builds", "links", "sitemaps", "locations", "parsers", "campaigns")) {
 			return VerificationResult{Status: VerificationVerified}, true
 		}
 		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
