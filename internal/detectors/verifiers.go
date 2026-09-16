@@ -5051,6 +5051,117 @@ func verifyCliengo(ctx context.Context, secret string) VerificationResult {
 	return result
 }
 
+func verifyTeamwork(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.teamwork.com/launchpad/v1/userinfo.json", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"sub", "user_id", "installation_id", "url"}, "unauthorized"))
+	result.Response = ""
+	return result
+}
+
+func verifyTeachable(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://developers.teachable.com/v1/courses", nil)
+	req.Header.Set("apiKey", secret)
+	return verifyPrivateCollection(ctx, req, "invalid authentication credentials")
+}
+
+func verifyBrandfetch(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.brandfetch.io/v2/brands/google.com", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"name", "domain"}, "invalid api key"))
+	result.Response = ""
+	return result
+}
+
+func verifyBombBomb(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.bombbomb.com/v2/user/", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized {
+			return invalidCredentialResult(), true
+		}
+		return classifyReadOnlyAPI([]string{"id"})(statusCode, body)
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyCaflou(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.caflou.com/api/v1/accounts", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyPrivateCollection(ctx, req, "signature verification failed")
+}
+
+func verifyAutopilot(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api2.autopilothq.com/v1/account", nil)
+	req.Header.Set("autopilotapikey", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "autopilotapikey not valid"))
+	result.Response = ""
+	return result
+}
+
+func verifyBeebole(ctx context.Context, secret string) VerificationResult {
+	body := `{"service":"custom_field.list"}`
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://beebole-apps.com/api/v2", strings.NewReader(body))
+	req.SetBasicAuth(secret, "x")
+	req.Header.Set("Content-Type", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, responseBody []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusUnauthorized {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && (jsonArray(responseBody) || jsonHasAnyField(responseBody, "result", "data", "custom_fields")) && !jsonHasAnyField(responseBody, "error") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyRingover(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://public-api.ringover.com/v2/users", nil)
+	req.Header.Set("Authorization", secret)
+	return verifyPrivateCollection(ctx, req, "invalid user")
+}
+
+func verifyCloverly(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.cloverly.com/2019-03-beta/account", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "incorrect api key given"))
+	result.Response = ""
+	return result
+}
+
+func verifyVBOUT(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://api.vbout.com/1/app/me.json?key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Response struct {
+				Header struct {
+					Status string `json:"status"`
+				} `json:"header"`
+				Data json.RawMessage `json:"data"`
+			} `json:"response"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if statusCode >= 200 && statusCode < 300 && response.Response.Header.Status == "success" && len(response.Response.Data) > 0 {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if statusCode == http.StatusUnauthorized && response.Response.Header.Status == "error" {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
 func verifyFetchedExample(ctx context.Context, endpoint string, invalidMarker string, authenticatedMarkers ...string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {

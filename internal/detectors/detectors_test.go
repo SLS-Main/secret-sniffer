@@ -1477,6 +1477,80 @@ func TestEnvoyVerifierSuppressesLocationResponse(t *testing.T) {
 	}
 }
 
+func TestFinalHighConfidenceVerificationBatchIsRegistered(t *testing.T) {
+	want := map[string]bool{
+		"autopilot-api-key": false, "beebole-api-token": false, "bombbomb-api-key": false,
+		"brandfetch-api-key": false, "caflou-api-key": false, "cloverly-api-key": false,
+		"ringover-api-key": false, "teachable-api-key": false, "teamwork-token": false,
+		"vbout-api-key": false,
+	}
+	for _, info := range RegistryInfo(DefaultRegistry()) {
+		if _, ok := want[info.ID]; ok {
+			want[info.ID] = info.Verifiable
+		}
+	}
+	for id, registered := range want {
+		if !registered {
+			t.Errorf("%s is not registered with a verifier", id)
+		}
+	}
+}
+
+func TestTeamworkVerifierUsesGlobalUserinfo(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host != "www.teamwork.com" || req.URL.Path != "/launchpad/v1/userinfo.json" || req.Header.Get("Authorization") != "Bearer secret" {
+			t.Fatalf("unexpected request: %s %#v", req.URL.String(), req.Header)
+		}
+		body := `{"sub":"user","user_id":1,"installation_id":2,"url":"https://example.teamwork.com"}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyTeamwork(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestBeeboleVerifierUsesReadOnlyRPC(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		username, password, ok := req.BasicAuth()
+		if !ok || username != "secret" || password != "x" {
+			t.Fatalf("unexpected basic auth: username=%q password=%q ok=%v", username, password, ok)
+		}
+		body, err := io.ReadAll(req.Body)
+		if err != nil || string(body) != `{"service":"custom_field.list"}` {
+			t.Fatalf("body=%q err=%v", body, err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":[]}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyBeebole(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestVBOUTVerifierUsesApplicationStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   int
+		body   string
+		status VerificationStatus
+	}{
+		{name: "valid", code: http.StatusOK, body: `{"response":{"header":{"status":"success"},"data":{"id":1}}}`, status: VerificationVerified},
+		{name: "invalid", code: http.StatusUnauthorized, body: `{"response":{"header":{"status":"error"},"data":{"errorCode":1000}}}`, status: VerificationUnverified},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tt.code, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
+			})}
+			result := verifyVBOUT(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != tt.status || result.Response != "" {
+				t.Fatalf("unexpected result: %#v", result)
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -2073,7 +2147,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"aviationstack-api-key", "aviationstack access_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"ayrshare-api-key", "ayrshare api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"besttime-api-key", "besttime api_key=\"pri_" + strings.Repeat("a", 32) + "\"", "pri_" + strings.Repeat("a", 32)},
-		{"brandfetch-api-key", "brandfetch token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"brandfetch-api-key", "brandfetch token=\"" + strings.Repeat("A", 43) + "=\"", strings.Repeat("A", 43) + "="},
 		{"browshot-api-key", "browshot api_key=\"" + strings.Repeat("A", 13) + "-" + strings.Repeat("A", 14) + "\"", strings.Repeat("A", 13) + "-" + strings.Repeat("A", 14)},
 		{"calendarific-api-key", "calendarific api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"carboninterface-api-key", "carbon interface token=\"" + strings.Repeat("A", 21) + "\"", strings.Repeat("A", 21)},
@@ -2248,7 +2322,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"uclassify-api-key", "uclassify api_key=\"" + strings.Repeat("A", 12) + "\"", strings.Repeat("A", 12)},
 		{"upcdatabase-api-key", "upc database api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"uplead-api-key", "uplead api_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
-		{"vbout-api-key", "vbout api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"vbout-api-key", "vbout api_key=\"" + strings.Repeat("1", 25) + "\"", strings.Repeat("1", 25)},
 		{"veriphone-api-key", "veriphone api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"walkscore-api-key", "walk score api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"websitepulse-api-key", "websitepulse api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
@@ -2301,15 +2375,15 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"atlassian-datacenter-token", "atlassian data center personal_access_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"audd-api-token", "audd api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"autodesk-client-secret", "autodesk client_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"autopilot-api-key", "autopilot api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"autopilot-api-key", "autopilot api_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"axonaut-api-key", "axonaut api_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"aylien-api-key", "aylien application_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"beebole-api-token", "beebole api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"beebole-api-token", "beebole api_token=\"" + strings.Repeat("a", 40) + "\"", strings.Repeat("a", 40)},
 		{"besnappy-api-key", "be snappy api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"billomat-api-key", "billomat api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"blitapp-api-key", "blitapp api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"blogger-api-key", "blogger api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"bombbomb-api-key", "bomb bomb api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"bombbomb-api-key", "bomb bomb api_key=\"eyJ" + strings.Repeat("A", 20) + ".eyJ" + strings.Repeat("A", 20) + "." + strings.Repeat("A", 20) + "\"", "eyJ" + strings.Repeat("A", 20) + ".eyJ" + strings.Repeat("A", 20) + "." + strings.Repeat("A", 20)},
 		{"boostnote-api-token", "boost note api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"borgbase-api-key", "borgbase api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"buddyns-api-key", "buddy ns api_key=\"" + strings.Repeat("a", 40) + "\"", strings.Repeat("a", 40)},
@@ -2317,7 +2391,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"bugherd-api-key", "bugherd api_key=\"" + strings.Repeat("a", 22) + "\"", strings.Repeat("a", 22)},
 		{"bulbul-api-key", "bulbul api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"bulksms-api-token", "bulk sms api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"caflou-api-key", "caflou api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"caflou-api-key", "caflou api_key=\"eyJhbGciOiJIUzI1NiJ9." + strings.Repeat("A", 80) + "." + strings.Repeat("A", 43) + "\"", "eyJhbGciOiJIUzI1NiJ9." + strings.Repeat("A", 80) + "." + strings.Repeat("A", 43)},
 		{"calorieninja-api-key", "calorie ninjas api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"campayn-api-key", "campayn api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"captaindata-api-key", "captain data api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -2339,7 +2413,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"cloudelements-api-key", "cloud elements user_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"cloudimage-api-key", "cloudimage api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"cloudplan-api-key", "cloudplan api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"cloverly-api-key", "cloverly api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"cloverly-api-key", "cloverly api_key=\"" + strings.Repeat("a", 13) + ":" + strings.Repeat("a", 14) + "\"", strings.Repeat("a", 13) + ":" + strings.Repeat("a", 14)},
 		{"cloze-api-key", "cloze api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"clustdoc-api-key", "clustdoc api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"codequiry-api-key", "codequiry api_key=\"" + strings.Repeat("A", 64) + "\"", strings.Repeat("A", 64)},
