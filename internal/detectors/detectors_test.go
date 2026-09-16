@@ -1640,6 +1640,33 @@ func TestColumnVerifierUsesBlankBasicUsername(t *testing.T) {
 	}
 }
 
+func TestSelectPDFVerifierUsesReadOnlyUsageEndpoint(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   int
+		body   string
+		status VerificationStatus
+	}{
+		{name: "valid", code: http.StatusOK, body: `{"status":"active","limit":100,"used":100,"available":0}`, status: VerificationVerified},
+		{name: "invalid", code: http.StatusUnauthorized, body: `License key not valid.`, status: VerificationUnverified},
+		{name: "ambiguous", code: http.StatusForbidden, body: `Plan does not include usage API`, status: VerificationUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path != "/api2/usage/" || req.URL.Query().Get("key") != "secret" || req.URL.Query().Get("get_history") != "False" {
+					t.Fatalf("unexpected URL: %s", req.URL.String())
+				}
+				return &http.Response{StatusCode: tt.code, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
+			})}
+			result := verifySelectPDF(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != tt.status || result.Response != "" {
+				t.Fatalf("unexpected result: %#v", result)
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -2338,7 +2365,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"scrapfly-api-key", "scrapfly api_key=\"scp-live-" + strings.Repeat("a", 32) + "\"", "scp-live-" + strings.Repeat("a", 32)},
 		{"screenshotapi-key", "screenshotapi api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"screenshotlayer-api-key", "screenshotlayer access_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
-		{"selectpdf-api-key", "selectpdf api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"selectpdf-api-key", "selectpdf api_key=\"12345678-1234-1234-1234-123456789abc\"", "12345678-1234-1234-1234-123456789abc"},
 		{"sheety-api-key", "sheety bearer_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"shipday-api-key", "shipday api_key=\"AAAAA.AAAAA" + strings.Repeat("A", 20) + "\"", "AAAAA.AAAAA" + strings.Repeat("A", 20)},
 		{"signable-api-key", "signable api_key=\"" + strings.Repeat("A", 15) + "-" + strings.Repeat("A", 16) + "\"", strings.Repeat("A", 15) + "-" + strings.Repeat("A", 16)},

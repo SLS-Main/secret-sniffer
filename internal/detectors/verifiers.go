@@ -5340,6 +5340,31 @@ func verifyPaymo(ctx context.Context, secret string) VerificationResult {
 	return result
 }
 
+func verifySelectPDF(ctx context.Context, secret string) VerificationResult {
+	endpoint := "https://selectpdf.com/api2/usage/?get_history=False&key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "license key not valid") {
+			return invalidCredentialResult(), true
+		}
+		var response struct {
+			Status    string `json:"status"`
+			Limit     *int   `json:"limit"`
+			Used      *int   `json:"used"`
+			Available *int   `json:"available"`
+		}
+		if json.Unmarshal(body, &response) == nil && statusCode >= 200 && statusCode < 300 && response.Status != "" && response.Limit != nil && response.Used != nil && response.Available != nil {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
 func verifyFetchedExample(ctx context.Context, endpoint string, invalidMarker string, authenticatedMarkers ...string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {

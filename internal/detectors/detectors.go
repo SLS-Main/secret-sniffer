@@ -799,7 +799,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("scrapfly-api-key", "Scrapfly API Key", "high", []string{"scrapfly"}, `(?i)\bscrapfly\b.{0,80}\b(?:api[_-]?key|key)\b\s*[:=]\s*['\"]?((?:scp-(?:live|test)-)?[a-z0-9]{32})\b`, 1, verifyScrapfly),
 		NewRegex("screenshotapi-key", "ScreenshotAPI Key", "high", []string{"screenshotapi"}, `(?i)\bscreenshotapi\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{32,64})\b`, 1, nil),
 		NewRegex("screenshotlayer-api-key", "Screenshotlayer API Key", "high", []string{"screenshotlayer"}, `(?i)\bscreenshotlayer\b.{0,80}\b(?:api[_-]?key|access[_-]?key|key)\b\s*[:=]\s*['\"]?([A-Za-z0-9_]{32})\b`, 1, verifyScreenshotLayer),
-		NewRegex("selectpdf-api-key", "SelectPdf API Key", "high", []string{"selectpdf"}, `(?i)\bselectpdf\b.{0,80}\b(?:api[_-]?key|key)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{32,64})\b`, 1, nil),
+		NewRegex("selectpdf-api-key", "SelectPdf API Key", "high", []string{"selectpdf"}, `(?i)\bselectpdf\b.{0,80}\b(?:api[_-]?key|key)\b\s*[:=]\s*['\"]?([a-z0-9-]{36})\b`, 1, verifySelectPDF),
 		NewRegex("sheety-api-key", "Sheety API Key", "high", []string{"sheety"}, `(?i)\bsheety\b.{0,80}\b(?:api[_-]?key|bearer[_-]?token|token|key)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("shipday-api-key", "Shipday API Key", "critical", []string{"shipday"}, `(?i)\bshipday\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9.]{11}[A-Za-z0-9]{20})\b`, 1, verifyShipday),
 		NewRegex("signable-api-key", "Signable API Key", "critical", []string{"signable"}, `(?i)\bsignable\b.{0,80}\b(?:api[_-]?key|key)\b\s*[:=]\s*['\"]?([A-Za-z0-9-]{32})\b`, 1, verifySignable),
