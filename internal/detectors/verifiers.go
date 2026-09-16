@@ -5162,6 +5162,184 @@ func verifyVBOUT(ctx context.Context, secret string) VerificationResult {
 	return result
 }
 
+func verifyAPI2Cart(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.api2cart.com/v1.1/account.cart.list.json", nil)
+	req.Header.Set("x-api-key", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			ReturnCode    int    `json:"return_code"`
+			ReturnMessage string `json:"return_message"`
+			Result        struct {
+				CartsCount int             `json:"carts_count"`
+				Carts      json.RawMessage `json:"carts"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		switch response.ReturnCode {
+		case 0:
+			if len(response.Result.Carts) > 0 {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+		case 2, 6:
+			return invalidCredentialResult(), true
+		case 5, 7, 10:
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a restricted or exhausted key"}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyKylas(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.kylas.io/v1/contacts?page=0&size=1", nil)
+	req.Header.Set("api-key", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Code          string          `json:"code"`
+			Message       string          `json:"message"`
+			Content       json.RawMessage `json:"content"`
+			TotalElements *int            `json:"totalElements"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if statusCode >= 200 && statusCode < 300 && response.TotalElements != nil && len(response.Content) > 0 {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if statusCode == http.StatusBadRequest && response.Code == "001079" && containsAnyFold(response.Message, "invalid api key") {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyInsightly(ctx context.Context, secret string) VerificationResult {
+	hosts := []string{"api.insightly.com", "api.na1.insightly.com", "api.eu1.insightly.com", "api.au1.insightly.com"}
+	result := verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/v3.1/Contacts?top=1", nil)
+		req.SetBasicAuth(secret, "")
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+			if statusCode == http.StatusTooManyRequests {
+				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a rate-limited key"}, true
+			}
+			if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "authorization has been denied") {
+				return invalidCredentialResult(), true
+			}
+			if statusCode >= 200 && statusCode < 300 && jsonArray(body) {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		})
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyOOPSpam(ctx context.Context, secret string) VerificationResult {
+	body := `{"content":"This is a deterministic credential verification probe.","checkForLength":true,"logIt":false}`
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.oopspam.com/v1/spamdetection", strings.NewReader(body))
+	req.Header.Set("X-Api-Key", secret)
+	req.Header.Set("Content-Type", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			Score   *float64        `json:"Score"`
+			Details json.RawMessage `json:"Details"`
+			Error   struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
+		if statusCode >= 200 && statusCode < 300 && response.Score != nil && *response.Score >= 0 && *response.Score <= 6 && len(response.Details) > 0 {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if statusCode == http.StatusForbidden && response.Error.Code == "API_KEY_INVALID" {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyTinyPNG(ctx context.Context, secret string) VerificationResult {
+	png, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zc1sAAAAASUVORK5CYII=")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.tinify.com/shrink", bytes.NewReader(png))
+	req.SetBasicAuth("api", secret)
+	req.Header.Set("Content-Type", "image/png")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "credentials are invalid") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode == http.StatusCreated && jsonHasAnyField(body, "input", "output") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyCaptainData(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.captaindata.com/v1/quotas", nil)
+	req.Header.Set("X-API-Key", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"quotas"}, "not authorized to access this resource"))
+	result.Response = ""
+	return result
+}
+
+func verifyColumn(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.column.com/entities?limit=1", nil)
+	req.SetBasicAuth("", secret)
+	return verifyPrivateCollection(ctx, req, "no valid api key", "invalid api key")
+}
+
+func verifyNVAPI(ctx context.Context, secret string) VerificationResult {
+	body := "credentials=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.ngc.nvidia.com/v3/keys/get-caller-info", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "unauthorized", "invalid api key") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonObject(body) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyPaymo(ctx context.Context, secret string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.paymoapp.com/api/me", nil)
+	req.SetBasicAuth(secret, "X")
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "not authenticated"))
+	result.Response = ""
+	return result
+}
+
 func verifyFetchedExample(ctx context.Context, endpoint string, invalidMarker string, authenticatedMarkers ...string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
@@ -5196,7 +5374,7 @@ func classifyCollectionResponse(invalidMarkers ...string) verificationResponseCl
 			"projects", "models", "sports", "repositories", "contracts", "contacts", "webhooks", "account_holders", "connectors",
 			"departments", "companies", "labels", "users", "sources", "workspaces", "slots", "stories", "forms", "cards",
 			"surveys", "events", "identifiers", "monitors", "calls", "preferences", "sections", "time_entries", "accounts",
-			"builds", "links", "sitemaps", "locations", "parsers", "campaigns")) {
+			"builds", "links", "sitemaps", "locations", "parsers", "campaigns", "entities")) {
 			return VerificationResult{Status: VerificationVerified}, true
 		}
 		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true

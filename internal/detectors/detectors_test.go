@@ -1551,6 +1551,95 @@ func TestVBOUTVerifierUsesApplicationStatus(t *testing.T) {
 	}
 }
 
+func TestAdditionalDefensibleVerificationMappingsAreRegistered(t *testing.T) {
+	want := map[string]bool{
+		"api2cart-api-key": false, "captaindata-api-key": false, "column-api-key": false,
+		"insightly-api-key": false, "kylas-api-key": false, "nvapi-key": false,
+		"oopspam-api-key": false, "paymo-api-key": false, "tinypng-api-key": false,
+	}
+	for _, info := range RegistryInfo(DefaultRegistry()) {
+		if _, ok := want[info.ID]; ok {
+			want[info.ID] = info.Verifiable
+		}
+	}
+	for id, registered := range want {
+		if !registered {
+			t.Errorf("%s is not registered with a verifier", id)
+		}
+	}
+}
+
+func TestAPI2CartVerifierClassifiesApplicationCodes(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		status VerificationStatus
+	}{
+		{name: "valid", body: `{"return_code":0,"result":{"carts_count":0,"carts":[]}}`, status: VerificationVerified},
+		{name: "invalid", body: `{"return_code":2,"return_message":"Incorrect API Key","result":{}}`, status: VerificationUnverified},
+		{name: "restricted", body: `{"return_code":5,"return_message":"API is restricted","result":{}}`, status: VerificationVerified},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
+			})}
+			result := verifyAPI2Cart(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != tt.status || result.Response != "" {
+				t.Fatalf("unexpected result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestInsightlyVerifierTriesRegionalPods(t *testing.T) {
+	var requests int
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		username, password, ok := req.BasicAuth()
+		if !ok || username != "secret" || password != "" {
+			t.Fatalf("unexpected basic auth: username=%q password=%q ok=%v", username, password, ok)
+		}
+		if req.URL.Host != "api.eu1.insightly.com" {
+			body := `{"Message":"Authorization has been denied for this request."}`
+			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`[]`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyInsightly(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" || requests != 3 {
+		t.Fatalf("result=%#v requests=%d", result, requests)
+	}
+}
+
+func TestOOPSpamVerifierRejectsExactInvalidCode(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("X-Api-Key") != "secret" {
+			t.Fatalf("X-Api-Key=%q", req.Header.Get("X-Api-Key"))
+		}
+		body := `{"error":{"code":"API_KEY_INVALID","message":"An invalid api_key was supplied"}}`
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyOOPSpam(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnverified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestColumnVerifierUsesBlankBasicUsername(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		username, password, ok := req.BasicAuth()
+		if !ok || username != "" || password != "secret" {
+			t.Fatalf("unexpected basic auth: username=%q password=%q ok=%v", username, password, ok)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"entities":[]}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyColumn(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -1984,7 +2073,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"transloadit-auth-key", "api2.transloadit.com auth_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"gumlet-api-key", "api.gumlet.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"imageengine-api-token", "control-api.imageengine.io api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"tinypng-api-key", "api.tinify.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"tinypng-api-key", "api.tinify.com api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"browserstack-access-key", "browserstack access_key=\"" + strings.Repeat("A", 20) + "\"", strings.Repeat("A", 20)},
 		{"cloudsmith-api-key", "cloudsmith api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"eventbrite-private-token", "eventbrite private_token=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
@@ -2361,7 +2450,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"allsports-api-key", "all sports api_key=\"" + strings.Repeat("a", 64) + "\"", strings.Repeat("a", 64)},
 		{"anypoint-client-secret", "anypoint client_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"apacta-api-key", "apacta api_key=\"12345678-1234-1234-1234-123456789abc\"", "12345678-1234-1234-1234-123456789abc"},
-		{"api2cart-api-key", "api2cart api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"api2cart-api-key", "api2cart api_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"apideck-api-key", "apideck api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"apifonica-api-key", "apifonica api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"apimatic-api-key", "apimatic api_key=\"" + strings.Repeat("A", 64) + "\"", strings.Repeat("A", 64)},
@@ -2418,7 +2507,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"clustdoc-api-key", "clustdoc api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"codequiry-api-key", "codequiry api_key=\"" + strings.Repeat("A", 64) + "\"", strings.Repeat("A", 64)},
 		{"collect2-api-key", "collect2 api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"column-api-key", "column secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"column-api-key", "column secret=\"live_" + strings.Repeat("A", 27) + "\"", "live_" + strings.Repeat("A", 27)},
 		{"commercejs-api-key", "commerce.js secret_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"commodities-api-key", "commodities access_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"companyhub-api-key", "company hub api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -2514,7 +2603,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"iexcloud-api-key", "iex cloud secret_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"imagga-api-key", "imagga api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"impala-api-key", "impala secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"insightly-api-key", "insightly api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"insightly-api-key", "insightly api_key=\"12345678-1234-1234-1234-123456789abc\"", "12345678-1234-1234-1234-123456789abc"},
 		{"instabot-api-key", "instabot api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"instamojo-api-key", "instamojo auth_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"interseller-api-key", "interseller api_key=\"12345678-1234-1234-1234-123456789abc\"", "12345678-1234-1234-1234-123456789abc"},
@@ -2527,7 +2616,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"karmacrm-api-key", "karma crm api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"knapsackpro-api-token", "knapsack pro api_token=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"kontent-api-key", "kontent management_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"kylas-api-key", "kylas api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"kylas-api-key", "kylas api_key=\"12345678-1234-1234-1234-123456789abc\"", "12345678-1234-1234-1234-123456789abc"},
 		{"leadfeeder-api-key", "leadfeeder api_key=\"" + strings.Repeat("A", 43) + "\"", strings.Repeat("A", 43)},
 		{"lendflow-api-key", "lendflow secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"lexigram-api-key", "lexigram api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -2574,17 +2663,17 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"nimble-api-key", "nimble api_key=\"" + strings.Repeat("A", 30) + "\"", strings.Repeat("A", 30)},
 		{"noticeable-api-key", "noticeable api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"nozbeteams-api-token", "nozbe teams api_token=\"" + strings.Repeat("A", 16) + "_" + strings.Repeat("A", 64) + "\"", strings.Repeat("A", 16) + "_" + strings.Repeat("A", 64)},
-		{"nvapi-key", "nvapi api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"nvapi-key", "nvapi api_key=\"nvapi-" + strings.Repeat("A", 64) + "\"", "nvapi-" + strings.Repeat("A", 64)},
 		{"onedesk-api-key", "one desk api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"onepagecrm-api-key", "one page crm api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"oopspam-api-key", "oopspam api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"oopspam-api-key", "oopspam api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"optimizely-api-key", "optimizely personal_access_token=\"" + strings.Repeat("A", 54) + "\"", strings.Repeat("A", 54)},
 		{"overloop-api-key", "overloop api_key=\"" + strings.Repeat("A", 50) + "\"", strings.Repeat("A", 50)},
 		{"paralleldots-api-key", "parallel dots api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"parsers-api-key", "parsers api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"parseur-api-key", "parseur api_key=\"" + strings.Repeat("a", 40) + "\"", strings.Repeat("a", 40)},
 		{"paydirt-api-key", "paydirt api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"paymo-api-key", "paymo api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"paymo-api-key", "paymo api_key=\"" + strings.Repeat("A", 44) + "\"", strings.Repeat("A", 44)},
 		{"planview-leankit-api-key", "planview leankit api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"planyo-api-key", "planyo api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"pollsapi-key", "polls api api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
