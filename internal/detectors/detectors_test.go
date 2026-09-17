@@ -2207,9 +2207,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 524,
-		VerificationSafetyReadOnly:   27,
-		VerificationSafetyAuthOnly:   4,
+		VerificationSafetyUnreviewed: 514,
+		VerificationSafetyReadOnly:   35,
+		VerificationSafetyAuthOnly:   6,
 		VerificationSafetyUnsafe:     12,
 	}
 	for safety, want := range expected {
@@ -2217,6 +2217,172 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 			t.Fatalf("%s detector count=%d, want %d", safety, counts[safety], want)
 		}
 	}
+}
+
+func TestDeveloperPlatformVerifierSafetyPromotions(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"circleci-pat":       VerificationSafetyReadOnly,
+		"postman-api-key":    VerificationSafetyReadOnly,
+		"notion-token":       VerificationSafetyReadOnly,
+		"linear-api-key":     VerificationSafetyReadOnly,
+		"vercel-token":       VerificationSafetyReadOnly,
+		"cloudsmith-api-key": VerificationSafetyReadOnly,
+		"travisci-token":     VerificationSafetyReadOnly,
+		"railway-token":      VerificationSafetyReadOnly,
+		"sentry-user-token":  VerificationSafetyAuthOnly,
+		"sentry-org-token":   VerificationSafetyAuthOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("promoted detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestDeveloperPlatformDetectorFormatBoundaries(t *testing.T) {
+	tests := []struct {
+		id      string
+		valid   string
+		invalid []string
+	}{
+		{id: "linear-api-key", valid: "lin_api_" + strings.Repeat("A", 40), invalid: []string{"lin_api_" + strings.Repeat("A", 39), "lin_api_" + strings.Repeat("A", 41)}},
+		{id: "notion-token", valid: "secret_" + strings.Repeat("A", 43), invalid: []string{"secret_" + strings.Repeat("A", 42), "secret_" + strings.Repeat("A", 44)}},
+		{id: "postman-api-key", valid: "PMAK-" + strings.Repeat("A", 59), invalid: []string{"PMAK-" + strings.Repeat("A", 58), "PMAK-" + strings.Repeat("A", 60)}},
+		{id: "cloudsmith-api-key", valid: "cloudsmith api_key=" + strings.Repeat("a", 40), invalid: []string{"cloudsmith api_key=" + strings.Repeat("a", 39), "cloudsmith api_key=" + strings.Repeat("a", 41)}},
+	}
+	registry := map[string]Detector{}
+	for _, detector := range DefaultRegistry() {
+		registry[detector.Info().ID] = detector
+	}
+	for _, test := range tests {
+		t.Run(test.id, func(t *testing.T) {
+			detector := registry[test.id]
+			if detector == nil || len(detector.Detect([]byte(test.valid))) != 1 {
+				t.Fatalf("valid credential did not match: %q", test.valid)
+			}
+			for _, invalid := range test.invalid {
+				if found := detector.Detect([]byte(invalid)); len(found) != 0 {
+					t.Fatalf("invalid boundary matched %q: %#v", invalid, found)
+				}
+			}
+		})
+	}
+}
+
+func TestDeveloperPlatformVerifierRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		method      string
+		host        string
+		path        string
+		header      string
+		headerValue string
+		response    string
+	}{
+		{name: "circleci", verify: verifyCircleCI, method: http.MethodGet, host: "circleci.com", path: "/api/v2/me", header: "Circle-Token", headerValue: "secret", response: `{"id":"user"}`},
+		{name: "postman", verify: verifyPostman, method: http.MethodGet, host: "api.getpostman.com", path: "/me", header: "X-Api-Key", headerValue: "secret", response: `{"user":{"id":"user"}}`},
+		{name: "notion", verify: verifyNotion, method: http.MethodGet, host: "api.notion.com", path: "/v1/users/me", header: "Authorization", headerValue: "Bearer secret", response: `{"id":"user"}`},
+		{name: "linear", verify: verifyLinear, method: http.MethodPost, host: "api.linear.app", path: "/graphql", header: "Authorization", headerValue: "secret", response: `{"data":{"viewer":{"id":"user"}}}`},
+		{name: "vercel", verify: verifyVercel, method: http.MethodGet, host: "api.vercel.com", path: "/v2/user", header: "Authorization", headerValue: "Bearer secret", response: `{"user":{"id":"user"}}`},
+		{name: "cloudsmith", verify: verifyCloudsmith, method: http.MethodGet, host: "api.cloudsmith.io", path: "/v1/user/self/", header: "X-Api-Key", headerValue: "secret", response: `{"authenticated":true}`},
+		{name: "travis", verify: verifyTravisCI, method: http.MethodGet, host: "api.travis-ci.com", path: "/user", header: "Authorization", headerValue: "token secret", response: `{"id":1}`},
+		{name: "railway", verify: verifyRailway, method: http.MethodPost, host: "backboard.railway.com", path: "/graphql/v2", header: "Authorization", headerValue: "Bearer secret", response: `{"data":{"me":{"email":"user@example.com"}}}`},
+		{name: "sentry", verify: verifySentry, method: http.MethodGet, host: "sentry.io", path: "/api/0/auth/validate/", header: "Authorization", headerValue: "Bearer secret", response: `{}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Host != test.host || req.URL.Path != test.path || req.Header.Get(test.header) != test.headerValue {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				if test.method == http.MethodPost {
+					body, err := io.ReadAll(req.Body)
+					if err != nil || !strings.Contains(string(body), `"query"`) || strings.Contains(strings.ToLower(string(body)), "mutation") {
+						t.Fatalf("request is not a read-only GraphQL query: body=%q err=%v", body, err)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestDeveloperPlatformVerifierClassifiersRemainConservative(t *testing.T) {
+	t.Run("identity helper", func(t *testing.T) {
+		for _, status := range []int{http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError} {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"private":"data"}`)), Header: make(http.Header)}, nil
+			})}
+			result := verifyCircleCI(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationUnknown || result.Response != "" {
+				t.Fatalf("status %d result=%#v", status, result)
+			}
+		}
+	})
+
+	t.Run("sentry scoped user token", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"detail":"You do not have permission to perform this action."}`)), Header: make(http.Header)}, nil
+		})}
+		result := verifySentry(WithVerificationHTTPClient(context.Background(), client), "sntryu_"+strings.Repeat("a", 64))
+		if result.Status != VerificationVerified || result.Response != "" {
+			t.Fatalf("unexpected Sentry scoped result: %#v", result)
+		}
+	})
+
+	t.Run("sentry organization forbidden", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"detail":"forbidden"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verifySentry(WithVerificationHTTPClient(context.Background(), client), "sntrys_eyJ"+strings.Repeat("A", 197))
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("unexpected Sentry org result: %#v", result)
+		}
+	})
+
+	t.Run("sentry invalid token", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"detail":"Invalid token"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verifySentry(WithVerificationHTTPClient(context.Background(), client), "sntrys_eyJ"+strings.Repeat("A", 197))
+		if result.Status != VerificationUnverified || result.ErrorCategory != "invalid_credentials" || result.Response != "" {
+			t.Fatalf("unexpected Sentry invalid result: %#v", result)
+		}
+	})
+
+	t.Run("vercel invalid token", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"forbidden","invalidToken": true}}`)), Header: make(http.Header)}, nil
+		})}
+		result := verifyVercel(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnverified || result.ErrorCategory != "invalid_credentials" || result.Response != "" {
+			t.Fatalf("unexpected Vercel invalid result: %#v", result)
+		}
+	})
+
+	t.Run("cloudsmith unexpected success", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"authenticated":false}`)), Header: make(http.Header)}, nil
+		})}
+		result := verifyCloudsmith(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("unexpected Cloudsmith result: %#v", result)
+		}
+	})
 }
 
 func TestResolvedCoreVerifierSafetyPromotions(t *testing.T) {
@@ -2975,7 +3141,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"imageengine-api-token", "control-api.imageengine.io api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"tinypng-api-key", "api.tinify.com api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"browserstack-access-key", "browserstack access_key=\"" + strings.Repeat("A", 20) + "\"", strings.Repeat("A", 20)},
-		{"cloudsmith-api-key", "cloudsmith api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"cloudsmith-api-key", "cloudsmith api_key=\"" + strings.Repeat("a", 40) + "\"", strings.Repeat("a", 40)},
 		{"eventbrite-private-token", "eventbrite private_token=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"harvest-access-token", "harvest access_token=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"lokalise-token", "lokalise api_token=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},

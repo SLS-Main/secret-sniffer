@@ -41,6 +41,29 @@ func verifyJSONPOST(ctx context.Context, secret, endpoint, header, prefix, body 
 	return verifyHTTPRequest(ctx, req)
 }
 
+func verifyJSONIdentityRequest(ctx context.Context, req *http.Request, fields ...string) VerificationResult {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300 && jsonHasAnyField(body, fields...):
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode >= 200 && statusCode < 300:
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider could not authorize verification"), true
+		case statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
+}
+
 func verifyEndpoints(ctx context.Context, endpoints []string, verify func(string) VerificationResult) VerificationResult {
 	var unknown *VerificationResult
 	var rejected VerificationResult
@@ -533,7 +556,9 @@ func verifyURLScan(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCircleCI(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://circleci.com/api/v2/me", "Circle-Token", "")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://circleci.com/api/v2/me", nil)
+	req.Header.Set("Circle-Token", secret)
+	return verifyJSONIdentityRequest(ctx, req, "id")
 }
 
 func verifySnyk(ctx context.Context, secret string) VerificationResult {
@@ -549,7 +574,36 @@ func verifySnyk(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyVercel(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.vercel.com/v2/user")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.vercel.com/v2/user", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300 && jsonHasAnyField(body, "id"):
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode >= 200 && statusCode < 300:
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
+			var response struct {
+				Error struct {
+					InvalidToken bool `json:"invalidToken"`
+				} `json:"error"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.Error.InvalidToken {
+				return invalidCredentialResult(), true
+			}
+			return unknownVerificationResult("authorization", "provider could not authorize verification"), true
+		case statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyRunpod(ctx context.Context, secret string) VerificationResult {
@@ -865,7 +919,26 @@ func verifyApify(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCloudsmith(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.cloudsmith.io/user/self/", "Authorization", "token ")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.cloudsmith.io/v1/user/self/", nil)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Api-Key", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode >= 200 && statusCode < 300 {
+			var response struct {
+				Authenticated bool `json:"authenticated"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.Authenticated {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		}
+		if statusCode == http.StatusUnauthorized {
+			return invalidCredentialResult(), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyClockify(ctx context.Context, secret string) VerificationResult {
@@ -889,7 +962,7 @@ func verifyGrafanaCloud(ctx context.Context, secret string) VerificationResult {
 		"https://grafana.com/api/v1/tokens?region=eu&pageSize=1",
 		"https://grafana.com/api/v1/tokens?region=au&pageSize=1",
 	}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+	result := verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.Header.Set("Authorization", "Bearer "+secret)
 		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
@@ -907,6 +980,8 @@ func verifyGrafanaCloud(ctx context.Context, secret string) VerificationResult {
 			}
 		})
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyLokalise(ctx context.Context, secret string) VerificationResult {
@@ -1381,19 +1456,19 @@ func verifyProtocolsIO(ctx context.Context, secret string) VerificationResult {
 
 func verifyTravisCI(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api.travis-ci.com/user", "https://api.travis-ci.org/user"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+	result := verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.Header.Set("Authorization", "token "+secret)
 		req.Header.Set("Travis-API-Version", "3")
 		req.Header.Set("User-Agent", "secret-sniffer")
-		result := verifyHTTPRequest(ctx, req)
+		result := verifyJSONIdentityRequest(ctx, req, "id", "login")
 		if result.Status == VerificationUnverified {
-			result.Status = VerificationUnknown
-			result.ErrorCategory = "endpoint_context"
-			result.Message = "token may belong to a Travis CI Enterprise installation"
+			result = unknownVerificationResult("endpoint_context", "token may belong to a Travis CI Enterprise installation")
 		}
 		return result
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyMandrill(ctx context.Context, secret string) VerificationResult {
@@ -2298,7 +2373,7 @@ func verifyRailway(ctx context.Context, secret string) VerificationResult {
 		{header: "Authorization", body: `{"query":"query { me { name email } }"}`, field: "email"},
 		{header: "Project-Access-Token", body: `{"query":"query { projectToken { projectId environmentId } }"}`, field: "projectId"},
 	}
-	return verifyEndpoints(ctx, []string{"account", "project"}, func(kind string) VerificationResult {
+	result := verifyEndpoints(ctx, []string{"account", "project"}, func(kind string) VerificationResult {
 		query := queries[0]
 		if kind == "project" {
 			query = queries[1]
@@ -2312,6 +2387,8 @@ func verifyRailway(ctx context.Context, secret string) VerificationResult {
 		req.Header.Set("Content-Type", "application/json")
 		return verifyHTTPRequestWithClassifier(ctx, req, classifyGraphQLIdentity(query.field))
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyTwelveData(ctx context.Context, secret string) VerificationResult {
@@ -6032,22 +6109,52 @@ func verifyLangSmith(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyLinear(ctx context.Context, secret string) VerificationResult {
-	return verifyJSONPOST(ctx, secret, "https://api.linear.app/graphql", "Authorization", "", `{"query":"{ viewer { id name } }"}`)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.linear.app/graphql", strings.NewReader(`{"query":"{ viewer { id name } }"}`))
+	req.Header.Set("Authorization", secret)
+	req.Header.Set("Content-Type", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyGraphQLIdentity("id"))
+	result.Response = ""
+	return result
 }
 
 func verifyNotion(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.notion.com/v1/users", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.notion.com/v1/users/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
 	req.Header.Set("Notion-Version", "2022-06-28")
-	return verifyHTTPRequest(ctx, req)
+	return verifyJSONIdentityRequest(ctx, req, "id")
 }
 
 func verifyPostman(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.getpostman.com/collections", "X-Api-Key", "")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.getpostman.com/me", nil)
+	req.Header.Set("X-Api-Key", secret)
+	return verifyJSONIdentityRequest(ctx, req, "id")
 }
 
 func verifySentry(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://sentry.io/api/0/auth/validate/")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://sentry.io/api/0/auth/validate/", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300:
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden && containsAnyFold(string(body), "Invalid token"):
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden && strings.HasPrefix(secret, "sntryu_") && containsAnyFold(string(body), "You do not have permission to perform this action"):
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider could not authorize verification"), true
+		case statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyHoneycomb(ctx context.Context, secret string) VerificationResult {
