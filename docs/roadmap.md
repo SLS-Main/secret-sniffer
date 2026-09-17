@@ -80,7 +80,6 @@ Partially implemented:
 
 ### Verification
 
-- Add AWS key-pair verification.
 - Add Slack token and webhook verification.
 - Add Stripe verification.
 - Add GitLab verification.

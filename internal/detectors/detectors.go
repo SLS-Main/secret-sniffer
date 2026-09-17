@@ -252,6 +252,16 @@ func DefaultRegistry() []Detector {
 	return []Detector{
 		NewRegex("aws-access-key", "AWS Access Key", "critical", []string{"AKIA", "ASIA"}, `\b((?:AKIA|ASIA)[A-Z0-9]{16})\b`, 1, nil),
 		NewRegex("aws-secret-key", "AWS Secret Access Key", "critical", []string{"aws_secret", "secret_access_key", "AWS_SECRET_ACCESS_KEY"}, `(?i)(aws(.{0,20})?(secret|private).{0,20})['\"\s:=]+([A-Za-z0-9/+=]{40})\b`, 4, nil),
+		CorrelatedDetector{
+			ID: "aws-credentials", Name: "AWS Credentials", Severity: "critical",
+			Keywords: []string{"AKIA", "ASIA", "aws_secret_access_key", "aws-secret-access-key", "secretaccesskey", "secret_key", "secret-key"},
+			Fields: []CorrelatedField{
+				{Name: "access_key_id", Regex: regexp.MustCompile(`\b((?:AKIA|ASIA)[A-Z0-9]{16})\b`), ValueGroup: 1, Required: true},
+				{Name: "secret_access_key", Regex: regexp.MustCompile(`(?i:\b(?:aws[_-]?)?(?:secret[_-]?access[_-]?key|secret[_-]?key)\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9/+=]{40})\b`), ValueGroup: 1, Required: true},
+				{Name: "session_token", Regex: regexp.MustCompile(`(?i:\b(?:aws[_-]?)?session[_-]?token\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9/+=]{80,1000})\b`), ValueGroup: 1},
+			},
+			PrimaryPart: "secret_access_key", MaxDistance: 256, StopAtBlankLine: true, CompositeVerifier: verifyAWSCredentials,
+		},
 		NewRegex("github-token", "GitHub Token", "critical", []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github"}, `\b((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,255})\b`, 1, verifyGitHub),
 		NewRegex("github-pat-v2", "GitHub Fine-Grained Token", "critical", []string{"github_pat_"}, `\b(github_pat_[A-Za-z0-9_]{80,255})\b`, 1, verifyGitHub),
 		NewRegex("slack-token", "Slack Token", "critical", []string{"xoxb-", "xoxp-", "xoxa-"}, `\b((?:xox[baprs]|xoxa)-[A-Za-z0-9-]{10,200})\b`, 1, verifySlack),

@@ -46,6 +46,27 @@ func TestScannerFindsSecretInFile(t *testing.T) {
 	}
 }
 
+func TestScannerCorrelatesAWSCredentialsWithinOneFile(t *testing.T) {
+	dir := t.TempDir()
+	secret := strings.Repeat("a", 40)
+	content := "AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\nAWS_SECRET_ACCESS_KEY=" + secret
+	if err := os.WriteFile(filepath.Join(dir, "credentials.env"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{Target: dir, Workers: 1, MaxFileBytes: 1024 * 1024}, detectors.DefaultRegistry())
+	findings, err := s.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range findings {
+		if finding.DetectorID == "aws-credentials" && finding.Secret == secret && finding.SecretParts["access_key_id"] == "AKIAABCDEFGHIJKLMNOP" {
+			return
+		}
+	}
+	t.Fatalf("expected correlated AWS finding, got %#v", findings)
+}
+
 func TestScannerIncludeExcludeGlobs(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "config.txt"), []byte("OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef"), 0o600); err != nil {

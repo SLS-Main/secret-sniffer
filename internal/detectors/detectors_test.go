@@ -1810,6 +1810,110 @@ func TestTwilioMultipartCredentialExtractionAndVerification(t *testing.T) {
 	}
 }
 
+func TestAWSCredentialsCorrelateInEitherOrderWithinRecordBoundaries(t *testing.T) {
+	accessKeyOne := "AKIAABCDEFGHIJKLMNOP"
+	accessKeyTwo := "AKIAQRSTUVWXYZ234567"
+	secretOne := strings.Repeat("a", 40)
+	secretTwo := strings.Repeat("b", 40)
+	input := strings.Join([]string{
+		"AWS_ACCESS_KEY_ID=" + accessKeyOne,
+		"AWS_SECRET_ACCESS_KEY=" + secretOne,
+		"",
+		`secret_key: "` + secretTwo + `"`,
+		`credential: "` + accessKeyTwo + `"`,
+	}, "\n")
+
+	var candidates []Candidate
+	for _, detector := range DefaultRegistry() {
+		if detector.Info().ID == "aws-credentials" {
+			candidates = detector.Detect([]byte(input))
+			break
+		}
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("expected two correlated AWS credentials, got %#v", candidates)
+	}
+	if candidates[0].Secret != secretOne || candidates[0].SecretParts["access_key_id"] != accessKeyOne || candidates[0].SecretParts["secret_access_key"] != secretOne {
+		t.Fatalf("unexpected first credential: %#v", candidates[0])
+	}
+	if candidates[1].Secret != secretTwo || candidates[1].SecretParts["access_key_id"] != accessKeyTwo || candidates[1].SecretParts["secret_access_key"] != secretTwo {
+		t.Fatalf("unexpected reversed credential: %#v", candidates[1])
+	}
+}
+
+func TestAWSCredentialsRejectDistantAndCrossRecordFields(t *testing.T) {
+	accessKey := "AKIAABCDEFGHIJKLMNOP"
+	secret := strings.Repeat("a", 40)
+	tests := []string{
+		"AWS_ACCESS_KEY_ID=" + accessKey + "\n\nAWS_SECRET_ACCESS_KEY=" + secret,
+		"AWS_ACCESS_KEY_ID=" + accessKey + "\n" + strings.Repeat("x", 300) + "\nAWS_SECRET_ACCESS_KEY=" + secret,
+	}
+	for _, input := range tests {
+		for _, detector := range DefaultRegistry() {
+			if detector.Info().ID == "aws-credentials" && len(detector.Detect([]byte(input))) != 0 {
+				t.Fatalf("correlated fields outside a bounded record: %q", input)
+			}
+		}
+	}
+}
+
+func TestAWSCredentialsAttachAndVerifySessionToken(t *testing.T) {
+	accessKey := "ASIAABCDEFGHIJKLMNOP"
+	secret := strings.Repeat("a", 40)
+	sessionToken := strings.Repeat("b", 80)
+	input := "AWS_SECRET_ACCESS_KEY=" + secret + "\nAWS_SESSION_TOKEN=" + sessionToken + "\nAWS_ACCESS_KEY_ID=" + accessKey
+	var candidate Candidate
+	for _, detector := range DefaultRegistry() {
+		if detector.Info().ID == "aws-credentials" {
+			found := detector.Detect([]byte(input))
+			if len(found) != 1 {
+				t.Fatalf("expected one temporary credential, got %#v", found)
+			}
+			candidate = found[0]
+			break
+		}
+	}
+	if candidate.SecretParts["session_token"] != sessionToken || candidate.CompositeVerifier == nil {
+		t.Fatalf("session token was not correlated: %#v", candidate)
+	}
+
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if !strings.Contains(req.Header.Get("Authorization"), "Credential="+accessKey+"/") {
+			t.Fatalf("request was not signed with the detected access key: %#v", req.Header)
+		}
+		if req.Header.Get("X-Amz-Security-Token") != sessionToken {
+			t.Fatalf("request omitted the session token: %#v", req.Header)
+		}
+		body := `<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><GetCallerIdentityResult><Arn>arn:aws:iam::123456789012:user/test</Arn><UserId>AIDAEXAMPLE</UserId><Account>123456789012</Account></GetCallerIdentityResult><ResponseMetadata><RequestId>request-id</RequestId></ResponseMetadata></GetCallerIdentityResponse>`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": []string{"text/xml"}}}, nil
+	})}
+	result := candidate.Verify(WithVerificationHTTPClient(context.Background(), client))
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected verification result: %#v", result)
+	}
+}
+
+func TestAWSCredentialVerifierClassifiesRejectionAndMissingSession(t *testing.T) {
+	candidate := Candidate{SecretParts: map[string]string{
+		"access_key_id":     "AKIAABCDEFGHIJKLMNOP",
+		"secret_access_key": strings.Repeat("a", 40),
+	}}
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		body := `<ErrorResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><Error><Type>Sender</Type><Code>InvalidClientTokenId</Code><Message>rejected</Message></Error><RequestId>request-id</RequestId></ErrorResponse>`
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": []string{"text/xml"}}}, nil
+	})}
+	result := verifyAWSCredentials(WithVerificationHTTPClient(context.Background(), client), candidate)
+	if result.Status != VerificationUnverified || result.ErrorCategory != "invalid_credentials" || result.Response != "" {
+		t.Fatalf("unexpected rejection result: %#v", result)
+	}
+
+	candidate.SecretParts["access_key_id"] = "ASIAABCDEFGHIJKLMNOP"
+	result = verifyAWSCredentials(context.Background(), candidate)
+	if result.Status != VerificationUnsupported {
+		t.Fatalf("temporary credentials without a session token should be unsupported: %#v", result)
+	}
+}
+
 func TestMultipartVerificationIdentityIsDeterministic(t *testing.T) {
 	verifier := func(context.Context, Candidate) VerificationResult {
 		return VerificationResult{Status: VerificationVerified}

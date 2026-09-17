@@ -15,8 +15,8 @@ Current tracked mapping summary:
 - Direct catalog mappings: `870`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `807`
-- Partial mappings: `66`
+- Implemented mappings: `809`
+- Partial mappings: `64`
 - Planned mappings: `2`
 - Untracked catalog directories: `0`
 
@@ -25,7 +25,7 @@ Accounting notes:
 - `catalog_size` is the generated TruffleHog detector directory count from the pinned snapshot.
 - `catalog_tracked` counts unique mapped IDs that exist in that generated catalog.
 - `sub_detector_tracked` counts mapped IDs not present as top-level catalog directories, such as `github/v2`.
-- `duplicate_mappings` counts extra mapping rows for one catalog ID, such as separate `aws` access-key and secret-key coverage.
+- `duplicate_mappings` counts extra mapping rows for one catalog ID, such as standalone and correlated `aws` credential coverage.
 
 This project is not trying to copy TruffleHog's discovery algorithm or source code. Parity means comparable source coverage, provider detector coverage, verification coverage, output usability, and operational behavior on large servers.
 
@@ -45,7 +45,7 @@ Tracked TruffleHog mappings are available with:
 
 Current built-in detector families:
 
-- AWS access keys and secret access keys
+- AWS access keys, correlated credential sets, and STS verification
 - GitHub classic and fine-grained tokens
 - Slack tokens
 - Stripe keys
