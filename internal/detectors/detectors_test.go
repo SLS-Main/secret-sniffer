@@ -2204,11 +2204,106 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 			t.Fatalf("Azure Entra safety=%q, want auth_only", info.VerificationSafety)
 		}
 	}
-	if counts[VerificationSafetyUnsafe] != 12 {
-		t.Fatalf("unsafe detector count=%d, want 12", counts[VerificationSafetyUnsafe])
+	expected := map[VerificationSafety]int{
+		VerificationSafetyUnreviewed: 529,
+		VerificationSafetyReadOnly:   24,
+		VerificationSafetyAuthOnly:   2,
+		VerificationSafetyUnsafe:     12,
 	}
-	if counts[VerificationSafetyUnreviewed] == 0 || counts[VerificationSafetyReadOnly] == 0 || counts[VerificationSafetyAuthOnly] == 0 {
-		t.Fatalf("missing verification safety categories: %#v", counts)
+	for safety, want := range expected {
+		if counts[safety] != want {
+			t.Fatalf("%s detector count=%d, want %d", safety, counts[safety], want)
+		}
+	}
+}
+
+func TestCoreVerifierSafetyPromotions(t *testing.T) {
+	promoted := map[string]struct{}{
+		"github-pat-v2": {}, "stripe-key": {}, "anthropic-key": {}, "sendgrid-key": {}, "mailgun-key": {},
+		"gitlab-token": {}, "discord-token": {}, "discord-bot-token": {}, "telegram-bot-token": {}, "npm-token": {},
+		"datadog-api-key": {}, "new-relic-key": {}, "heroku-api-key": {}, "cloudflare-api-token": {}, "digitalocean-token": {},
+		"azure-devops-pat": {}, "terraform-cloud-token": {}, "netlify-token": {}, "doppler-token": {}, "rubygems-api-key": {},
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		if _, ok := promoted[info.ID]; !ok {
+			continue
+		}
+		if info.VerificationSafety != VerificationSafetyReadOnly {
+			t.Fatalf("detector %q safety=%q, want read_only", info.ID, info.VerificationSafety)
+		}
+		delete(promoted, info.ID)
+	}
+	if len(promoted) != 0 {
+		t.Fatalf("promoted detectors missing from registry: %#v", promoted)
+	}
+}
+
+func TestCoreReadOnlyVerifierRequestContracts(t *testing.T) {
+	tests := []struct {
+		name          string
+		verify        Verifier
+		method        string
+		host          string
+		path          string
+		header        string
+		headerValue   string
+		basicUser     string
+		basicPassword string
+		response      string
+	}{
+		{name: "github", verify: verifyGitHub, method: http.MethodGet, host: "api.github.com", path: "/user", header: "Authorization", headerValue: "Bearer secret"},
+		{name: "stripe", verify: verifyStripe, method: http.MethodGet, host: "api.stripe.com", path: "/v1/balance", header: "Authorization", headerValue: "Bearer secret"},
+		{name: "anthropic", verify: verifyAnthropic, method: http.MethodGet, host: "api.anthropic.com", path: "/v1/models", header: "x-api-key", headerValue: "secret"},
+		{name: "sendgrid", verify: verifySendGrid, method: http.MethodGet, host: "api.sendgrid.com", path: "/v3/scopes", header: "Authorization", headerValue: "Bearer secret"},
+		{name: "mailgun", verify: verifyMailgun, method: http.MethodGet, host: "api.mailgun.net", path: "/v3/domains", basicUser: "api", basicPassword: "secret"},
+		{name: "gitlab", verify: verifyGitLab, method: http.MethodGet, host: "gitlab.com", path: "/api/v4/user", header: "Authorization", headerValue: "Bearer secret"},
+		{name: "discord", verify: verifyDiscordBot, method: http.MethodGet, host: "discord.com", path: "/api/v10/users/@me", header: "Authorization", headerValue: "Bot secret"},
+		{name: "telegram", verify: verifyTelegramBot, method: http.MethodGet, host: "api.telegram.org", path: "/botsecret/getMe"},
+		{name: "npm", verify: verifyNPM, method: http.MethodGet, host: "registry.npmjs.org", path: "/-/whoami", header: "Authorization", headerValue: "Bearer secret"},
+		{name: "datadog", verify: verifyDatadog, method: http.MethodGet, host: "api.datadoghq.com", path: "/api/v1/validate", header: "DD-API-KEY", headerValue: "secret", response: `{"valid":true}`},
+		{name: "new relic", verify: verifyNewRelic, method: http.MethodPost, host: "api.newrelic.com", path: "/graphql", header: "API-Key", headerValue: "secret", response: `{"data":{"requestContext":{"userId":"1"}}}`},
+		{name: "heroku", verify: verifyHeroku, method: http.MethodGet, host: "api.heroku.com", path: "/account/rate-limits", header: "Authorization", headerValue: "Bearer secret"},
+		{name: "cloudflare", verify: verifyCloudflare, method: http.MethodGet, host: "api.cloudflare.com", path: "/client/v4/user/tokens/verify", header: "Authorization", headerValue: "Bearer secret", response: `{"result":{"status":"active"}}`},
+		{name: "digitalocean", verify: verifyDigitalOcean, method: http.MethodGet, host: "api.digitalocean.com", path: "/v2/account", header: "Authorization", headerValue: "Bearer secret"},
+		{name: "azure devops", verify: verifyAzureDevOpsPAT, method: http.MethodGet, host: "app.vssps.visualstudio.com", path: "/_apis/profile/profiles/me", basicPassword: "secret"},
+		{name: "terraform cloud", verify: verifyTerraformCloud, method: http.MethodGet, host: "app.terraform.io", path: "/api/v2/account/details", header: "Authorization", headerValue: "Bearer secret"},
+		{name: "netlify", verify: verifyNetlify, method: http.MethodGet, host: "api.netlify.com", path: "/api/v1/user", header: "Authorization", headerValue: "Bearer secret"},
+		{name: "doppler", verify: verifyDoppler, method: http.MethodGet, host: "api.doppler.com", path: "/v3/me", header: "Authorization", headerValue: "Bearer secret"},
+		{name: "rubygems", verify: verifyRubyGems, method: http.MethodGet, host: "rubygems.org", path: "/api/v1/gems.json", header: "Authorization", headerValue: "secret"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
+				}
+				if test.header != "" && req.Header.Get(test.header) != test.headerValue {
+					t.Fatalf("%s=%q, want %q", test.header, req.Header.Get(test.header), test.headerValue)
+				}
+				if test.basicUser != "" || test.basicPassword != "" {
+					username, password, ok := req.BasicAuth()
+					if !ok || username != test.basicUser || password != test.basicPassword {
+						t.Fatalf("unexpected basic auth: username=%q password=%q", username, password)
+					}
+				}
+				if test.name == "new relic" {
+					requestBody, err := io.ReadAll(req.Body)
+					if err != nil || !strings.Contains(string(requestBody), `"query"`) || strings.Contains(strings.ToLower(string(requestBody)), "mutation") {
+						t.Fatalf("New Relic request is not a read-only query: body=%q err=%v", requestBody, err)
+					}
+				}
+				body := test.response
+				if body == "" {
+					body = `{}`
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
 	}
 }
 

@@ -646,6 +646,18 @@ func TestScannerGatesUnreviewedVerificationBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestScannerRunsReadOnlyVerificationByDefault(t *testing.T) {
+	var calls int32
+	detector := detectors.NewReadOnlyRegex("read-only-test", "Read-only Test", "high", []string{"readonly_"}, `\b(readonly_[A-Za-z0-9]{16})\b`, 1, func(context.Context, string) detectors.VerificationResult {
+		atomic.AddInt32(&calls, 1)
+		return detectors.VerificationResult{Status: detectors.VerificationVerified}
+	})
+	findings := New(Config{Verify: true}, []detectors.Detector{detector}).ScanContent(context.Background(), "config.env", []byte("readonly_abcdefghijklmnop"))
+	if len(findings) != 1 || findings[0].Verification.Status != detectors.VerificationVerified || atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("read-only verification did not run by default: findings=%#v calls=%d", findings, calls)
+	}
+}
+
 func TestValidateConfigRequiresVerifyForUnsafeOptIn(t *testing.T) {
 	if err := ValidateConfig(Config{AllowUnreviewedVerification: true}); err == nil {
 		t.Fatal("expected unreviewed verification without --verify to fail")
