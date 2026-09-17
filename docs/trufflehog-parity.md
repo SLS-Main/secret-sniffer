@@ -95,7 +95,7 @@ Current built-in detector families:
 - NewsAPI, OpenWeather, Tomorrow.io, HERE, Polygon.io
 - AWS session tokens and Alibaba Cloud access key IDs
 - Scaleway secret keys, GitHub App private keys, Datadog application keys, Braintree access tokens
-- GitHub/GitLab OAuth client secrets, Azure Entra client secrets, Twitch client secrets
+- GitHub/GitLab OAuth client secrets, correlated Azure Entra client credentials, Twitch client secrets
 - Auth0 OAuth client secrets, OneLogin client secrets, LDAP credential URLs, LoginRadius API secrets, Stytch secrets
 - Detectify, Wiz client secrets, JupiterOne API tokens, Twitter/X bearer tokens, Twitch access tokens
 - Webex access tokens, Coinbase CDP API keys, OpenVPN static keys
@@ -203,7 +203,7 @@ Current built-in detector families:
 - AlienVault OTX, Censys, VPNAPI.io, IPQualityScore, IPstack, IPGeolocation, ZeroTier
 - Weatherstack, AccuWeather, Weatherbit, MapQuest
 - Dropbox, ReadMe, Rootly, Web3.Storage, Stripe PaymentIntent client secrets, Checkout.com
-- Aha and LarkSuite app secrets
+- Aha keys and correlated LarkSuite app credentials
 - JWTs, private keys, SSH private keys
 - Basic-auth URLs and generic assigned secrets
 

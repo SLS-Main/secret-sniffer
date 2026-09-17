@@ -153,6 +153,99 @@ func verifyTwilio(ctx context.Context, candidate Candidate) VerificationResult {
 	return result
 }
 
+func verifyLarkSuiteCredentials(ctx context.Context, candidate Candidate) VerificationResult {
+	appID := candidate.SecretParts["app_id"]
+	appSecret := candidate.SecretParts["app_secret"]
+	if appID == "" || appSecret == "" {
+		return invalidCredentialResult()
+	}
+	payload, _ := json.Marshal(map[string]string{"app_id": appID, "app_secret": appSecret})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		if statusCode != http.StatusOK {
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+		var response struct {
+			Code int `json:"code"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		}
+		if response.Code == 0 {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return unknownVerificationResult("provider_response", "provider rejected the credential with an ambiguous error"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyAzureEntraCredentials(ctx context.Context, candidate Candidate) VerificationResult {
+	tenantID := candidate.SecretParts["tenant_id"]
+	clientID := candidate.SecretParts["client_id"]
+	clientSecret := candidate.SecretParts["client_secret"]
+	if tenantID == "" || clientID == "" || clientSecret == "" {
+		return invalidCredentialResult()
+	}
+	form := url.Values{
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+		"grant_type":    {"client_credentials"},
+		"scope":         {"https://graph.microsoft.com/.default"},
+	}
+	endpoint := "https://login.microsoftonline.com/" + url.PathEscape(tenantID) + "/oauth2/v2.0/token"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+			return VerificationResult{}, false
+		}
+		var response struct {
+			AccessToken      string `json:"access_token"`
+			ErrorDescription string `json:"error_description"`
+			ErrorCodes       []int  `json:"error_codes"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		}
+		if statusCode >= 200 && statusCode < 300 {
+			if response.AccessToken != "" {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		}
+		if azureErrorCode(response.ErrorCodes, response.ErrorDescription, 7000215, 7000222) {
+			return invalidCredentialResult(), true
+		}
+		if azureErrorCode(response.ErrorCodes, response.ErrorDescription, 53003) {
+			return unknownVerificationResult("authorization", "provider blocked token issuance by policy"), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous authentication response"), true
+	})
+	result.Response = ""
+	return result
+}
+
+func azureErrorCode(codes []int, description string, expected ...int) bool {
+	for _, code := range codes {
+		for _, candidate := range expected {
+			if code == candidate {
+				return true
+			}
+		}
+	}
+	for _, candidate := range expected {
+		if strings.Contains(description, fmt.Sprintf("AADSTS%d", candidate)) {
+			return true
+		}
+	}
+	return false
+}
+
 func verifyMailgun(ctx context.Context, secret string) VerificationResult {
 	return verifyEndpoints(ctx, []string{"https://api.mailgun.net/v3/domains", "https://api.eu.mailgun.net/v3/domains"}, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

@@ -616,6 +616,16 @@ func DefaultRegistry() []Detector {
 		NewRegex("stytch-secret", "Stytch Secret", "critical", []string{"secret-test-", "secret-live-", "stytch"}, `\b(secret-(?:test|live)-[A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("openvpn-static-key", "OpenVPN Static Key", "critical", []string{"BEGIN OpenVPN Static key", "OpenVPN Static key"}, `(?s)(-----BEGIN OpenVPN Static key V1-----\s*[0-9a-f\s]{512,900}-----END OpenVPN Static key V1-----)`, 1, nil),
 		NewRegex("azure-entra-client-secret", "Azure Entra Client Secret", "critical", []string{"AZURE_CLIENT_SECRET", "login.microsoftonline.com", "entra"}, `(?i)\b(?:azure[_-]?client[_-]?secret|entra|login\.microsoftonline\.com)\b[\s\S]{0,160}\bclient[_-]?secret\b\s*[:=]\s*['\"]?([A-Za-z0-9_.~/-]{24,128})\b`, 1, nil),
+		CorrelatedDetector{
+			ID: "azure-entra-credentials", Name: "Azure Entra Client Credentials", Severity: "critical",
+			Keywords: []string{"azure_tenant_id", "azure_client_id", "azure_client_secret", "arm_tenant_id", "arm_client_id", "arm_client_secret", "tenant_id", "client_id", "client_secret", "tenantid", "clientid", "clientsecret"},
+			Fields: []CorrelatedField{
+				{Name: "tenant_id", Regex: regexp.MustCompile(`(?i:\b(?:(?:azure|arm)[_-]?)?tenant[_-]?id\b)[\"']?\s*[:=]\s*[\"']?([A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}|[A-Za-z0-9-]+\.onmicrosoft\.com)\b`), ValueGroup: 1, Required: true},
+				{Name: "client_id", Regex: regexp.MustCompile(`(?i:\b(?:(?:azure|arm)[_-]?)?client[_-]?id\b)[\"']?\s*[:=]\s*[\"']?([A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12})\b`), ValueGroup: 1, Required: true},
+				{Name: "client_secret", Regex: regexp.MustCompile(`(?i:\b(?:(?:azure|arm)[_-]?)?client[_-]?secret\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9_.~/-]{24,128})\b`), ValueGroup: 1, Required: true},
+			},
+			PrimaryPart: "client_secret", MaxDistance: 512, StopAtBlankLine: true, CompositeVerifier: verifyAzureEntraCredentials,
+		},
 		NewRegex("twitter-bearer-token", "Twitter/X Bearer Token", "critical", []string{"twitter", "TWITTER_BEARER_TOKEN", "AAAA"}, `(?i)\b(?:twitter|x_api|twitter_bearer_token).{0,60}\bbearer[_ -]?token\b\s*[:=]\s*['\"]?(AAAA[A-Za-z0-9%_-]{80,300})\b`, 1, verifyTwitterBearer),
 		NewRegex("twitch-client-secret", "Twitch Client Secret", "critical", []string{"TWITCH_CLIENT_SECRET", "twitch"}, `(?i)\btwitch\b[\s\S]{0,120}\bclient[_-]?secret\b\s*[:=]\s*['\"]?([A-Za-z0-9]{32})\b`, 1, nil),
 		NewRegex("twitch-access-token", "Twitch Access Token", "critical", []string{"twitch"}, `(?i)\btwitch\b.{0,60}\b(?:access[_-]?token|oauth[_-]?token|token)\b\s*[:=]\s*['\"]?([a-z0-9]{30})\b`, 1, verifyTwitch),
@@ -1370,7 +1380,15 @@ func DefaultRegistry() []Detector {
 		NewRegex("stripe-payment-intent-client-secret", "Stripe PaymentIntent Client Secret", "high", []string{"pi_", "_secret_", "stripe"}, `\b(pi_[A-Za-z0-9]{24}_secret_[A-Za-z0-9]{25})\b`, 1, nil),
 		NewRegex("checkout-secret-key", "Checkout.com Secret Key", "critical", []string{"checkout", "sk_test_", "sk_"}, `(?i)\bcheckout\b[\s\S]{0,120}\b((?:sk_|sk_test_)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, nil),
 		NewRegex("aha-api-key", "Aha API Key", "high", []string{".aha.io"}, `(?i)\b[a-z0-9-]+\.aha\.io\b[\s\S]{0,200}\b([a-f0-9]{64})\b`, 1, nil),
-		NewRegex("larksuite-app-secret", "LarkSuite App Secret", "high", []string{"lark", "larksuite", "cli_"}, `(?i)\b(cli_[A-Za-z0-9]{16})\b[\s\S]{0,160}\b([A-Za-z0-9]{32})\b`, 2, nil),
+		CorrelatedDetector{
+			ID: "larksuite-app-secret", Name: "LarkSuite App Credentials", Severity: "high",
+			Keywords: []string{"lark", "larksuite", "cli_", "app_secret", "app-secret"},
+			Fields: []CorrelatedField{
+				{Name: "app_id", Regex: regexp.MustCompile(`\b(cli_[A-Za-z0-9]{16})\b`), ValueGroup: 1, Required: true},
+				{Name: "app_secret", Regex: regexp.MustCompile(`(?i:\b(?:lark(?:suite)?[_-]?)?app[_-]?secret\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9]{32})\b`), ValueGroup: 1, Required: true},
+			},
+			PrimaryPart: "app_secret", MaxDistance: 256, StopAtBlankLine: true, CompositeVerifier: verifyLarkSuiteCredentials,
+		},
 		NewRegex("jwt", "JSON Web Token", "medium", []string{"eyJ"}, `\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b`, 1, nil),
 		NewRegex("private-key", "Private Key", "critical", []string{"BEGIN", "PRIVATE KEY"}, `-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`, 0, nil),
 		NewRegex("ssh-private-key", "SSH Private Key", "critical", []string{"OPENSSH PRIVATE KEY", "RSA PRIVATE KEY"}, `-----BEGIN (?:OPENSSH|RSA|DSA|EC) PRIVATE KEY-----[\s\S]+?-----END (?:OPENSSH|RSA|DSA|EC) PRIVATE KEY-----`, 0, nil),

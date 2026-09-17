@@ -339,7 +339,7 @@ func CurrentMappings() []Mapping {
 		mapImplemented("vpn/auth", "openvpn", "openvpn-static-key", "OpenVPN static key block coverage."),
 		mapPartial("security/scanning", "trufflehogenterprise", "trufflehog-enterprise-key", "TruffleHog Enterprise credential formats covered; key/secret tuple correlation planned."),
 		mapImplemented("vpn/auth", "zerotier", "zerotier-api-token", "ZeroTier API token coverage with provider context."),
-		mapImplemented("identity/auth", "azure_entra", "azure-entra-client-secret", "Microsoft Entra client secret coverage with Azure/Entra context."),
+		mapImplemented("identity/auth", "azure_entra", "azure-entra-credentials", "Correlated Entra tenant, client ID, and client secret coverage with token verification."),
 		mapImplemented("identity/auth", "ldap", "ldap-url", "LDAP credentialed URL coverage."),
 		mapImplemented("identity/auth", "loginradius", "loginradius-api-secret", "LoginRadius API secret coverage with provider context."),
 		mapImplemented("identity/auth", "stytch", "stytch-secret", "Stytch secret coverage with environment prefix."),
@@ -1016,7 +1016,7 @@ func CurrentMappings() []Mapping {
 		mapImplemented("incident-management", "rootly", "rootly-api-key", "Rootly API key coverage."),
 		mapImplemented("storage/web3", "web3storage", "web3storage-token", "Web3.Storage token coverage."),
 		mapImplemented("product-management", "aha", "aha-api-key", "Aha API key coverage with tenant context."),
-		mapImplemented("collaboration", "larksuiteapikey", "larksuite-app-secret", "LarkSuite app secret coverage with app ID context."),
+		mapImplemented("collaboration", "larksuiteapikey", "larksuite-app-secret", "Correlated LarkSuite app ID and secret coverage with tenant-token verification."),
 	}
 }
 

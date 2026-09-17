@@ -2015,6 +2015,124 @@ func TestPairedCredentialVerifiersClassifyAuthenticationFailures(t *testing.T) {
 	}
 }
 
+func TestLarkSuiteCredentialsCorrelateAndVerifyInEitherOrder(t *testing.T) {
+	appID := "cli_ABCDEFGHIJKLMNOP"
+	appSecret := strings.Repeat("L", 32)
+	input := "LARK_APP_SECRET=" + appSecret + "\nLARK_APP_ID=" + appID
+	var candidate Candidate
+	for _, detector := range DefaultRegistry() {
+		if detector.Info().ID != "larksuite-app-secret" {
+			continue
+		}
+		found := detector.Detect([]byte(input))
+		if len(found) != 1 {
+			t.Fatalf("expected one LarkSuite credential pair, got %#v", found)
+		}
+		candidate = found[0]
+		break
+	}
+	if candidate.Secret != appSecret || candidate.SecretParts["app_id"] != appID || candidate.SecretParts["app_secret"] != appSecret {
+		t.Fatalf("unexpected LarkSuite credential: %#v", candidate)
+	}
+
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var payload map[string]string
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if req.URL.Path != "/open-apis/auth/v3/tenant_access_token/internal" || payload["app_id"] != appID || payload["app_secret"] != appSecret {
+			t.Fatalf("unexpected LarkSuite request: %s %#v", req.URL.String(), payload)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"code":0,"tenant_access_token":"private"}`)), Header: make(http.Header)}, nil
+	})}
+	result := candidate.Verify(WithVerificationHTTPClient(context.Background(), client))
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected LarkSuite result: %#v", result)
+	}
+}
+
+func TestAzureEntraCredentialsCorrelateAndVerifyInEitherOrder(t *testing.T) {
+	tenantID := "11111111-2222-3333-4444-555555555555"
+	clientID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	clientSecret := "abc1Q~" + strings.Repeat("Z", 32)
+	input := "AZURE_CLIENT_SECRET=" + clientSecret + "\nAZURE_CLIENT_ID=" + clientID + "\nAZURE_TENANT_ID=" + tenantID
+	var candidate Candidate
+	for _, detector := range DefaultRegistry() {
+		if detector.Info().ID != "azure-entra-credentials" {
+			continue
+		}
+		found := detector.Detect([]byte(input))
+		if len(found) != 1 {
+			t.Fatalf("expected one Azure Entra credential, got %#v", found)
+		}
+		candidate = found[0]
+		break
+	}
+	if candidate.Secret != clientSecret || candidate.SecretParts["tenant_id"] != tenantID || candidate.SecretParts["client_id"] != clientID || candidate.SecretParts["client_secret"] != clientSecret {
+		t.Fatalf("unexpected Azure Entra credential: %#v", candidate)
+	}
+
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := req.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(req.URL.Path, tenantID) || req.Form.Get("client_id") != clientID || req.Form.Get("client_secret") != clientSecret || req.Form.Get("grant_type") != "client_credentials" || req.Form.Get("scope") != "https://graph.microsoft.com/.default" {
+			t.Fatalf("unexpected Azure Entra request: %s %#v", req.URL.String(), req.Form)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"private"}`)), Header: make(http.Header)}, nil
+	})}
+	result := candidate.Verify(WithVerificationHTTPClient(context.Background(), client))
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected Azure Entra result: %#v", result)
+	}
+}
+
+func TestLarkSuiteAndAzureVerifierFailuresRemainConservative(t *testing.T) {
+	t.Run("larksuite ambiguous error", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"code":10003,"msg":"invalid"}`)), Header: make(http.Header)}, nil
+		})}
+		candidate := Candidate{SecretParts: map[string]string{"app_id": "cli_ABCDEFGHIJKLMNOP", "app_secret": strings.Repeat("L", 32)}}
+		result := verifyLarkSuiteCredentials(WithVerificationHTTPClient(context.Background(), client), candidate)
+		if result.Status != VerificationUnknown || result.ErrorCategory != "provider_response" || result.Response != "" {
+			t.Fatalf("unexpected LarkSuite rejection result: %#v", result)
+		}
+	})
+
+	t.Run("azure invalid secret", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			body := `{"error":"invalid_client","error_description":"AADSTS7000215: Invalid client secret","error_codes":[7000215]}`
+			return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		})}
+		candidate := Candidate{SecretParts: map[string]string{
+			"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "client_secret": "abc1Q~" + strings.Repeat("Z", 32),
+		}}
+		result := verifyAzureEntraCredentials(WithVerificationHTTPClient(context.Background(), client), candidate)
+		if result.Status != VerificationUnverified || result.ErrorCategory != "invalid_credentials" || result.Response != "" {
+			t.Fatalf("unexpected Azure Entra rejection result: %#v", result)
+		}
+	})
+}
+
+func TestLarkSuiteAndAzureCredentialsDoNotCrossBlankRecords(t *testing.T) {
+	tests := []struct {
+		detectorID string
+		input      string
+	}{
+		{detectorID: "larksuite-app-secret", input: "LARK_APP_ID=cli_ABCDEFGHIJKLMNOP\n\nLARK_APP_SECRET=" + strings.Repeat("L", 32)},
+		{detectorID: "azure-entra-credentials", input: "AZURE_TENANT_ID=11111111-2222-3333-4444-555555555555\nAZURE_CLIENT_ID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n\nAZURE_CLIENT_SECRET=abc1Q~" + strings.Repeat("Z", 32)},
+	}
+	for _, test := range tests {
+		t.Run(test.detectorID, func(t *testing.T) {
+			for _, detector := range DefaultRegistry() {
+				if detector.Info().ID == test.detectorID && len(detector.Detect([]byte(test.input))) != 0 {
+					t.Fatalf("detector correlated fields across records: %q", test.input)
+				}
+			}
+		})
+	}
+}
+
 func TestMultipartVerificationIdentityIsDeterministic(t *testing.T) {
 	verifier := func(context.Context, Candidate) VerificationResult {
 		return VerificationResult{Status: VerificationVerified}
