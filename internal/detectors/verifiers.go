@@ -62,12 +62,46 @@ func verifyEndpoints(ctx context.Context, endpoints []string, verify func(string
 }
 
 func verifySlack(ctx context.Context, secret string) VerificationResult {
-	result := verifyBearerGET(ctx, secret, "https://slack.com/api/auth.test")
-	if result.Status == VerificationVerified && strings.Contains(result.Response, `"ok":false`) {
-		result.Status = VerificationUnverified
-		result.ErrorCategory = "invalid_credentials"
-		result.Message = "provider rejected credential"
+	if strings.HasPrefix(secret, "xoxr-") || strings.HasPrefix(secret, "xoxs-") {
+		return VerificationResult{Status: VerificationUnsupported, Message: "Slack refresh and session tokens are not standalone Web API credentials"}
 	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://slack.com/api/auth.test", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusTooManyRequests {
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		}
+		if statusCode >= 500 {
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		}
+		if statusCode != http.StatusOK {
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+		var response struct {
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		}
+		if response.OK {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		switch response.Error {
+		case "account_inactive", "token_expired", "token_revoked":
+			return invalidCredentialResult(), true
+		case "ratelimited":
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case "accesslimited", "invalid_auth", "missing_scope", "no_permission", "not_allowed_token_type", "org_login_required", "team_access_not_granted", "team_added_to_org":
+			return unknownVerificationResult("authorization", "provider could not authorize verification"), true
+		case "fatal_error", "internal_error", "request_timeout", "service_unavailable":
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
 	return result
 }
 
@@ -411,14 +445,42 @@ func verifyNetlify(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPulumi(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.pulumi.com/api/user/stacks", "Authorization", "token ")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pulumi.com/api/user", nil)
+	req.Header.Set("Authorization", "token "+secret)
+	req.Header.Set("Accept", "application/vnd.pulumi+8")
+	req.Header.Set("Content-Type", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusOK {
+			if jsonHasAnyField(body, "id", "githubLogin") {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		}
+		if statusCode == http.StatusUnauthorized {
+			return unknownVerificationResult("authorization", "credential may require token exchange"), true
+		}
+		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyTailscale(ctx context.Context, secret string) VerificationResult {
 	body := "key=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.tailscale.com/api/v2/secret-scanning/verify", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	return verifyHTTPRequest(ctx, req)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		switch statusCode {
+		case http.StatusNoContent:
+			return VerificationResult{Status: VerificationVerified}, true
+		case http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyBuildkite(ctx context.Context, secret string) VerificationResult {

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -2205,15 +2207,221 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 529,
-		VerificationSafetyReadOnly:   24,
-		VerificationSafetyAuthOnly:   2,
+		VerificationSafetyUnreviewed: 524,
+		VerificationSafetyReadOnly:   27,
+		VerificationSafetyAuthOnly:   4,
 		VerificationSafetyUnsafe:     12,
 	}
 	for safety, want := range expected {
 		if counts[safety] != want {
 			t.Fatalf("%s detector count=%d, want %d", safety, counts[safety], want)
 		}
+	}
+}
+
+func TestResolvedCoreVerifierSafetyPromotions(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"github-token":     VerificationSafetyReadOnly,
+		"slack-token":      VerificationSafetyAuthOnly,
+		"openai-admin-key": VerificationSafetyReadOnly,
+		"pulumi-token":     VerificationSafetyReadOnly,
+		"tailscale-key":    VerificationSafetyAuthOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("promoted detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestGitHubVerifierRoutesTokenVariants(t *testing.T) {
+	tests := []struct {
+		prefix string
+		path   string
+	}{
+		{prefix: "ghp_", path: "/user"},
+		{prefix: "gho_", path: "/user"},
+		{prefix: "ghu_", path: "/user"},
+		{prefix: "ghs_", path: "/installation/repositories"},
+	}
+	for _, test := range tests {
+		t.Run(test.prefix, func(t *testing.T) {
+			token := test.prefix + strings.Repeat("A", 36)
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Path != test.path || req.Header.Get("Authorization") != "Bearer "+token || req.Header.Get("X-GitHub-Api-Version") == "" {
+					t.Fatalf("unexpected GitHub request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				if test.prefix == "ghs_" && req.URL.Query().Get("per_page") != "1" {
+					t.Fatalf("installation query=%q", req.URL.RawQuery)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"data"}`)), Header: make(http.Header)}, nil
+			})}
+			result := verifyGitHub(WithVerificationHTTPClient(context.Background(), client), token)
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected GitHub result: %#v", result)
+			}
+		})
+	}
+
+	called := false
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return nil, errors.New("unexpected request")
+	})}
+	result := verifyGitHub(WithVerificationHTTPClient(context.Background(), client), "ghr_"+strings.Repeat("A", 36))
+	if result.Status != VerificationUnsupported || called {
+		t.Fatalf("refresh token was not rejected locally: result=%#v called=%t", result, called)
+	}
+}
+
+func TestGitHubVerifierClassifiesUnexpectedStatusesAsUnknown(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"message":"private"}`)), Header: make(http.Header)}, nil
+			})}
+			result := verifyGitHub(WithVerificationHTTPClient(context.Background(), client), "ghp_"+strings.Repeat("A", 36))
+			if result.Status != VerificationUnknown || result.Response != "" {
+				t.Fatalf("status %d result=%#v", status, result)
+			}
+		})
+	}
+}
+
+func TestSlackVerifierClassifiesStructuredResponse(t *testing.T) {
+	tests := []struct {
+		body     string
+		status   VerificationStatus
+		category string
+	}{
+		{body: `{"ok":true,"team":"private"}`, status: VerificationVerified},
+		{body: `{"ok":false,"error":"token_revoked"}`, status: VerificationUnverified, category: "invalid_credentials"},
+		{body: `{"ok":false,"error":"invalid_auth"}`, status: VerificationUnknown, category: "authorization"},
+		{body: `{"ok":false,"error":"ratelimited"}`, status: VerificationUnknown, category: "rate_limited"},
+	}
+	for _, test := range tests {
+		client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodPost || req.URL.Path != "/api/auth.test" || req.Header.Get("Authorization") != "Bearer xoxb-secret" {
+				t.Fatalf("unexpected Slack request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+		})}
+		result := verifySlack(WithVerificationHTTPClient(context.Background(), client), "xoxb-secret")
+		if result.Status != test.status || result.ErrorCategory != test.category || result.Response != "" {
+			t.Fatalf("body %s result=%#v", test.body, result)
+		}
+	}
+	for _, prefix := range []string{"xoxr-", "xoxs-"} {
+		if result := verifySlack(context.Background(), prefix+"secret"); result.Status != VerificationUnsupported {
+			t.Fatalf("%s result=%#v", prefix, result)
+		}
+	}
+}
+
+func TestOpenAIAdminKeyUsesOnlyAdminDetector(t *testing.T) {
+	secret := "sk-admin-" + strings.Repeat("A", 58) + "T3BlbkFJ" + strings.Repeat("B", 58)
+	var ids []string
+	for _, detector := range DefaultRegistry() {
+		for _, candidate := range detector.Detect([]byte(secret)) {
+			if candidate.Secret == secret && (candidate.DetectorID == "openai-key" || candidate.DetectorID == "openai-admin-key") {
+				ids = append(ids, candidate.DetectorID)
+			}
+		}
+	}
+	if len(ids) != 1 || ids[0] != "openai-admin-key" {
+		t.Fatalf("unexpected OpenAI candidates: %#v", ids)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/v1/organization/users" || req.URL.Query().Get("limit") != "1" {
+			t.Fatalf("unexpected OpenAI admin request: %s", req.URL.String())
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyOpenAIAdmin(WithVerificationHTTPClient(context.Background(), client), secret)
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected OpenAI admin result: %#v", result)
+	}
+
+	futureSecret := "sk-admin-" + strings.Repeat("C", 40)
+	var genericFound bool
+	for _, detector := range DefaultRegistry() {
+		if detector.Info().ID != "openai-key" {
+			continue
+		}
+		for _, candidate := range detector.Detect([]byte(futureSecret)) {
+			genericFound = genericFound || candidate.Secret == futureSecret
+		}
+	}
+	if !genericFound {
+		t.Fatal("unrecognized future admin-key format disappeared from generic detection")
+	}
+}
+
+func TestPulumiVerifierUsesBoundedUserEndpoint(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodGet || req.URL.Path != "/api/user" || req.Header.Get("Authorization") != "token secret" || req.Header.Get("Accept") != "application/vnd.pulumi+8" {
+			t.Fatalf("unexpected Pulumi request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"githubLogin":"user"}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyPulumi(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected Pulumi result: %#v", result)
+	}
+
+	for _, test := range []struct {
+		name string
+		code int
+		body string
+	}{
+		{name: "exchange credential", code: http.StatusUnauthorized, body: `{"message":"unauthorized"}`},
+		{name: "unexpected success", code: http.StatusOK, body: `{"error":"upstream failure"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: test.code, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+			})}
+			result := verifyPulumi(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationUnknown || result.Response != "" {
+				t.Fatalf("unexpected Pulumi result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestTailscaleVerifierUsesExactStatusContract(t *testing.T) {
+	for _, test := range []struct {
+		code int
+		want VerificationStatus
+	}{
+		{code: http.StatusNoContent, want: VerificationVerified},
+		{code: http.StatusUnauthorized, want: VerificationUnverified},
+		{code: http.StatusOK, want: VerificationUnknown},
+		{code: http.StatusForbidden, want: VerificationUnknown},
+		{code: http.StatusTooManyRequests, want: VerificationUnknown},
+	} {
+		t.Run(strconv.Itoa(test.code), func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(req.Body)
+				if err != nil || req.Method != http.MethodPost || req.URL.Path != "/api/v2/secret-scanning/verify" || string(body) != "key=tskey-api-secret" || req.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+					t.Fatalf("unexpected Tailscale request: %s %s body=%q err=%v", req.Method, req.URL.String(), body, err)
+				}
+				return &http.Response{StatusCode: test.code, Body: io.NopCloser(strings.NewReader(`private`)), Header: make(http.Header)}, nil
+			})}
+			result := verifyTailscale(WithVerificationHTTPClient(context.Background(), client), "tskey-api-secret")
+			if result.Status != test.want || result.Response != "" {
+				t.Fatalf("status %d result=%#v", test.code, result)
+			}
+		})
 	}
 }
 

@@ -218,6 +218,8 @@ type RegexDetector struct {
 	BroadContext       bool
 }
 
+var openAIAdminKeyPattern = regexp.MustCompile(`\b(sk-admin-[A-Za-z0-9_-]{58}T3BlbkFJ[A-Za-z0-9_-]{58})\b`)
+
 func (d RegexDetector) Detect(b []byte) []Candidate {
 	content := string(b)
 	low := strings.ToLower(content)
@@ -271,6 +273,9 @@ func (d RegexDetector) detectContent(content string) []Candidate {
 		if d.BroadContext && hasContextBoundary(content[m[0]:start]) {
 			continue
 		}
+		if d.ID == "openai-key" && openAIAdminKeyPattern.MatchString(secret) {
+			continue
+		}
 		if plausibleSecret(secret) && !(d.ID == "generic-assigned-secret" && looksLikeAssignedReference(content, start)) {
 			out = append(out, Candidate{DetectorID: d.ID, Name: d.Name, Severity: d.Severity, Secret: secret, SecretParts: secretParts, VerificationSafety: d.VerificationSafety, Start: start, End: end, Verifier: d.Verifier, CompositeVerifier: d.CompositeVerifier})
 		}
@@ -299,6 +304,10 @@ func NewReadOnlyRegex(id, name, severity string, keywords []string, expr string,
 	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: group, Verifier: verifier, VerificationSafety: VerificationSafetyReadOnly, BroadContext: strings.Contains(expr, `[\s\S]{0,`)}
 }
 
+func NewAuthOnlyRegex(id, name, severity string, keywords []string, expr string, group int, verifier Verifier) Detector {
+	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: group, Verifier: verifier, VerificationSafety: VerificationSafetyAuthOnly, BroadContext: strings.Contains(expr, `[\s\S]{0,`)}
+}
+
 func NewUnsafeRegex(id, name, severity string, keywords []string, expr string, group int, verifier Verifier) Detector {
 	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: group, Verifier: verifier, VerificationSafety: VerificationSafetyUnsafe, BroadContext: strings.Contains(expr, `[\s\S]{0,`)}
 }
@@ -325,9 +334,9 @@ func DefaultRegistry() []Detector {
 			},
 			PrimaryPart: "secret_access_key", MaxDistance: 256, StopAtBlankLine: true, CompositeVerifier: verifyAWSCredentials, VerificationSafety: VerificationSafetyReadOnly,
 		},
-		NewRegex("github-token", "GitHub Token", "critical", []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github"}, `\b((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,255})\b`, 1, verifyGitHub),
+		NewReadOnlyRegex("github-token", "GitHub Token", "critical", []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github"}, `\b((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,255})\b`, 1, verifyGitHub),
 		NewReadOnlyRegex("github-pat-v2", "GitHub Fine-Grained Token", "critical", []string{"github_pat_"}, `\b(github_pat_[A-Za-z0-9_]{80,255})\b`, 1, verifyGitHub),
-		NewRegex("slack-token", "Slack Token", "critical", []string{"xoxb-", "xoxp-", "xoxa-"}, `\b((?:xox[baprs]|xoxa)-[A-Za-z0-9-]{10,200})\b`, 1, verifySlack),
+		NewAuthOnlyRegex("slack-token", "Slack Token", "critical", []string{"xoxb-", "xoxp-", "xoxa-", "xoxr-", "xoxs-"}, `\b((?:xox[baprs]|xoxa)-[A-Za-z0-9-]{10,200})\b`, 1, verifySlack),
 		NewReadOnlyRegex("stripe-key", "Stripe Secret Key", "critical", []string{"sk_live_", "rk_live_"}, `\b((?:sk|rk)_live_[A-Za-z0-9]{16,99})\b`, 1, verifyStripe),
 		NewRegex("openai-key", "OpenAI API Key", "critical", []string{"sk-", "OPENAI"}, `\b(sk-(?:proj-)?[A-Za-z0-9_-]{32,200})\b`, 1, verifyOpenAI),
 		NewReadOnlyRegex("anthropic-key", "Anthropic API Key", "critical", []string{"sk-ant-"}, `\b(sk-ant-[A-Za-z0-9_-]{40,200})\b`, 1, verifyAnthropic),
@@ -366,9 +375,9 @@ func DefaultRegistry() []Detector {
 		NewReadOnlyRegex("azure-devops-pat", "Azure DevOps Personal Access Token", "critical", []string{"AZDO", "azure", "devops"}, `\b([A-Za-z0-9]{75}AZDO[A-Za-z0-9]{5})\b`, 1, verifyAzureDevOpsPAT),
 		NewReadOnlyRegex("terraform-cloud-token", "Terraform Cloud Token", "critical", []string{".atlasv1.", "terraform", "tfe"}, `\b([A-Za-z0-9]{14}\.atlasv1\.[A-Za-z0-9_-]{67})\b`, 1, verifyTerraformCloud),
 		NewReadOnlyRegex("netlify-token", "Netlify Token", "high", []string{"nfp_", "netlify"}, `\b(nfp_[A-Za-z0-9_-]{40,})\b`, 1, verifyNetlify),
-		NewRegex("pulumi-token", "Pulumi Access Token", "critical", []string{"pul-", "pulumi"}, `\b(pul-[a-f0-9]{40})\b`, 1, verifyPulumi),
+		NewReadOnlyRegex("pulumi-token", "Pulumi Access Token", "critical", []string{"pul-", "pulumi"}, `\b(pul-[a-f0-9]{40})\b`, 1, verifyPulumi),
 		NewReadOnlyRegex("doppler-token", "Doppler Token", "critical", []string{"dp.pt.", "dp.st.", "dp.ct.", "doppler"}, `\b(dp\.(?:pt|st|ct|scim)\.[A-Za-z0-9_-]{20,})\b`, 1, verifyDoppler),
-		NewRegex("tailscale-key", "Tailscale Key", "critical", []string{"tskey-", "tailscale"}, `\b(tskey-(?:api|auth|client)-[A-Za-z0-9_-]{20,})\b`, 1, verifyTailscale),
+		NewAuthOnlyRegex("tailscale-key", "Tailscale Key", "critical", []string{"tskey-", "tailscale"}, `\b(tskey-(?:api|auth|client)-[A-Za-z0-9_-]{20,})\b`, 1, verifyTailscale),
 		NewRegex("ngrok-token", "ngrok Token", "critical", []string{"ngrok_api_", "ngrok_api_key_", "ngrok_pat_"}, `\b(ngrok_(?:api(?:_key)?|pat)_[A-Za-z0-9_]{20,})\b`, 1, verifyNgrok),
 		NewRegex("buildkite-token", "Buildkite Token", "critical", []string{"bkua_", "bkpa_", "bkca_", "buildkite"}, `\b(bk(?:ua|pa|ca)_[A-Za-z0-9]{30,})\b`, 1, verifyBuildkite),
 		NewRegex("nuget-api-key", "NuGet API Key", "high", []string{"oy2", "nuget"}, `\b(oy2[A-Za-z0-9]{43})\b`, 1, nil),
@@ -491,7 +500,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("mailjet-basic-auth", "Mailjet Basic Auth Credential", "high", []string{"mailjet"}, `(?i)\bmailjet\b[\s\S]{0,80}\b([A-Za-z0-9]{87}=)`, 1, verifyMailjetBasicAuth),
 		NewRegex("okta-api-token", "Okta API Token", "critical", []string{".okta"}, `(?i)\b[a-z0-9-]{1,40}\.okta(?:preview|-emea)?\.com\b[\s\S]{0,200}\b(00[A-Za-z0-9_-]{40})\b`, 1, nil),
 		NewRegex("urlscan-api-key", "urlscan.io API Key", "high", []string{"urlscan"}, `(?i)\burlscan\b.{0,40}\b([a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12})\b`, 1, verifyURLScan),
-		NewRegex("openai-admin-key", "OpenAI Admin Key", "critical", []string{"sk-admin-", "T3BlbkFJ"}, `\b(sk-admin-[A-Za-z0-9_-]{58}T3BlbkFJ[A-Za-z0-9_-]{58})\b`, 1, verifyOpenAIAdmin),
+		NewReadOnlyRegex("openai-admin-key", "OpenAI Admin Key", "critical", []string{"sk-admin-", "T3BlbkFJ"}, openAIAdminKeyPattern.String(), 1, verifyOpenAIAdmin),
 		NewRegex("deepseek-api-key", "DeepSeek API Key", "critical", []string{"deepseek", "DEEPSEEK_API_KEY"}, `(?i)\bdeepseek.{0,40}['\"\s:=]+(sk-[a-z0-9]{32})\b`, 1, verifyDeepSeek),
 		NewRegex("weightsandbiases-api-key", "Weights & Biases API Key", "critical", []string{"wandb", "WANDB_API_KEY", "weightsandbiases", "weights & biases"}, `(?i)\b(?:wandb|weights.?and.?biases).{0,40}['\"\s:=]+([0-9a-f]{40})\b`, 1, verifyWeightsAndBiases),
 		NewRegex("assemblyai-api-key", "AssemblyAI API Key", "critical", []string{"assemblyai", "ASSEMBLYAI_API_KEY"}, `(?i)\bassemblyai.{0,40}['\"\s:=]+([0-9a-z]{32})\b`, 1, verifyAssemblyAI),
@@ -2066,9 +2075,35 @@ func normalizeStrings(values []string) []string {
 }
 
 func verifyGitHub(ctx context.Context, token string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user", nil)
+	if strings.HasPrefix(token, "ghr_") {
+		return VerificationResult{Status: VerificationUnsupported, Message: "GitHub App refresh tokens require application credentials for exchange"}
+	}
+	endpoint := "https://api.github.com/user"
+	if strings.HasPrefix(token, "ghs_") {
+		endpoint = "https://api.github.com/installation/repositories?per_page=1"
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	return verifyHTTPRequest(ctx, req)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300:
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider could not authorize verification"), true
+		case statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyOpenAI(ctx context.Context, token string) VerificationResult {
@@ -2080,7 +2115,26 @@ func verifyOpenAI(ctx context.Context, token string) VerificationResult {
 func verifyOpenAIAdmin(ctx context.Context, token string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.openai.com/v1/organization/users?limit=1", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	return verifyHTTPRequest(ctx, req)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300 && jsonHasAnyField(body, "data"):
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode >= 200 && statusCode < 300:
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider could not authorize verification"), true
+		case statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyHTTPRequest(ctx context.Context, req *http.Request) VerificationResult {
