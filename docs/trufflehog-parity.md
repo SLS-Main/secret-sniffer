@@ -15,8 +15,8 @@ Current tracked mapping summary:
 - Direct catalog mappings: `870`
 - Sub-detector mappings: `4`
 - Duplicate catalog mappings: `1`
-- Implemented mappings: `809`
-- Partial mappings: `64`
+- Implemented mappings: `810`
+- Partial mappings: `63`
 - Planned mappings: `2`
 - Untracked catalog directories: `0`
 
@@ -46,6 +46,7 @@ Tracked TruffleHog mappings are available with:
 Current built-in detector families:
 
 - AWS access keys, correlated credential sets, and STS verification
+- Datadog API/application key pairs and Censys API ID/secret pairs
 - GitHub classic and fine-grained tokens
 - Slack tokens
 - Stripe keys

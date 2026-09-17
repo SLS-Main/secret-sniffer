@@ -206,14 +206,7 @@ func verifyCloudflare(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyDatadog(ctx context.Context, secret string) VerificationResult {
-	endpoints := []string{
-		"https://api.datadoghq.com/api/v1/validate",
-		"https://api.us3.datadoghq.com/api/v1/validate",
-		"https://api.us5.datadoghq.com/api/v1/validate",
-		"https://api.datadoghq.eu/api/v1/validate",
-		"https://api.ap1.datadoghq.com/api/v1/validate",
-	}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+	return verifyEndpoints(ctx, datadogAPIEndpoints("/api/v1/validate"), func(endpoint string) VerificationResult {
 		result := verifyHeaderGET(ctx, secret, endpoint, "DD-API-KEY", "")
 		if result.Status == VerificationVerified && !strings.Contains(result.Response, `"valid":true`) {
 			result.Status = VerificationUnknown
@@ -222,6 +215,78 @@ func verifyDatadog(ctx context.Context, secret string) VerificationResult {
 		}
 		return result
 	})
+}
+
+func verifyDatadogCredentials(ctx context.Context, candidate Candidate) VerificationResult {
+	apiKey := candidate.SecretParts["api_key"]
+	appKey := candidate.SecretParts["app_key"]
+	if apiKey == "" || appKey == "" {
+		return invalidCredentialResult()
+	}
+	result := verifyEndpoints(ctx, datadogAPIEndpoints("/api/v2/validate_keys"), func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("DD-API-KEY", apiKey)
+		req.Header.Set("DD-APPLICATION-KEY", appKey)
+		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+			switch {
+			case statusCode >= 200 && statusCode < 300:
+				return VerificationResult{Status: VerificationVerified}, true
+			case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
+				return invalidCredentialResult(), true
+			case statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests || statusCode >= 500:
+				return VerificationResult{}, false
+			default:
+				return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+			}
+		})
+	})
+	result.Response = ""
+	return result
+}
+
+func datadogAPIEndpoints(path string) []string {
+	hosts := []string{
+		"api.datadoghq.com",
+		"api.us3.datadoghq.com",
+		"api.us5.datadoghq.com",
+		"api.datadoghq.eu",
+		"api.ap1.datadoghq.com",
+		"api.ap2.datadoghq.com",
+		"api.uk1.datadoghq.com",
+		"api.ddog-gov.com",
+		"api.us2.ddog-gov.com",
+	}
+	endpoints := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		endpoints = append(endpoints, "https://"+host+path)
+	}
+	return endpoints
+}
+
+func verifyCensysCredentials(ctx context.Context, candidate Candidate) VerificationResult {
+	apiID := candidate.SecretParts["api_id"]
+	apiSecret := candidate.SecretParts["api_secret"]
+	if apiID == "" || apiSecret == "" {
+		return invalidCredentialResult()
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://search.censys.io/api/v1/account", nil)
+	req.SetBasicAuth(apiID, apiSecret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300:
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider denied account access"), true
+		case statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests || statusCode >= 500:
+			return VerificationResult{}, false
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyPagerDuty(ctx context.Context, secret string) VerificationResult {

@@ -84,7 +84,7 @@ Partially implemented:
 - Add Stripe verification.
 - Add GitLab verification.
 - Add npm and PyPI token verification.
-- Add Datadog, PagerDuty, New Relic, Grafana, Sentry verification.
+- Add PagerDuty, New Relic, Grafana, and Sentry verification.
 - Add verification rate limiting.
 - Add verification timeout and retry controls.
 - Add offline-only mode that disables all network verification explicitly.

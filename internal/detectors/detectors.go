@@ -286,6 +286,15 @@ func DefaultRegistry() []Detector {
 		NewRegex("pypi-token", "PyPI Token", "critical", []string{"pypi-"}, `\b(pypi-[A-Za-z0-9_-]{50,200})\b`, 1, nil),
 		NewRegex("dockerhub-token", "Docker Hub Token", "high", []string{"dckr_pat_"}, `\b(dckr_pat_[A-Za-z0-9_-]{27,128})\b`, 1, nil),
 		NewRegex("datadog-api-key", "Datadog API Key", "critical", []string{"datadog", "DD_API_KEY"}, `(?i)\b(datadog|dd_api_key).{0,20}['\"\s:=]+([a-f0-9]{32})\b`, 2, verifyDatadog),
+		CorrelatedDetector{
+			ID: "datadog-credentials", Name: "Datadog API and Application Keys", Severity: "critical",
+			Keywords: []string{"datadog", "dd_api_key", "dd-api-key", "dd_app_key", "dd-app-key"},
+			Fields: []CorrelatedField{
+				{Name: "api_key", Regex: regexp.MustCompile(`(?i:\b(?:dd|datadog)[_-]?api[_-]?key\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9-]{32})\b`), ValueGroup: 1, Required: true},
+				{Name: "app_key", Regex: regexp.MustCompile(`(?i:\b(?:dd|datadog)[_-]?app(?:lication)?[_-]?key\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9-]{40})\b`), ValueGroup: 1, Required: true},
+			},
+			PrimaryPart: "app_key", MaxDistance: 256, StopAtBlankLine: true, CompositeVerifier: verifyDatadogCredentials,
+		},
 		NewRegex("new-relic-key", "New Relic Key", "high", []string{"NRAK-", "newrelic"}, `\b(NR(?:AK|II)-[A-Za-z0-9]{20,80})\b`, 1, verifyNewRelic),
 		NewRegex("pagerduty-token", "PagerDuty Token", "high", []string{"pagerduty"}, `(?i)\bpagerduty.{0,20}['\"\s:=]+([A-Za-z0-9_+=-]{20,128})\b`, 1, verifyPagerDuty),
 		NewRegex("heroku-api-key", "Heroku API Key", "critical", []string{"heroku"}, `(?i)\bheroku.{0,20}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, verifyHeroku),
@@ -1326,6 +1335,15 @@ func DefaultRegistry() []Detector {
 		NewRegex("getresponse-api-key", "GetResponse API Key", "high", []string{"getresponse", "get response"}, `(?i)\b(?:getresponse|get[ _-]?response).{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyGetResponse),
 		NewRegex("alienvault-otx-api-key", "AlienVault OTX API Key", "high", []string{"alienvault", "otx"}, `(?i)\b(?:alienvault|otx).{0,40}['\"\s:=]+([a-f0-9]{64})\b`, 1, verifyAlienVaultOTX),
 		NewRegex("censys-api-key", "Censys API Key", "high", []string{"censys"}, `(?i)\bcensys.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, nil),
+		CorrelatedDetector{
+			ID: "censys-credentials", Name: "Censys API Credentials", Severity: "high",
+			Keywords: []string{"censys_api_id", "censys-api-id", "censysapiid", "censys_api_secret", "censys-api-secret", "censysapisecret"},
+			Fields: []CorrelatedField{
+				{Name: "api_id", Regex: regexp.MustCompile(`(?i:\bcensys[_-]?(?:api[_-]?)?(?:id|username)\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9-]{36})\b`), ValueGroup: 1, Required: true},
+				{Name: "api_secret", Regex: regexp.MustCompile(`(?i:\bcensys[_-]?(?:api[_-]?)?(?:secret|key)\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9]{32})\b`), ValueGroup: 1, Required: true},
+			},
+			PrimaryPart: "api_secret", MaxDistance: 256, StopAtBlankLine: true, CompositeVerifier: verifyCensysCredentials,
+		},
 		NewRegex("vpnapi-key", "VPNAPI.io API Key", "high", []string{"vpnapi"}, `(?i)\bvpnapi(?:\.io)?.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyVPNAPI),
 		NewRegex("ipqualityscore-api-key", "IPQualityScore API Key", "high", []string{"ipqualityscore", "ipquality"}, `(?i)\b(?:ipqualityscore|ipquality).{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyIPQualityScore),
 		NewRegex("ipstack-api-key", "IPstack API Key", "high", []string{"ipstack"}, `(?i)\bipstack.{0,40}['\"\s:=]+([a-f0-9]{32})\b`, 1, verifyIPStack),

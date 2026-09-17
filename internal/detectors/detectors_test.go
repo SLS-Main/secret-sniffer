@@ -1914,6 +1914,107 @@ func TestAWSCredentialVerifierClassifiesRejectionAndMissingSession(t *testing.T)
 	}
 }
 
+func TestDatadogCredentialsCorrelateAndVerifyInEitherOrder(t *testing.T) {
+	apiKey := strings.Repeat("a", 32)
+	appKey := strings.Repeat("b", 40)
+	input := "DD_APP_KEY=" + appKey + "\nDD_API_KEY=" + apiKey
+	var candidate Candidate
+	for _, detector := range DefaultRegistry() {
+		if detector.Info().ID != "datadog-credentials" {
+			continue
+		}
+		found := detector.Detect([]byte(input))
+		if len(found) != 1 {
+			t.Fatalf("expected one Datadog credential pair, got %#v", found)
+		}
+		candidate = found[0]
+		break
+	}
+	if candidate.Secret != appKey || candidate.SecretParts["api_key"] != apiKey || candidate.SecretParts["app_key"] != appKey {
+		t.Fatalf("unexpected Datadog credential: %#v", candidate)
+	}
+
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/api/v2/validate_keys" || req.Header.Get("DD-API-KEY") != apiKey || req.Header.Get("DD-APPLICATION-KEY") != appKey {
+			t.Fatalf("unexpected Datadog request: %s %#v", req.URL.String(), req.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"data"}`)), Header: make(http.Header)}, nil
+	})}
+	result := candidate.Verify(WithVerificationHTTPClient(context.Background(), client))
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected Datadog result: %#v", result)
+	}
+}
+
+func TestCensysCredentialsCorrelateAndVerifyInEitherOrder(t *testing.T) {
+	apiID := "12345678-1234-1234-1234-123456789abc"
+	apiSecret := strings.Repeat("C", 32)
+	input := "CENSYS_API_SECRET=" + apiSecret + "\nCENSYS_API_ID=" + apiID
+	var candidate Candidate
+	for _, detector := range DefaultRegistry() {
+		if detector.Info().ID != "censys-credentials" {
+			continue
+		}
+		found := detector.Detect([]byte(input))
+		if len(found) != 1 {
+			t.Fatalf("expected one Censys credential pair, got %#v", found)
+		}
+		candidate = found[0]
+		break
+	}
+	if candidate.Secret != apiSecret || candidate.SecretParts["api_id"] != apiID || candidate.SecretParts["api_secret"] != apiSecret {
+		t.Fatalf("unexpected Censys credential: %#v", candidate)
+	}
+
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		username, password, ok := req.BasicAuth()
+		if req.URL.String() != "https://search.censys.io/api/v1/account" || !ok || username != apiID || password != apiSecret {
+			t.Fatalf("unexpected Censys request: %s username=%q password=%q", req.URL.String(), username, password)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"email":"private@example.com"}`)), Header: make(http.Header)}, nil
+	})}
+	result := candidate.Verify(WithVerificationHTTPClient(context.Background(), client))
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("unexpected Censys result: %#v", result)
+	}
+}
+
+func TestPairedCredentialDetectorsDoNotCrossBlankRecords(t *testing.T) {
+	tests := []struct {
+		detectorID string
+		input      string
+	}{
+		{detectorID: "datadog-credentials", input: "DD_API_KEY=" + strings.Repeat("a", 32) + "\n\nDD_APP_KEY=" + strings.Repeat("b", 40)},
+		{detectorID: "censys-credentials", input: "CENSYS_API_ID=12345678-1234-1234-1234-123456789abc\n\nCENSYS_API_SECRET=" + strings.Repeat("C", 32)},
+	}
+	for _, test := range tests {
+		t.Run(test.detectorID, func(t *testing.T) {
+			for _, detector := range DefaultRegistry() {
+				if detector.Info().ID == test.detectorID && len(detector.Detect([]byte(test.input))) != 0 {
+					t.Fatalf("detector correlated fields across records: %q", test.input)
+				}
+			}
+		})
+	}
+}
+
+func TestPairedCredentialVerifiersClassifyAuthenticationFailures(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"error":"private"}`)), Header: make(http.Header)}, nil
+	})}
+	ctx := WithVerificationHTTPClient(context.Background(), client)
+
+	datadog := Candidate{SecretParts: map[string]string{"api_key": strings.Repeat("a", 32), "app_key": strings.Repeat("b", 40)}}
+	if result := verifyDatadogCredentials(ctx, datadog); result.Status != VerificationUnverified || result.ErrorCategory != "invalid_credentials" || result.Response != "" {
+		t.Fatalf("unexpected Datadog authentication result: %#v", result)
+	}
+
+	censys := Candidate{SecretParts: map[string]string{"api_id": "12345678-1234-1234-1234-123456789abc", "api_secret": strings.Repeat("C", 32)}}
+	if result := verifyCensysCredentials(ctx, censys); result.Status != VerificationUnknown || result.ErrorCategory != "authorization" || result.Response != "" {
+		t.Fatalf("unexpected Censys authorization result: %#v", result)
+	}
+}
+
 func TestMultipartVerificationIdentityIsDeterministic(t *testing.T) {
 	verifier := func(context.Context, Candidate) VerificationResult {
 		return VerificationResult{Status: VerificationVerified}
