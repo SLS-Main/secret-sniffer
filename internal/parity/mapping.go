@@ -41,6 +41,10 @@ type VerificationParity struct {
 	TruffleHogVerifiableTypes       int    `json:"trufflehog_verifiable_types"`
 	SecretSnifferVerifiablePatterns int    `json:"secret_sniffer_verifiable_patterns"`
 	Remaining                       int    `json:"remaining"`
+	UnreviewedPatterns              int    `json:"unreviewed_patterns"`
+	ReadOnlyPatterns                int    `json:"read_only_patterns"`
+	AuthOnlyPatterns                int    `json:"auth_only_patterns"`
+	UnsafePatterns                  int    `json:"unsafe_patterns"`
 	Note                            string `json:"note"`
 }
 
@@ -71,20 +75,29 @@ const (
 )
 
 func currentVerificationParity() VerificationParity {
-	implemented := 0
+	verification := VerificationParity{
+		SnapshotCommit:            verificationSnapshotCommit,
+		TruffleHogVerifiableTypes: truffleHogVerifiableTypeCount,
+		Note:                      "Directional pattern/type comparison only; remaining is not an actionable detector backlog.",
+	}
 	for _, info := range detectors.RegistryInfo(detectors.DefaultRegistry()) {
-		if info.Verifiable {
-			implemented++
+		if !info.Verifiable {
+			continue
+		}
+		verification.SecretSnifferVerifiablePatterns++
+		switch info.VerificationSafety {
+		case detectors.VerificationSafetyReadOnly:
+			verification.ReadOnlyPatterns++
+		case detectors.VerificationSafetyAuthOnly:
+			verification.AuthOnlyPatterns++
+		case detectors.VerificationSafetyUnsafe:
+			verification.UnsafePatterns++
+		default:
+			verification.UnreviewedPatterns++
 		}
 	}
-	remaining := max(0, truffleHogVerifiableTypeCount-implemented)
-	return VerificationParity{
-		SnapshotCommit:                  verificationSnapshotCommit,
-		TruffleHogVerifiableTypes:       truffleHogVerifiableTypeCount,
-		SecretSnifferVerifiablePatterns: implemented,
-		Remaining:                       remaining,
-		Note:                            "Pattern and detector-type counts are directional because versioned and multipart detectors do not map one-to-one.",
-	}
+	verification.Remaining = max(0, truffleHogVerifiableTypeCount-verification.SecretSnifferVerifiablePatterns)
+	return verification
 }
 
 func mappedCatalogStats(mappings []Mapping) (catalogTracked, subDetectorTracked, duplicateMappings int, subDetectorIDs, duplicateIDs []string) {

@@ -174,6 +174,8 @@ func main() {
 	flag.StringVar(&cfg.GitAdditionalRefs, "additional-ref-policy", "all", "Git additional-ref policy: all, default, selected, none")
 	flag.StringVar(&cfg.GitAuthorizationHeader, "git-authorization-header", os.Getenv("GIT_AUTHORIZATION_HEADER"), "HTTP Authorization header for Git clone; defaults to GIT_AUTHORIZATION_HEADER")
 	flag.BoolVar(&cfg.Verify, "verify", false, "attempt live verification for supported detectors")
+	flag.BoolVar(&cfg.AllowUnreviewedVerification, "allow-unreviewed-verification", false, "allow verification hooks that have not completed safety review; requires --verify")
+	flag.BoolVar(&cfg.AllowUnsafeVerification, "allow-unsafe-verification", false, "allow verification that invokes webhooks or billable provider workloads; requires --verify")
 	flag.IntVar(&verificationWorkers, "verification-workers", 4, "number of dedicated concurrent verification workers")
 	flag.StringVar(&verificationStatuses, "verification-statuses", "", "comma-separated verification statuses to retain")
 	flag.StringVar(&include, "include", "", "comma-separated glob patterns to include")

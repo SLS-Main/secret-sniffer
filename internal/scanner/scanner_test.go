@@ -524,7 +524,7 @@ func TestDetectorPlanSkipsMissingKeywords(t *testing.T) {
 func TestVerificationCacheDeduplicatesAndUsesScanContext(t *testing.T) {
 	cache := newVerificationCache()
 	var calls int32
-	candidate := detectors.Candidate{DetectorID: "test", Secret: "same-secret", Verifier: func(context.Context, string) detectors.VerificationResult {
+	candidate := detectors.Candidate{DetectorID: "test", Secret: "same-secret", VerificationSafety: detectors.VerificationSafetyReadOnly, Verifier: func(context.Context, string) detectors.VerificationResult {
 		atomic.AddInt32(&calls, 1)
 		return detectors.VerificationResult{Status: detectors.VerificationVerified}
 	}}
@@ -567,8 +567,8 @@ func TestVerificationServiceDeduplicatesAcrossConcurrentScanners(t *testing.T) {
 		return detectors.VerificationResult{Status: detectors.VerificationVerified, Response: "account"}
 	}
 	candidates := []detectors.Candidate{
-		{DetectorID: "one", Secret: "same-secret", Verifier: verifier},
-		{DetectorID: "two", Secret: "same-secret", Verifier: verifier},
+		{DetectorID: "one", Secret: "same-secret", VerificationSafety: detectors.VerificationSafetyReadOnly, Verifier: verifier},
+		{DetectorID: "two", Secret: "same-secret", VerificationSafety: detectors.VerificationSafetyReadOnly, Verifier: verifier},
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
@@ -598,13 +598,63 @@ func TestVerificationCacheSeparatesMultipartCredentials(t *testing.T) {
 		atomic.AddInt32(&calls, 1)
 		return detectors.VerificationResult{Status: detectors.VerificationVerified}
 	}
-	first := detectors.Candidate{Secret: "same-token", SecretParts: map[string]string{"account_sid": "first", "auth_token": "same-token"}, CompositeVerifier: verifier}
-	second := detectors.Candidate{Secret: "same-token", SecretParts: map[string]string{"account_sid": "second", "auth_token": "same-token"}, CompositeVerifier: verifier}
+	first := detectors.Candidate{Secret: "same-token", SecretParts: map[string]string{"account_sid": "first", "auth_token": "same-token"}, VerificationSafety: detectors.VerificationSafetyReadOnly, CompositeVerifier: verifier}
+	second := detectors.Candidate{Secret: "same-token", SecretParts: map[string]string{"account_sid": "second", "auth_token": "same-token"}, VerificationSafety: detectors.VerificationSafetyReadOnly, CompositeVerifier: verifier}
 	if cache.verify(context.Background(), first).Status != detectors.VerificationVerified || cache.verify(context.Background(), first).Status != detectors.VerificationVerified || cache.verify(context.Background(), second).Status != detectors.VerificationVerified {
 		t.Fatal("unexpected multipart verification result")
 	}
 	if got := atomic.LoadInt32(&calls); got != 2 {
 		t.Fatalf("verifier calls=%d, want 2", got)
+	}
+}
+
+func TestScannerGatesUnsafeVerificationBeforeExecution(t *testing.T) {
+	var calls int32
+	detector := detectors.NewUnsafeRegex("unsafe-test", "Unsafe Test", "high", []string{"unsafe_"}, `\b(unsafe_[A-Za-z0-9]{16})\b`, 1, func(context.Context, string) detectors.VerificationResult {
+		atomic.AddInt32(&calls, 1)
+		return detectors.VerificationResult{Status: detectors.VerificationVerified}
+	})
+	content := []byte("unsafe_abcdefghijklmnop")
+
+	blocked := New(Config{Verify: true}, []detectors.Detector{detector}).ScanContent(context.Background(), "config.env", content)
+	if len(blocked) != 1 || blocked[0].Verification.Status != detectors.VerificationNotAttempted || blocked[0].Verification.ErrorCategory != "unsafe_verification_disabled" || atomic.LoadInt32(&calls) != 0 {
+		t.Fatalf("unsafe verification was not blocked: findings=%#v calls=%d", blocked, calls)
+	}
+
+	allowed := New(Config{Verify: true, AllowUnsafeVerification: true}, []detectors.Detector{detector}).ScanContent(context.Background(), "config.env", content)
+	if len(allowed) != 1 || allowed[0].Verification.Status != detectors.VerificationVerified || atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("unsafe verification was not enabled: findings=%#v calls=%d", allowed, calls)
+	}
+}
+
+func TestScannerGatesUnreviewedVerificationBeforeExecution(t *testing.T) {
+	var calls int32
+	detector := detectors.NewRegex("unreviewed-test", "Unreviewed Test", "high", []string{"unreviewed_"}, `\b(unreviewed_[A-Za-z0-9]{16})\b`, 1, func(context.Context, string) detectors.VerificationResult {
+		atomic.AddInt32(&calls, 1)
+		return detectors.VerificationResult{Status: detectors.VerificationVerified}
+	})
+	content := []byte("unreviewed_abcdefghijklmnop")
+
+	blocked := New(Config{Verify: true}, []detectors.Detector{detector}).ScanContent(context.Background(), "config.env", content)
+	if len(blocked) != 1 || blocked[0].Verification.Status != detectors.VerificationNotAttempted || blocked[0].Verification.ErrorCategory != "unreviewed_verification_disabled" || atomic.LoadInt32(&calls) != 0 {
+		t.Fatalf("unreviewed verification was not blocked: findings=%#v calls=%d", blocked, calls)
+	}
+
+	allowed := New(Config{Verify: true, AllowUnreviewedVerification: true}, []detectors.Detector{detector}).ScanContent(context.Background(), "config.env", content)
+	if len(allowed) != 1 || allowed[0].Verification.Status != detectors.VerificationVerified || atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("unreviewed verification was not enabled: findings=%#v calls=%d", allowed, calls)
+	}
+}
+
+func TestValidateConfigRequiresVerifyForUnsafeOptIn(t *testing.T) {
+	if err := ValidateConfig(Config{AllowUnreviewedVerification: true}); err == nil {
+		t.Fatal("expected unreviewed verification without --verify to fail")
+	}
+	if err := ValidateConfig(Config{AllowUnsafeVerification: true}); err == nil {
+		t.Fatal("expected unsafe verification without --verify to fail")
+	}
+	if err := ValidateConfig(Config{Verify: true, AllowUnreviewedVerification: true, AllowUnsafeVerification: true}); err != nil {
+		t.Fatalf("unexpected valid unsafe verification config error: %v", err)
 	}
 }
 

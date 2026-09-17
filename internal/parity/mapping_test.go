@@ -38,6 +38,10 @@ func TestCurrentReportCountsMappings(t *testing.T) {
 	if r.Verification.SecretSnifferVerifiablePatterns+r.Verification.Remaining != r.Verification.TruffleHogVerifiableTypes {
 		t.Fatalf("verification accounting mismatch: %#v", r.Verification)
 	}
+	classified := r.Verification.UnreviewedPatterns + r.Verification.ReadOnlyPatterns + r.Verification.AuthOnlyPatterns + r.Verification.UnsafePatterns
+	if classified != r.Verification.SecretSnifferVerifiablePatterns || r.Verification.UnsafePatterns != 12 {
+		t.Fatalf("verification safety accounting mismatch: %#v", r.Verification)
+	}
 }
 
 func TestCatalogSnapshotMatchesExpectedSize(t *testing.T) {

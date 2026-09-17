@@ -44,27 +44,29 @@ var base64CandidateRe = regexp.MustCompile(`\b[A-Za-z0-9+/_-]{20,}={0,2}\b`)
 const maxBase64CandidateBytes = 8192
 
 type Config struct {
-	Target                 string
-	Workers                int
-	MaxFileBytes           int64
-	GitHistory             bool
-	GitMaxDepth            int
-	GitSinceCommit         string
-	GitRanges              []string
-	GitRefs                []string
-	GitBranches            []string
-	GitAdditionalRefs      string
-	GitAuthorizationHeader string
-	Verify                 bool
-	Include                []string
-	Exclude                []string
-	ExcludeExtensions      []string
-	IncludeRegex           []string
-	ExcludeRegex           []string
-	GitHubToken            string
-	Progress               progress.ProgressReporter
-	FindingCallback        func([]detectors.Finding) error
-	Verification           *VerificationService
+	Target                      string
+	Workers                     int
+	MaxFileBytes                int64
+	GitHistory                  bool
+	GitMaxDepth                 int
+	GitSinceCommit              string
+	GitRanges                   []string
+	GitRefs                     []string
+	GitBranches                 []string
+	GitAdditionalRefs           string
+	GitAuthorizationHeader      string
+	Verify                      bool
+	AllowUnreviewedVerification bool
+	AllowUnsafeVerification     bool
+	Include                     []string
+	Exclude                     []string
+	ExcludeExtensions           []string
+	IncludeRegex                []string
+	ExcludeRegex                []string
+	GitHubToken                 string
+	Progress                    progress.ProgressReporter
+	FindingCallback             func([]detectors.Finding) error
+	Verification                *VerificationService
 
 	ScanArchives         bool
 	MaxArchiveDepth      int
@@ -162,6 +164,12 @@ func (s *Scanner) processFindings(ctx context.Context, findings []detectors.Find
 }
 
 func ValidateConfig(cfg Config) error {
+	if cfg.AllowUnreviewedVerification && !cfg.Verify {
+		return errors.New("unreviewed verification requires verification to be enabled")
+	}
+	if cfg.AllowUnsafeVerification && !cfg.Verify {
+		return errors.New("unsafe verification requires verification to be enabled")
+	}
 	_, err := newPathFilter(cfg)
 	return err
 }
@@ -279,7 +287,7 @@ type verificationCache struct {
 }
 
 type verificationRunner interface {
-	verify(context.Context, detectors.Candidate) detectors.VerificationResult
+	verifyWithPolicy(context.Context, detectors.Candidate, detectors.VerificationPolicy) detectors.VerificationResult
 }
 
 type verificationEntry struct {
@@ -292,10 +300,17 @@ func newVerificationCache() *verificationCache {
 }
 
 func (c *verificationCache) verify(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
+	return c.verifyWithPolicy(ctx, candidate, detectors.VerificationPolicy{})
+}
+
+func (c *verificationCache) verifyWithPolicy(ctx context.Context, candidate detectors.Candidate, policy detectors.VerificationPolicy) detectors.VerificationResult {
+	if result, blocked := candidate.VerificationPolicyResult(policy); blocked {
+		return result
+	}
 	return c.verifyWith(ctx, candidate, func(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
 		verifyCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 		defer cancel()
-		return candidate.Verify(verifyCtx)
+		return candidate.VerifyWithPolicy(verifyCtx, policy)
 	})
 }
 
@@ -333,6 +348,7 @@ func (c *verificationCache) verifyWith(ctx context.Context, candidate detectors.
 type verificationJob struct {
 	ctx       context.Context
 	candidate detectors.Candidate
+	policy    detectors.VerificationPolicy
 	result    chan detectors.VerificationResult
 }
 
@@ -370,11 +386,20 @@ func NewVerificationService(workers int) *VerificationService {
 }
 
 func (s *VerificationService) verify(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
-	return s.cache.verifyWith(ctx, candidate, s.execute)
+	return s.verifyWithPolicy(ctx, candidate, detectors.VerificationPolicy{})
 }
 
-func (s *VerificationService) execute(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
-	job := verificationJob{ctx: ctx, candidate: candidate, result: make(chan detectors.VerificationResult, 1)}
+func (s *VerificationService) verifyWithPolicy(ctx context.Context, candidate detectors.Candidate, policy detectors.VerificationPolicy) detectors.VerificationResult {
+	if result, blocked := candidate.VerificationPolicyResult(policy); blocked {
+		return result
+	}
+	return s.cache.verifyWith(ctx, candidate, func(ctx context.Context, candidate detectors.Candidate) detectors.VerificationResult {
+		return s.execute(ctx, candidate, policy)
+	})
+}
+
+func (s *VerificationService) execute(ctx context.Context, candidate detectors.Candidate, policy detectors.VerificationPolicy) detectors.VerificationResult {
+	job := verificationJob{ctx: ctx, candidate: candidate, policy: policy, result: make(chan detectors.VerificationResult, 1)}
 	select {
 	case <-ctx.Done():
 		return detectors.VerificationResult{Status: detectors.VerificationUnknown, ErrorCategory: "cancelled", Message: "verification cancelled"}
@@ -393,7 +418,7 @@ func (s *VerificationService) worker() {
 	for job := range s.jobs {
 		verifyCtx, cancel := context.WithTimeout(job.ctx, 8*time.Second)
 		verifyCtx = detectors.WithVerificationHTTPClient(verifyCtx, s.client)
-		result := job.candidate.Verify(verifyCtx)
+		result := job.candidate.VerifyWithPolicy(verifyCtx, job.policy)
 		cancel()
 		job.result <- result
 	}
@@ -795,7 +820,7 @@ func (s *Scanner) scanByteView(ctx context.Context, file, commit string, view []
 			f := detectors.ToFindingAt(c, file, commit, line, col, false)
 			s.enrichFindingSource(&f)
 			if s.cfg.Verify {
-				f.Verification = s.verification.verify(ctx, c)
+				f.Verification = s.verification.verifyWithPolicy(ctx, c, detectors.VerificationPolicy{AllowUnreviewed: s.cfg.AllowUnreviewedVerification, AllowUnsafe: s.cfg.AllowUnsafeVerification})
 				f.Verified = f.Verification.Status == detectors.VerificationVerified
 			}
 			key := f.Fingerprint
@@ -845,7 +870,7 @@ func (s *Scanner) scanDecodedBase64(ctx context.Context, file, commit string, b 
 					f.Provenance.DecoderChain = append(f.Provenance.DecoderChain, "base64")
 				}
 				if s.cfg.Verify {
-					f.Verification = s.verification.verify(ctx, c)
+					f.Verification = s.verification.verifyWithPolicy(ctx, c, detectors.VerificationPolicy{AllowUnreviewed: s.cfg.AllowUnreviewedVerification, AllowUnsafe: s.cfg.AllowUnsafeVerification})
 					f.Verified = f.Verification.Status == detectors.VerificationVerified
 				}
 				key := f.Fingerprint

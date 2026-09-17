@@ -2148,6 +2148,86 @@ func TestMultipartVerificationIdentityIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestUnsafeVerificationRequiresExplicitPolicy(t *testing.T) {
+	var calls int
+	candidate := Candidate{
+		Secret:             "secret",
+		VerificationSafety: VerificationSafetyUnsafe,
+		Verifier: func(context.Context, string) VerificationResult {
+			calls++
+			return VerificationResult{Status: VerificationVerified}
+		},
+	}
+	result := candidate.Verify(context.Background())
+	if result.Status != VerificationNotAttempted || result.ErrorCategory != "unsafe_verification_disabled" || calls != 0 {
+		t.Fatalf("unsafe verifier ran without opt-in: result=%#v calls=%d", result, calls)
+	}
+	result = candidate.VerifyWithPolicy(context.Background(), VerificationPolicy{AllowUnsafe: true})
+	if result.Status != VerificationVerified || calls != 1 {
+		t.Fatalf("unsafe verifier did not run with opt-in: result=%#v calls=%d", result, calls)
+	}
+}
+
+func TestUnreviewedVerificationRequiresExplicitPolicy(t *testing.T) {
+	var calls int
+	candidate := Candidate{
+		Secret: "secret",
+		Verifier: func(context.Context, string) VerificationResult {
+			calls++
+			return VerificationResult{Status: VerificationVerified}
+		},
+	}
+	result := candidate.Verify(context.Background())
+	if result.Status != VerificationNotAttempted || result.ErrorCategory != "unreviewed_verification_disabled" || calls != 0 {
+		t.Fatalf("unreviewed verifier ran without opt-in: result=%#v calls=%d", result, calls)
+	}
+	result = candidate.VerifyWithPolicy(context.Background(), VerificationPolicy{AllowUnreviewed: true})
+	if result.Status != VerificationVerified || calls != 1 {
+		t.Fatalf("unreviewed verifier did not run with opt-in: result=%#v calls=%d", result, calls)
+	}
+}
+
+func TestRegistryReportsVerificationSafety(t *testing.T) {
+	counts := map[VerificationSafety]int{}
+	for _, info := range RegistryInfo(DefaultRegistry()) {
+		if !info.Verifiable {
+			if info.VerificationSafety != "" {
+				t.Fatalf("unverifiable detector %q reported safety %q", info.ID, info.VerificationSafety)
+			}
+			continue
+		}
+		counts[info.VerificationSafety]++
+		if info.ID == "slack-webhook" && info.VerificationSafety != VerificationSafetyUnsafe {
+			t.Fatalf("Slack webhook safety=%q, want unsafe", info.VerificationSafety)
+		}
+		if info.ID == "azure-entra-credentials" && info.VerificationSafety != VerificationSafetyAuthOnly {
+			t.Fatalf("Azure Entra safety=%q, want auth_only", info.VerificationSafety)
+		}
+	}
+	if counts[VerificationSafetyUnsafe] != 12 {
+		t.Fatalf("unsafe detector count=%d, want 12", counts[VerificationSafetyUnsafe])
+	}
+	if counts[VerificationSafetyUnreviewed] == 0 || counts[VerificationSafetyReadOnly] == 0 || counts[VerificationSafetyAuthOnly] == 0 {
+		t.Fatalf("missing verification safety categories: %#v", counts)
+	}
+}
+
+func TestUnknownVerificationSafetyFailsClosed(t *testing.T) {
+	var calls int
+	candidate := Candidate{
+		Secret:             "secret",
+		VerificationSafety: VerificationSafety("typo"),
+		Verifier: func(context.Context, string) VerificationResult {
+			calls++
+			return VerificationResult{Status: VerificationVerified}
+		},
+	}
+	result := candidate.Verify(context.Background())
+	if result.Status != VerificationNotAttempted || result.ErrorCategory != "unreviewed_verification_disabled" || calls != 0 {
+		t.Fatalf("unknown safety failed open: result=%#v calls=%d", result, calls)
+	}
+}
+
 func mustMarshalPKCS8(t *testing.T, key *rsa.PrivateKey) []byte {
 	t.Helper()
 	value, err := x509.MarshalPKCS8PrivateKey(key)

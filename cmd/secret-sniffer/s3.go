@@ -580,38 +580,40 @@ func s3ScopeHash(opts s3RunOptions) (string, error) {
 	detectorIDs := make([]string, 0, len(opts.Registry))
 	for _, detector := range opts.Registry {
 		info := detector.Info()
-		detectorIDs = append(detectorIDs, info.ID+":"+info.Severity)
+		detectorIDs = append(detectorIDs, info.ID+":"+info.Severity+":"+string(info.VerificationSafety))
 	}
 	payload := struct {
-		Prefix               string   `json:"prefix"`
-		MaxObjectBytes       int64    `json:"max_object_bytes"`
-		Include              []string `json:"include"`
-		Exclude              []string `json:"exclude"`
-		ExcludeExtensions    []string `json:"exclude_extensions"`
-		IncludeRegex         []string `json:"include_regex"`
-		ExcludeRegex         []string `json:"exclude_regex"`
-		ScanArchives         bool     `json:"scan_archives"`
-		MaxArchiveDepth      int      `json:"max_archive_depth"`
-		MaxArchiveEntries    int      `json:"max_archive_entries"`
-		MaxArchiveBytes      int64    `json:"max_archive_bytes"`
-		MaxExpandedFileBytes int64    `json:"max_expanded_file_bytes"`
-		Verify               bool     `json:"verify"`
-		IncludeSecrets       bool     `json:"include_secrets"`
-		Format               string   `json:"format"`
-		JournalPath          string   `json:"journal_path"`
-		Buckets              []string `json:"buckets"`
-		AllBuckets           bool     `json:"all_buckets"`
-		BaselineHash         string   `json:"baseline_hash"`
-		CustomDetectorsHash  string   `json:"custom_detectors_hash"`
-		DetectorIDs          []string `json:"detector_ids"`
-		VerificationStatuses []string `json:"verification_statuses"`
-		ExactKeys            []string `json:"exact_keys"`
-		ExcludeBuckets       []string `json:"exclude_buckets"`
-		Endpoint             string   `json:"endpoint"`
-		PathStyle            bool     `json:"path_style"`
-		VersionPolicy        string   `json:"version_policy"`
-		DeleteMarkerPolicy   string   `json:"delete_marker_policy"`
-		StorageClassPolicy   string   `json:"storage_class_policy"`
+		Prefix                      string   `json:"prefix"`
+		MaxObjectBytes              int64    `json:"max_object_bytes"`
+		Include                     []string `json:"include"`
+		Exclude                     []string `json:"exclude"`
+		ExcludeExtensions           []string `json:"exclude_extensions"`
+		IncludeRegex                []string `json:"include_regex"`
+		ExcludeRegex                []string `json:"exclude_regex"`
+		ScanArchives                bool     `json:"scan_archives"`
+		MaxArchiveDepth             int      `json:"max_archive_depth"`
+		MaxArchiveEntries           int      `json:"max_archive_entries"`
+		MaxArchiveBytes             int64    `json:"max_archive_bytes"`
+		MaxExpandedFileBytes        int64    `json:"max_expanded_file_bytes"`
+		Verify                      bool     `json:"verify"`
+		AllowUnreviewedVerification bool     `json:"allow_unreviewed_verification"`
+		AllowUnsafeVerification     bool     `json:"allow_unsafe_verification"`
+		IncludeSecrets              bool     `json:"include_secrets"`
+		Format                      string   `json:"format"`
+		JournalPath                 string   `json:"journal_path"`
+		Buckets                     []string `json:"buckets"`
+		AllBuckets                  bool     `json:"all_buckets"`
+		BaselineHash                string   `json:"baseline_hash"`
+		CustomDetectorsHash         string   `json:"custom_detectors_hash"`
+		DetectorIDs                 []string `json:"detector_ids"`
+		VerificationStatuses        []string `json:"verification_statuses"`
+		ExactKeys                   []string `json:"exact_keys"`
+		ExcludeBuckets              []string `json:"exclude_buckets"`
+		Endpoint                    string   `json:"endpoint"`
+		PathStyle                   bool     `json:"path_style"`
+		VersionPolicy               string   `json:"version_policy"`
+		DeleteMarkerPolicy          string   `json:"delete_marker_policy"`
+		StorageClassPolicy          string   `json:"storage_class_policy"`
 	}{
 		Prefix: opts.Prefix, MaxObjectBytes: opts.MaxObjectBytes, Include: opts.ScannerConfig.Include,
 		Exclude: opts.ScannerConfig.Exclude, ExcludeExtensions: opts.ScannerConfig.ExcludeExtensions,
@@ -619,6 +621,7 @@ func s3ScopeHash(opts s3RunOptions) (string, error) {
 		ScanArchives: opts.ScannerConfig.ScanArchives, MaxArchiveDepth: opts.ScannerConfig.MaxArchiveDepth,
 		MaxArchiveEntries: opts.ScannerConfig.MaxArchiveEntries, MaxArchiveBytes: opts.ScannerConfig.MaxArchiveBytes,
 		MaxExpandedFileBytes: opts.ScannerConfig.MaxExpandedFileBytes, Verify: opts.ScannerConfig.Verify,
+		AllowUnreviewedVerification: opts.ScannerConfig.AllowUnreviewedVerification, AllowUnsafeVerification: opts.ScannerConfig.AllowUnsafeVerification,
 		IncludeSecrets: opts.IncludeSecrets, Format: strings.ToLower(opts.Format), AllBuckets: opts.AllBuckets, DetectorIDs: detectorIDs,
 		ExactKeys: opts.ExactKeys, ExcludeBuckets: opts.ExcludeBuckets, Endpoint: opts.S3Endpoint, PathStyle: opts.S3PathStyle,
 		VersionPolicy: opts.VersionPolicy, DeleteMarkerPolicy: opts.DeleteMarkerPolicy, StorageClassPolicy: opts.StorageClassPolicy,

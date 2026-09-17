@@ -13,15 +13,16 @@ type CorrelatedField struct {
 }
 
 type CorrelatedDetector struct {
-	ID                string
-	Name              string
-	Severity          string
-	Keywords          []string
-	Fields            []CorrelatedField
-	PrimaryPart       string
-	MaxDistance       int
-	StopAtBlankLine   bool
-	CompositeVerifier CompositeVerifier
+	ID                 string
+	Name               string
+	Severity           string
+	Keywords           []string
+	Fields             []CorrelatedField
+	PrimaryPart        string
+	MaxDistance        int
+	StopAtBlankLine    bool
+	CompositeVerifier  CompositeVerifier
+	VerificationSafety VerificationSafety
 }
 
 type correlatedOccurrence struct {
@@ -55,7 +56,8 @@ func (d CorrelatedDetector) DetectPrefiltered(b []byte) []Candidate {
 }
 
 func (d CorrelatedDetector) Info() Info {
-	return Info{ID: d.ID, Name: d.Name, Severity: d.Severity, Keywords: d.Keywords, Verifiable: d.CompositeVerifier != nil}
+	verifiable := d.CompositeVerifier != nil
+	return Info{ID: d.ID, Name: d.Name, Severity: d.Severity, Keywords: d.Keywords, Verifiable: verifiable, VerificationSafety: normalizedVerificationSafety(d.VerificationSafety, verifiable)}
 }
 
 func (d CorrelatedDetector) detectContent(content string) []Candidate {
@@ -134,14 +136,15 @@ func (d CorrelatedDetector) detectContent(content string) []Candidate {
 		}
 
 		candidate := Candidate{
-			DetectorID:        d.ID,
-			Name:              d.Name,
-			Severity:          d.Severity,
-			Secret:            primary.value,
-			SecretParts:       parts,
-			Start:             primary.valueStart,
-			End:               primary.valueEnd,
-			CompositeVerifier: d.CompositeVerifier,
+			DetectorID:         d.ID,
+			Name:               d.Name,
+			Severity:           d.Severity,
+			Secret:             primary.value,
+			SecretParts:        parts,
+			VerificationSafety: d.VerificationSafety,
+			Start:              primary.valueStart,
+			End:                primary.valueEnd,
+			CompositeVerifier:  d.CompositeVerifier,
 		}
 		if !plausibleSecret(candidate.Secret) {
 			continue

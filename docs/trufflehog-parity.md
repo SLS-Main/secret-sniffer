@@ -496,7 +496,8 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 - Some TruffleHog IDs are intentionally `partial` where this project detects only the high-confidence credential side and avoids tuple-free matches, such as exchange key/secret pairs, OAuth client ID/secret pairs, and generic `host`/`user` fields.
 - Generic standalone fields such as `host`, `user`, and broad credential labels are not treated as findings unless they appear inside credentialed URL or provider-specific context.
 - Box detection intentionally requires Box JWT/OAuth configuration context such as `boxAppSettings` or the Box OAuth token endpoint to avoid the high false-positive behavior commonly seen with generic `box` proximity matching.
-- Provider verification is opt-in and currently available only for selected providers; unverified detector coverage is tracked separately from live validation coverage.
+- Provider verification is opt-in. Verifiable patterns report `unreviewed`, `read_only`, `auth_only`, or `unsafe` safety metadata. Ordinary `--verify` runs only audited read/auth hooks; unreviewed and unsafe hooks require their separate opt-in flags.
+- The arithmetic difference between upstream verifiable detector types and SecretSniffer verifiable patterns is directional reporting, not an actionable detector backlog.
 
 ## Build Order
 
@@ -514,4 +515,5 @@ This backlog tracks high-signal detectors that are useful for companies that sto
 - Require keywords when token formats are ambiguous.
 - Redact output by default.
 - Keep verification opt-in because it contacts external services.
+- Require a separate explicit opt-in for webhook invocation and billable or content-producing verification workloads.
 - Avoid matching obvious examples, placeholders, all-zero values, and test fixtures where possible.

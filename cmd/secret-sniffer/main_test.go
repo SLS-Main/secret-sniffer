@@ -42,6 +42,51 @@ func TestDefaultOutputPath(t *testing.T) {
 	}
 }
 
+func TestS3ScopeHashIncludesUnsafeVerificationPolicy(t *testing.T) {
+	opts := s3RunOptions{
+		ScannerConfig: scanner.Config{Verify: true},
+		Format:        "jsonl",
+		OutputPath:    filepath.Join(t.TempDir(), "findings.jsonl"),
+	}
+	safeHash, err := s3ScopeHash(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.ScannerConfig.AllowUnsafeVerification = true
+	unsafeHash, err := s3ScopeHash(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if safeHash == unsafeHash {
+		t.Fatal("unsafe verification policy did not change S3 resume scope")
+	}
+	opts.ScannerConfig.AllowUnsafeVerification = false
+	opts.ScannerConfig.AllowUnreviewedVerification = true
+	unreviewedHash, err := s3ScopeHash(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if safeHash == unreviewedHash || unsafeHash == unreviewedHash {
+		t.Fatal("unreviewed verification policy did not change S3 resume scope")
+	}
+	verifier := func(context.Context, string) detectors.VerificationResult {
+		return detectors.VerificationResult{Status: detectors.VerificationVerified}
+	}
+	opts.Registry = []detectors.Detector{detectors.NewRegex("test", "Test", "high", []string{"test"}, `(test)`, 1, verifier)}
+	unreviewedDetectorHash, err := s3ScopeHash(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.Registry = []detectors.Detector{detectors.NewUnsafeRegex("test", "Test", "high", []string{"test"}, `(test)`, 1, verifier)}
+	unsafeDetectorHash, err := s3ScopeHash(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unreviewedDetectorHash == unsafeDetectorHash {
+		t.Fatal("detector safety classification did not change S3 resume scope")
+	}
+}
+
 func TestScanExitCode(t *testing.T) {
 	cases := []struct {
 		name         string

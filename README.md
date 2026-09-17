@@ -12,11 +12,11 @@ Local directory scans also inspect common document formats that may contain past
 
 Archive scanning is available with `--scan-archives` for `.zip`, `.tar`, `.tar.gz`, `.tgz`, and single-file `.gz`. Archive contents are expanded in memory with safety limits, never written to disk, and findings are reported with virtual paths such as `backup.zip!/config/.env`.
 
-This project does not use TruffleHog's discovery algorithm. The scanner is detector-first and is being built toward TruffleHog feature parity through an explicit parity map. Current tracked parity covers 875 mappings, including 807 implemented mappings from the pinned detector catalog snapshot.
+This project does not use TruffleHog's discovery algorithm. The scanner is detector-first and is being built toward TruffleHog feature parity through an explicit parity map. Current tracked parity covers 875 mappings, including 810 implemented mappings from the pinned detector catalog snapshot.
 
 ## Build
 
-Go 1.24 or newer is required.
+Go 1.26.6 or newer is required.
 
 ```bash
 go build -o secret-sniffer ./cmd/secret-sniffer
@@ -137,6 +137,8 @@ AZURE_STORAGE_ACCOUNT='accountname' ./secret-sniffer \
 --additional-ref-policy  Additional refs: all, default, selected, none.
 --git-authorization-header  HTTP Git authorization header; defaults to GIT_AUTHORIZATION_HEADER.
 --verify              Attempt live provider verification for supported detectors.
+--allow-unreviewed-verification  Allow verification hooks that have not completed safety review; requires --verify.
+--allow-unsafe-verification  Allow webhook invocation and billable/workload verification; requires --verify.
 --verification-workers Dedicated concurrent provider verification workers. Default: 4.
 --verification-statuses  Comma-separated statuses to retain: verified, unverified, unknown, not_attempted, unsupported.
 --format              Output format: human, json, jsonl, sarif.
@@ -272,11 +274,13 @@ Any nonzero policy exit leaves progress in the `failed` terminal phase. Signal c
 
 ## Verification Results
 
-Machine findings include a structured `verification` object. Status is one of `verified`, `unverified`, `unknown`, `not_attempted`, or `unsupported`. Provider timeouts, transport failures, rate limits, server failures, and ambiguous authorization failures are `unknown`, not `unverified`. The compatibility `verified` boolean remains and is true only for status `verified`. When an endpoint returns a body, a whitespace-normalized response excerpt is included as `response` and limited to 100 characters.
+Machine findings include a structured `verification` object. Status is one of `verified`, `unverified`, `unknown`, `not_attempted`, or `unsupported`. Provider timeouts, transport failures, rate limits, server failures, and ambiguous authorization failures are `unknown`, not `unverified`. Unreviewed and unsafe verification that is not explicitly enabled is `not_attempted` with error category `unreviewed_verification_disabled` or `unsafe_verification_disabled`. The compatibility `verified` boolean remains and is true only for status `verified`. When an endpoint returns a body, a whitespace-normalized response excerpt is included as `response` and limited to 100 characters.
 
 Provider requests run through a bounded pool controlled by `--verification-workers`. All scanners in one invocation share an in-flight and completed-result cache keyed by the verifier and secret, so the same credential is contacted at most once per job even when it appears in many files, repositories, commits, archives, or cloud objects. Cancelled attempts may be retried; completed provider responses, including rate-limit and network outcomes, are reused for the remainder of the job.
 
 Verification HTTP requests honor Go's standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment settings. Cross-endpoint redirects are not followed, preventing credential-bearing headers from being forwarded to redirect targets.
+
+Detectors classify verification as `unreviewed`, `read_only`, `auth_only`, or `unsafe`. Ordinary `--verify` runs only audited `read_only` and `auth_only` hooks. `--allow-unreviewed-verification` enables legacy hooks that have not completed safety review, while `--allow-unsafe-verification` permits known webhook, scraping, or content-producing workloads. Review the `verification_safety` field from `--list-detectors` before enabling either policy.
 
 Use `--verification-statuses verified,unknown` to retain a subset. Filtering occurs before output, summaries, baseline generation, and `--fail-on-findings` evaluation.
 
@@ -866,7 +870,7 @@ Verification is off by default:
 
 Verification may contact provider APIs with candidate credentials. Only use it when you are authorized to validate discovered credentials.
 
-The built-in registry currently exposes 567 verifiable patterns across GitHub, GitLab, Azure DevOps, package registries, AI providers, communications platforms, infrastructure services, and SaaS APIs. Against the measured TruffleHog upstream baseline of 863 enabled verifiable detector types at commit `4b7d1d3a6827691637eff750b6482042e06462d0`, 296 remain. These counts are directional because versioned and multipart detectors do not map one-to-one. `--list-detectors` reports the `verifiable` status for each detector, and `--trufflehog-parity` includes the verification baseline, implemented count, and remaining count. Structured multipart candidates preserve named credential parts for correlation and verification. AWS, Datadog, Censys, LarkSuite, and Azure Entra credential sets are correlated in either field order within bounded configuration records; other providers requiring reversed, distant, or separately detected fields still need dedicated multipart detectors. Potentially mutating verification calls are not enabled by default.
+The built-in registry currently exposes 567 verifiable patterns across GitHub, GitLab, Azure DevOps, package registries, AI providers, communications platforms, infrastructure services, and SaaS APIs. The registry currently classifies 549 as `unreviewed`, four as `read_only`, two as `auth_only`, and 12 as `unsafe`; unreviewed and unsafe hooks are disabled unless their respective opt-in flags are supplied. Against the measured TruffleHog upstream baseline of 863 enabled verifiable detector types at commit `4b7d1d3a6827691637eff750b6482042e06462d0`, the directional arithmetic difference is 296. That difference is not an actionable backlog because versioned, aliased, and multipart patterns do not map one-to-one with upstream detector types. `--list-detectors` reports `verifiable` and `verification_safety`; `--trufflehog-parity` reports the safety-category totals. Structured multipart candidates preserve named credential parts for correlation and verification. AWS, Datadog, Censys, LarkSuite, and Azure Entra credential sets are correlated in either field order within bounded configuration records.
 
 ## Detector Inventory
 
@@ -875,6 +879,8 @@ List built-in detectors:
 ```bash
 ./secret-sniffer --list-detectors > detectors.json
 ```
+
+Each verifiable detector includes an additive `verification_safety` field. Unverifiable detectors omit it.
 
 Print the tracked TruffleHog parity report:
 

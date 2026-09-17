@@ -32,15 +32,15 @@ Implemented:
 Partially implemented:
 
 - TruffleHog detector parity. The mapping framework exists, but the detector set is not yet one-for-one complete.
-- Provider verification. GitHub and OpenAI have verification hooks; most providers are not verified yet.
+- Provider verification. Hundreds of provider hooks exist; safety review and context-aware classification remain incomplete.
 - Git history scanning. It scans git blobs, but does not yet use persistent `git cat-file --batch` workers or full commit attribution.
 - GitHub enterprise scanning. Enterprise org/repo discovery exists, but enterprise-specific rate-limit handling and retry policy need improvement.
 - Resource utilization. Worker controls exist, but there is no adaptive scheduler for CPU, memory, clone bandwidth, or repository size.
 
 ## Near-Term Priorities
 
-1. Improve GitHub scanning resilience.
-2. Add detector batches from the parity table.
+1. Complete verification safety and response-classification audits.
+2. Improve GitHub scanning resilience.
 3. Improve git history performance.
 4. Add container and package-artifact expansion.
 5. Add better reporting and remediation workflows.
@@ -80,11 +80,9 @@ Partially implemented:
 
 ### Verification
 
-- Add Slack token and webhook verification.
-- Add Stripe verification.
-- Add GitLab verification.
-- Add npm and PyPI token verification.
-- Add PagerDuty, New Relic, Grafana, and Sentry verification.
+- Review every existing verifier as `read_only`, `auth_only`, `unsafe`, or intentionally unsupported.
+- Replace aggregate verification-gap arithmetic with an upstream ID-level capability matrix.
+- Add only provider verification backed by safe, deterministic APIs and sufficient endpoint or credential context.
 - Add verification rate limiting.
 - Add verification timeout and retry controls.
 - Add offline-only mode that disables all network verification explicitly.
