@@ -2207,14 +2207,99 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 514,
-		VerificationSafetyReadOnly:   35,
+		VerificationSafetyUnreviewed: 512,
+		VerificationSafetyReadOnly:   37,
 		VerificationSafetyAuthOnly:   6,
 		VerificationSafetyUnsafe:     12,
 	}
 	for safety, want := range expected {
 		if counts[safety] != want {
 			t.Fatalf("%s detector count=%d, want %d", safety, counts[safety], want)
+		}
+	}
+}
+
+func TestSaaSIdentityVerifierSafetyPromotions(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"apify-token":    VerificationSafetyReadOnly,
+		"rootly-api-key": VerificationSafetyReadOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("promoted detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestSaaSIdentityVerifierContracts(t *testing.T) {
+	t.Run("apify", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodGet || req.URL.String() != "https://api.apify.com/v2/users/me" || req.Header.Get("Authorization") != "Bearer secret" {
+				t.Fatalf("unexpected Apify request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":{"id":"user","email":"private@example.com"}}`)), Header: make(http.Header)}, nil
+		})}
+		result := verifyApify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationVerified || result.Response != "" {
+			t.Fatalf("unexpected Apify result: %#v", result)
+		}
+	})
+
+	t.Run("rootly", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodGet || req.URL.Path != "/v1/users" || req.URL.Query().Get("page[number]") != "1" || req.URL.Query().Get("page[size]") != "1" || req.Header.Get("Authorization") != "Bearer secret" || req.Header.Get("Accept") != "application/vnd.api+json" {
+				t.Fatalf("unexpected Rootly request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[],"meta":{"total_count":0}}`)), Header: make(http.Header)}, nil
+		})}
+		result := verifyRootly(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationVerified || result.Response != "" {
+			t.Fatalf("unexpected Rootly result: %#v", result)
+		}
+	})
+}
+
+func TestSaaSIdentityVerifierFormatAndStatusBoundaries(t *testing.T) {
+	var apify Detector
+	for _, detector := range DefaultRegistry() {
+		if detector.Info().ID == "apify-token" {
+			apify = detector
+			break
+		}
+	}
+	if apify == nil {
+		t.Fatal("missing Apify detector")
+	}
+	valid := "apify_api_" + strings.Repeat("A", 36)
+	if len(apify.Detect([]byte(valid))) != 1 || len(apify.Detect([]byte("apify_api_"+strings.Repeat("A", 35)))) != 0 || len(apify.Detect([]byte("apify_api_"+strings.Repeat("A", 37)))) != 0 {
+		t.Fatal("Apify detector did not enforce the documented token length")
+	}
+
+	for _, test := range []struct {
+		status   int
+		want     VerificationStatus
+		category string
+	}{
+		{status: http.StatusUnauthorized, want: VerificationUnverified, category: "invalid_credentials"},
+		{status: http.StatusForbidden, want: VerificationUnknown, category: "authorization"},
+		{status: http.StatusUnprocessableEntity, want: VerificationUnknown, category: "authorization"},
+		{status: http.StatusTooManyRequests, want: VerificationUnknown, category: "rate_limited"},
+	} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: test.status, Body: io.NopCloser(strings.NewReader(`{"private":"data"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verifyRootly(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != test.want || result.ErrorCategory != test.category || result.Response != "" {
+			t.Fatalf("status %d result=%#v", test.status, result)
 		}
 	}
 }
@@ -3195,7 +3280,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"testingbot-secret", "testingbot secret=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"abstract-api-key", "abstract api_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"alchemy-api-key", "alchemy api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
-		{"apify-token", "apify token=apify_api_" + strings.Repeat("A", 40), "apify_api_" + strings.Repeat("A", 40)},
+		{"apify-token", "apify token=apify_api_" + strings.Repeat("A", 36), "apify_api_" + strings.Repeat("A", 36)},
 		{"apilayer-key", "apilayer access_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"bannerbear-api-key", "bannerbear api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"baremetrics-api-key", "baremetrics api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},

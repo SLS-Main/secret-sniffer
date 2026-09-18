@@ -915,7 +915,9 @@ func verifyShodan(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyApify(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.apify.com/v2/users/me")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.apify.com/v2/users/me", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONIdentityRequest(ctx, req, "id")
 }
 
 func verifyCloudsmith(ctx context.Context, secret string) VerificationResult {
@@ -1106,7 +1108,26 @@ func verifyRootly(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.rootly.com/v1/users?page[number]=1&page[size]=1", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
 	req.Header.Set("Accept", "application/vnd.api+json")
-	return verifyHTTPRequest(ctx, req)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300 && jsonHasAnyField(body, "data"):
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode >= 200 && statusCode < 300:
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden || statusCode == http.StatusUnprocessableEntity:
+			return unknownVerificationResult("authorization", "provider could not authorize this key type"), true
+		case statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyIncidentIO(ctx context.Context, secret string) VerificationResult {
