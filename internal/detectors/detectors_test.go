@@ -2207,14 +2207,164 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 512,
-		VerificationSafetyReadOnly:   37,
+		VerificationSafetyUnreviewed: 506,
+		VerificationSafetyReadOnly:   43,
 		VerificationSafetyAuthOnly:   6,
 		VerificationSafetyUnsafe:     12,
 	}
 	for safety, want := range expected {
 		if counts[safety] != want {
 			t.Fatalf("%s detector count=%d, want %d", safety, counts[safety], want)
+		}
+	}
+}
+
+func TestDistinctiveTokenVerifierSafetyPromotions(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"bitly-access-token":    VerificationSafetyReadOnly,
+		"shortcut-api-token":    VerificationSafetyReadOnly,
+		"todoist-api-token":     VerificationSafetyReadOnly,
+		"rebrandly-api-key":     VerificationSafetyReadOnly,
+		"fastly-personal-token": VerificationSafetyReadOnly,
+		"readme-api-key":        VerificationSafetyReadOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("promoted detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestDistinctiveTokenVerifierRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		host        string
+		path        string
+		header      string
+		headerValue string
+		response    string
+	}{
+		{name: "bitly", verify: verifyBitly, host: "api-ssl.bitly.com", path: "/v4/user", header: "Authorization", headerValue: "Bearer secret", response: `{"login":"user"}`},
+		{name: "shortcut", verify: verifyShortcut, host: "api.app.shortcut.com", path: "/api/v3/member", header: "Shortcut-Token", headerValue: "secret", response: `{"id":"user"}`},
+		{name: "todoist", verify: verifyTodoist, host: "api.todoist.com", path: "/api/v1/user", header: "Authorization", headerValue: "Bearer secret", response: `{"id":"user"}`},
+		{name: "rebrandly", verify: verifyRebrandly, host: "api.rebrandly.com", path: "/v1/account", header: "apikey", headerValue: "secret", response: `{"id":"account"}`},
+		{name: "fastly", verify: verifyFastly, host: "api.fastly.com", path: "/tokens/self", header: "Fastly-Key", headerValue: "secret", response: `{"id":"token","user_id":"user"}`},
+		{name: "readme", verify: verifyReadMe, host: "api.readme.com", path: "/v2/projects/me", header: "Authorization", headerValue: "Bearer secret", response: `{"data":{"uri":"/projects/me"}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.Header.Get(test.header) != test.headerValue {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestDistinctiveTokenVerifierInvalidContracts(t *testing.T) {
+	tests := []struct {
+		name   string
+		verify Verifier
+		status int
+	}{
+		{name: "fastly expired", verify: verifyFastly, status: http.StatusUnauthorized},
+		{name: "fastly invalid", verify: verifyFastly, status: http.StatusForbidden},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: test.status, Body: io.NopCloser(strings.NewReader(`{"private":"data"}`)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationUnverified || result.ErrorCategory != "invalid_credentials" || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name   string
+		verify Verifier
+	}{
+		{name: "bitly forbidden", verify: verifyBitly},
+		{name: "readme forbidden", verify: verifyReadMe},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"private":"data"}`)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationUnknown || result.ErrorCategory != "authorization" || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name     string
+		verify   Verifier
+		response string
+	}{
+		{name: "shortcut nested id", verify: verifyShortcut, response: `{"error":{"id":"not-a-member"}}`},
+		{name: "todoist wrong id type", verify: verifyTodoist, response: `{"id":true}`},
+		{name: "rebrandly nested id", verify: verifyRebrandly, response: `{"error":{"id":"not-an-account"}}`},
+		{name: "bitly nested login", verify: verifyBitly, response: `{"error":{"login":"not-a-user"}}`},
+		{name: "fastly missing user", verify: verifyFastly, response: `{"id":"token"}`},
+		{name: "readme scalar data", verify: verifyReadMe, response: `{"data":"error"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationUnknown || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestDistinctiveTokenDetectorFormatBoundaries(t *testing.T) {
+	tests := []struct {
+		id      string
+		valid   string
+		invalid []string
+	}{
+		{id: "bitly-access-token", valid: "bitly token=" + strings.Repeat("A", 40), invalid: []string{"bitly token=" + strings.Repeat("A", 39), "bitly token=" + strings.Repeat("A", 41)}},
+		{id: "shortcut-api-token", valid: "shortcut_token=123e4567-e89b-12d3-a456-426614174000", invalid: []string{"shortcut_token=123e4567-e89b-12d3-a456-42661417400", "shortcut_token=123e4567-e89b-12d3-a456-4266141740000"}},
+		{id: "todoist-api-token", valid: "todoist token=" + strings.Repeat("a", 40), invalid: []string{"todoist token=" + strings.Repeat("a", 39), "todoist token=" + strings.Repeat("a", 41)}},
+		{id: "fastly-personal-token", valid: "fastly token=" + strings.Repeat("A", 32), invalid: []string{"fastly token=" + strings.Repeat("A", 31), "fastly token=" + strings.Repeat("A", 33)}},
+		{id: "rebrandly-api-key", valid: "rebrandly api_key=" + strings.Repeat("A", 32), invalid: []string{"rebrandly api_key=" + strings.Repeat("A", 31), "rebrandly api_key=" + strings.Repeat("A", 33)}},
+		{id: "readme-api-key", valid: "rdme_" + strings.Repeat("a", 70), invalid: []string{"rdme_" + strings.Repeat("a", 69), "rdme_" + strings.Repeat("a", 71), "rdme_" + strings.Repeat("A", 70)}},
+	}
+	registry := map[string]Detector{}
+	for _, detector := range DefaultRegistry() {
+		registry[detector.Info().ID] = detector
+	}
+	for _, test := range tests {
+		detector := registry[test.id]
+		if detector == nil || len(detector.Detect([]byte(test.valid))) != 1 {
+			t.Fatalf("detector %q did not match valid format", test.id)
+		}
+		for _, invalid := range test.invalid {
+			if len(detector.Detect([]byte(invalid))) != 0 {
+				t.Fatalf("detector %q matched invalid format %q", test.id, invalid)
+			}
 		}
 	}
 }

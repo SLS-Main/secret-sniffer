@@ -711,30 +711,88 @@ func verifyResend(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyShortcut(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.app.shortcut.com/api/v3/member", "Shortcut-Token", "")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.app.shortcut.com/api/v3/member", nil)
+	req.Header.Set("Shortcut-Token", secret)
+	return verifyTopLevelStringIdentityRequest(ctx, req, "id")
 }
 
 func verifyTodoist(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.todoist.com/api/v1/user")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.todoist.com/api/v1/user", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyTopLevelStringIdentityRequest(ctx, req, "id")
 }
 
 func verifyFastly(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.fastly.com/tokens/self", "Fastly-Key", "")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.fastly.com/tokens/self", nil)
+	req.Header.Set("Fastly-Key", secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300 && jsonHasTopLevelStrings(body, "id", "user_id"):
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode >= 200 && statusCode < 300:
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyBitly(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api-ssl.bitly.com/v4/user", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden && strings.Contains(strings.ToLower(string(body)), "token") {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300 && jsonHasTopLevelStrings(body, "login"):
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode >= 200 && statusCode < 300:
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		case statusCode == http.StatusUnauthorized:
 			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider could not authorize verification"), true
+		case statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
 		}
-		return VerificationResult{}, false
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyReadMe(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.readme.com/v2/projects/me")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.readme.com/v2/projects/me", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300 && jsonNestedObjectHasString(body, "data", "uri", "subdomain"):
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode >= 200 && statusCode < 300:
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider could not authorize verification"), true
+		case statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyGoCardless(ctx context.Context, secret string) VerificationResult {
@@ -2248,7 +2306,9 @@ func verifyKoyeb(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyRebrandly(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.rebrandly.com/v1/account", "apikey", "")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.rebrandly.com/v1/account", nil)
+	req.Header.Set("apikey", secret)
+	return verifyTopLevelStringIdentityRequest(ctx, req, "id")
 }
 
 func verifyCoinAPI(ctx context.Context, secret string) VerificationResult {
@@ -6334,6 +6394,60 @@ func jsonHasAnyField(body []byte, fields ...string) bool {
 	}
 	for _, field := range fields {
 		if findJSONField(payload, field) {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyTopLevelStringIdentityRequest(ctx context.Context, req *http.Request, fields ...string) VerificationResult {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300 && jsonHasTopLevelStrings(body, fields...):
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode >= 200 && statusCode < 300:
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider could not authorize verification"), true
+		case statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
+}
+
+func jsonHasTopLevelStrings(body []byte, fields ...string) bool {
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return false
+	}
+	for _, field := range fields {
+		value, ok := payload[field].(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func jsonNestedObjectHasString(body []byte, object string, fields ...string) bool {
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return false
+	}
+	nested, ok := payload[object].(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, field := range fields {
+		if value, ok := nested[field].(string); ok && strings.TrimSpace(value) != "" {
 			return true
 		}
 	}
