@@ -437,18 +437,18 @@ func DefaultRegistry() []Detector {
 		NewRegex("pinecone-api-key", "Pinecone API Key", "critical", []string{"pcsk_"}, `\b(pcsk_[A-Za-z0-9]{5,6}_[A-Za-z0-9]{63})\b`, 1, verifyPinecone),
 		NewRegex("langsmith-api-key", "LangSmith API Key", "critical", []string{"lsv2_pt_", "lsv2_sk_"}, `\b(lsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10})\b`, 1, verifyLangSmith),
 		NewRegex("langfuse-secret-key", "Langfuse Secret Key", "critical", []string{"sk-lf-"}, `\b(sk-lf-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, nil),
-		NewRegex("elevenlabs-api-key", "ElevenLabs API Key", "critical", []string{"elevenlabs", "xi-api-key", "xi_api_key"}, `\b(sk_[a-f0-9]{48})\b`, 1, verifyElevenLabs),
+		NewReadOnlyRegex("elevenlabs-api-key", "ElevenLabs API Key", "critical", []string{"elevenlabs", "xi-api-key", "xi_api_key"}, `\b(sk_[a-f0-9]{48})\b`, 1, verifyElevenLabs),
 		NewRegex("xai-api-key", "xAI API Key", "critical", []string{"xai-"}, `\b(xai-[0-9A-Za-z_]{80})\b`, 1, verifyXAI),
-		NewRegex("cohere-api-key", "Cohere API Key", "critical", []string{"cohere", "api.cohere.ai"}, `(?i)\b(?:cohere|api\.cohere\.ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyCohere),
-		NewRegex("mistral-api-key", "Mistral API Key", "critical", []string{"mistral", "api.mistral.ai"}, `(?i)\b(?:mistral|api\.mistral\.ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyMistral),
-		NewRegex("togetherai-api-key", "Together AI API Key", "critical", []string{"together.ai", "api.together.xyz"}, `(?i)\b(?:together\.ai|api\.together\.xyz|together[_-]?ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyTogetherAI),
-		NewRegex("fireworksai-api-key", "Fireworks AI API Key", "critical", []string{"fireworks.ai", "api.fireworks.ai"}, `(?i)\b(?:fireworks\.ai|api\.fireworks\.ai|fireworks[_-]?ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyFireworksAI),
+		NewReadOnlyRegex("cohere-api-key", "Cohere API Key", "critical", []string{"cohere", "api.cohere.ai"}, `(?i)\b(?:cohere|api\.cohere\.ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyCohere),
+		NewReadOnlyRegex("mistral-api-key", "Mistral API Key", "critical", []string{"mistral", "api.mistral.ai"}, `(?i)\b(?:mistral|api\.mistral\.ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyMistral),
+		NewReadOnlyRegex("togetherai-api-key", "Together AI API Key", "critical", []string{"together.ai", "api.together.xyz"}, `(?i)\b(?:together\.ai|api\.together\.xyz|together[_-]?ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyTogetherAI),
+		NewReadOnlyRegex("fireworksai-api-key", "Fireworks AI API Key", "critical", []string{"fireworks.ai", "api.fireworks.ai"}, `(?i)\b(?:fireworks\.ai|api\.fireworks\.ai|fireworks[_-]?ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyFireworksAI),
 		NewRegex("voyageai-api-key", "Voyage AI API Key", "critical", []string{"voyageai", "api.voyageai.com"}, `(?i)\b(?:voyageai|voyage[_-]?ai|api\.voyageai\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyVoyageAI),
-		NewRegex("perplexity-api-key", "Perplexity API Key", "critical", []string{"pplx-", "api.perplexity.ai"}, `(?i)\b(?:perplexity|api\.perplexity\.ai|pplx-)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?((?:pplx-)?[A-Za-z0-9._-]{32,256})\b`, 1, verifyPerplexity),
-		NewRegex("openrouter-api-key", "OpenRouter API Key", "critical", []string{"openrouter", "openrouter.ai", "sk-or-"}, `(?i)\b(?:openrouter|openrouter\.ai|sk-or-)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?((?:sk-or-[A-Za-z0-9._-]{24,256}|[A-Za-z0-9._-]{32,256}))\b`, 1, verifyOpenRouter),
+		NewReadOnlyRegex("perplexity-api-key", "Perplexity API Key", "critical", []string{"pplx-", "api.perplexity.ai"}, `(?i)\b(?:perplexity|api\.perplexity\.ai|pplx-)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?((?:pplx-)?[A-Za-z0-9._-]{32,256})\b`, 1, verifyPerplexity),
+		NewReadOnlyRegex("openrouter-api-key", "OpenRouter API Key", "critical", []string{"openrouter", "openrouter.ai", "sk-or-"}, `(?i)\b(?:openrouter|openrouter\.ai|sk-or-)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?((?:sk-or-[A-Za-z0-9._-]{24,256}|[A-Za-z0-9._-]{32,256}))\b`, 1, verifyOpenRouter),
 		NewRegex("ai21-api-key", "AI21 API Key", "critical", []string{"ai21", "api.ai21.com"}, `(?i)\b(?:ai21|api\.ai21\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyAI21),
-		NewRegex("cerebras-api-key", "Cerebras API Key", "critical", []string{"cerebras", "api.cerebras.ai"}, `(?i)\b(?:cerebras|api\.cerebras\.ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyCerebras),
-		NewRegex("baseten-api-key", "Baseten API Key", "critical", []string{"baseten", "model-apis.baseten.co"}, `(?i)\b(?:baseten|model-apis\.baseten\.co|app\.baseten\.co)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyBaseten),
+		NewReadOnlyRegex("cerebras-api-key", "Cerebras API Key", "critical", []string{"cerebras", "api.cerebras.ai"}, `(?i)\b(?:cerebras|api\.cerebras\.ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyCerebras),
+		NewReadOnlyRegex("baseten-api-key", "Baseten API Key", "critical", []string{"baseten", "model-apis.baseten.co"}, `(?i)\b(?:baseten|model-apis\.baseten\.co|app\.baseten\.co)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyBaseten),
 		NewRegex("runpod-api-key", "Runpod API Key", "critical", []string{"runpod", "api.runpod.ai"}, `(?i)\b(?:runpod|api\.runpod\.ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyRunpod),
 		NewRegex("modal-api-token", "Modal API Token", "critical", []string{"modal", "api.modal.com"}, `(?i)\b(?:modal|api\.modal\.com|modal\.com)\b[\s\S]{0,160}\b(?:token[_-]?id|token[_-]?secret|api[_-]?token|api[_-]?key|authorization|bearer|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("fal-ai-api-key", "fal.ai API Key", "critical", []string{"fal.ai", "fal_key"}, `(?i)\b(?:fal\.ai|api\.fal\.ai|fal[_-]?key|fal[_-]?ai)\b[\s\S]{0,160}\b(?:api[_-]?key|authorization|bearer|token|key)\b\s*[:=]\s*['\"]?([0-9a-f-]{36}:[A-Za-z0-9_-]{24,128})\b`, 1, verifyFalAI),
@@ -2141,6 +2141,8 @@ func verifyHTTPRequest(ctx context.Context, req *http.Request) VerificationResul
 	return verifyHTTPRequestWithClassifier(ctx, req, nil)
 }
 
+const maxVerificationResponseBytes = 1024 * 1024
+
 type verificationResponseClassifier func(statusCode int, body []byte) (VerificationResult, bool)
 
 func verifyHTTPRequestWithClassifier(ctx context.Context, req *http.Request, classifier verificationResponseClassifier) VerificationResult {
@@ -2159,7 +2161,7 @@ func verifyHTTPRequestWithClassifier(ctx context.Context, req *http.Request, cla
 		return VerificationResult{Status: VerificationUnknown, ErrorCategory: "network", Message: "provider request failed"}
 	}
 	defer resp.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxVerificationResponseBytes))
 	response := truncateVerificationResponse(string(body))
 	if readErr != nil {
 		return VerificationResult{Status: VerificationUnknown, ErrorCategory: "network", Message: "provider response could not be read", Response: response}

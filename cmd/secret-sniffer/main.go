@@ -76,6 +76,7 @@ func main() {
 	var showVersion bool
 	var listDetectors bool
 	var truffleHogParity bool
+	var verificationAudit bool
 	var githubAccessible bool
 	var summaryOnly bool
 	var scanResume bool
@@ -211,6 +212,7 @@ func main() {
 	flag.BoolVar(&summaryOnly, "summary-only", false, "discover GitHub orgs/repositories, write summary, and exit without scanning")
 	flag.BoolVar(&listDetectors, "list-detectors", false, "print detector metadata as JSON and exit")
 	flag.BoolVar(&truffleHogParity, "trufflehog-parity", false, "print tracked TruffleHog detector parity mappings as JSON and exit")
+	flag.BoolVar(&verificationAudit, "verification-audit", false, "print verification safety audit inventory as JSON and exit")
 	flag.BoolVar(&failOnFindings, "fail-on-findings", false, "exit with status 2 when findings are present")
 	flag.BoolVar(&failOnScanErrors, "fail-on-scan-errors", false, "exit with status 1 when any selected target fails to scan")
 	flag.BoolVar(&redact, "redact", false, "omit raw secrets from machine-readable output")
@@ -286,7 +288,7 @@ func main() {
 	defer stop()
 	start := time.Now()
 	console := newConsole(quiet, noColor)
-	if progressStatePath != "" && !listDetectors && !truffleHogParity {
+	if progressStatePath != "" && !listDetectors && !truffleHogParity && !verificationAudit {
 		reporter, err := progress.New(progressStatePath, progressInterval, progressSourceType(s3Buckets, s3AllBuckets, azureBlobContainers, azureBlobAllContainers, azureDevOpsOrgs, githubOrgs, githubEnterprise, githubAccessible, repoListPath, cfg.GitHistory, cfg.Target), progressTarget(s3Buckets, s3AllBuckets, azureBlobContainers, azureBlobAllContainers, azureDevOpsOrgs, githubOrgs, githubEnterprise, githubAccessible, repoListPath, cfg.Target), func(err error) {
 			console.warning("Progress state write failed: %v", err)
 		})
@@ -304,6 +306,12 @@ func main() {
 	}
 
 	registry := detectors.DefaultRegistry()
+	if verificationAudit {
+		if err := output.WriteJSON(os.Stdout, detectors.BuildVerificationAuditReport(registry)); err != nil {
+			fatal(err)
+		}
+		return
+	}
 	if customPath != "" {
 		custom, err := detectors.LoadCustomFile(customPath)
 		if err != nil {
@@ -331,7 +339,6 @@ func main() {
 		}
 		return
 	}
-
 	if cfg.Workers < 1 {
 		cfg.Workers = 1
 	}

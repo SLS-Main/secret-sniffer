@@ -2051,7 +2051,7 @@ func verifyVoyageAI(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPerplexity(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.perplexity.ai/router/v1/models")
+	return verifyBearerJSONCollection(ctx, secret, "https://api.perplexity.ai/router/v1/models", "data")
 }
 
 func verifyAI21(ctx context.Context, secret string) VerificationResult {
@@ -6334,7 +6334,9 @@ func verifyPinecone(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyElevenLabs(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.elevenlabs.io/v1/user", "xi-api-key", "")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.elevenlabs.io/v1/user", nil)
+	req.Header.Set("xi-api-key", secret)
+	return verifyJSONReadRequest(ctx, req, func(body []byte) bool { return jsonNestedObjectHasString(body, "subscription", "tier") })
 }
 
 func verifyXAI(ctx context.Context, secret string) VerificationResult {
@@ -6342,31 +6344,35 @@ func verifyXAI(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCohere(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.cohere.com/v1/models")
+	return verifyBearerJSONCollection(ctx, secret, "https://api.cohere.com/v1/models", "models")
 }
 
 func verifyMistral(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.mistral.ai/v1/models")
+	return verifyBearerJSONCollection(ctx, secret, "https://api.mistral.ai/v1/models", "data")
 }
 
 func verifyTogetherAI(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.together.ai/v1/models")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.together.ai/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequest(ctx, req, jsonIsTopLevelArray)
 }
 
 func verifyFireworksAI(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.fireworks.ai/v1/accounts/fireworks/models?pageSize=1")
+	return verifyBearerJSONCollection(ctx, secret, "https://api.fireworks.ai/v1/accounts/fireworks/models?pageSize=1", "models")
 }
 
 func verifyCerebras(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.cerebras.ai/v1/models")
+	return verifyBearerJSONCollection(ctx, secret, "https://api.cerebras.ai/v1/models", "data")
 }
 
 func verifyBaseten(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.baseten.co/v1/models", "Authorization", "Api-Key ")
+	return verifyBearerJSONCollection(ctx, secret, "https://api.baseten.co/v1/models", "models")
 }
 
 func verifyOpenRouter(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://openrouter.ai/api/v1/auth/key")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://openrouter.ai/api/v1/key", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequest(ctx, req, func(body []byte) bool { return jsonNestedObjectHasString(body, "data", "label") })
 }
 
 func invalidCredentialResult() VerificationResult {
@@ -6423,6 +6429,35 @@ func verifyTopLevelStringIdentityRequest(ctx context.Context, req *http.Request,
 	return result
 }
 
+func verifyJSONReadRequest(ctx context.Context, req *http.Request, valid func([]byte) bool) VerificationResult {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300 && valid(body):
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode >= 200 && statusCode < 300:
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		case statusCode == http.StatusUnauthorized:
+			return unknownVerificationResult("authorization", "credential may require different provider context or permissions"), true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider could not authorize verification"), true
+		case statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider rate limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyBearerJSONCollection(ctx context.Context, secret, endpoint, field string) VerificationResult {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequest(ctx, req, func(body []byte) bool { return jsonHasTopLevelArray(body, field) })
+}
+
 func jsonHasTopLevelStrings(body []byte, fields ...string) bool {
 	var payload map[string]any
 	if json.Unmarshal(body, &payload) != nil {
@@ -6435,6 +6470,29 @@ func jsonHasTopLevelStrings(body []byte, fields ...string) bool {
 		}
 	}
 	return true
+}
+
+func jsonHasTopLevelArray(body []byte, field string) bool {
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return false
+	}
+	_, ok := payload[field].([]any)
+	return ok
+}
+
+func jsonIsTopLevelArray(body []byte) bool {
+	var payload []any
+	return json.Unmarshal(body, &payload) == nil && payload != nil
+}
+
+func jsonHasTopLevelObject(body []byte, field string) bool {
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return false
+	}
+	value, ok := payload[field].(map[string]any)
+	return ok && value != nil
 }
 
 func jsonNestedObjectHasString(body []byte, object string, fields ...string) bool {

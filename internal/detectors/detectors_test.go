@@ -2207,8 +2207,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 506,
-		VerificationSafetyReadOnly:   43,
+		VerificationSafetyUnreviewed: 497,
+		VerificationSafetyReadOnly:   52,
 		VerificationSafetyAuthOnly:   6,
 		VerificationSafetyUnsafe:     12,
 	}
@@ -2216,6 +2216,143 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		if counts[safety] != want {
 			t.Fatalf("%s detector count=%d, want %d", safety, counts[safety], want)
 		}
+	}
+}
+
+func TestVerificationAuditReportCoversRegistryAndFirstBatch(t *testing.T) {
+	report := BuildVerificationAuditReport(DefaultRegistry())
+	if report.Total != 1102 || report.Reviewed != 70 || report.RequiresHardening != 38 || report.Blocked != 3 || report.PendingReview != 456 || report.NoVerifier != 535 {
+		t.Fatalf("unexpected verification audit counts: %#v", report)
+	}
+	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
+		t.Fatalf("verification audit accounting mismatch: %#v", report)
+	}
+	if len(verificationAuditAssessments) != 50 {
+		t.Fatalf("first audit batch contains %d entries, want 50", len(verificationAuditAssessments))
+	}
+	seen := map[string]VerificationAuditStatus{}
+	for _, entry := range report.Entries {
+		if entry.AuditBatch == 1 {
+			seen[entry.ID] = entry.AuditStatus
+		}
+	}
+	for id, assessment := range verificationAuditAssessments {
+		want := assessment.Status
+		for _, entry := range report.Entries {
+			if entry.ID == id && entry.VerificationSafety != VerificationSafetyUnreviewed {
+				want = VerificationAuditReviewed
+				break
+			}
+		}
+		if seen[id] != want {
+			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
+		}
+	}
+}
+
+func TestFirstLargeBatchSafetyPromotions(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"elevenlabs-api-key":  VerificationSafetyReadOnly,
+		"cohere-api-key":      VerificationSafetyReadOnly,
+		"mistral-api-key":     VerificationSafetyReadOnly,
+		"togetherai-api-key":  VerificationSafetyReadOnly,
+		"fireworksai-api-key": VerificationSafetyReadOnly,
+		"perplexity-api-key":  VerificationSafetyReadOnly,
+		"openrouter-api-key":  VerificationSafetyReadOnly,
+		"cerebras-api-key":    VerificationSafetyReadOnly,
+		"baseten-api-key":     VerificationSafetyReadOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("promoted detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestFirstLargeBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		host        string
+		path        string
+		header      string
+		headerValue string
+		response    string
+	}{
+		{name: "elevenlabs", verify: verifyElevenLabs, host: "api.elevenlabs.io", path: "/v1/user", header: "xi-api-key", headerValue: "secret", response: `{"subscription":{"tier":"free"}}`},
+		{name: "cohere", verify: verifyCohere, host: "api.cohere.com", path: "/v1/models", header: "Authorization", headerValue: "Bearer secret", response: `{"models":[]}`},
+		{name: "mistral", verify: verifyMistral, host: "api.mistral.ai", path: "/v1/models", header: "Authorization", headerValue: "Bearer secret", response: `{"data":[]}`},
+		{name: "together", verify: verifyTogetherAI, host: "api.together.ai", path: "/v1/models", header: "Authorization", headerValue: "Bearer secret", response: `[]`},
+		{name: "fireworks", verify: verifyFireworksAI, host: "api.fireworks.ai", path: "/v1/accounts/fireworks/models", header: "Authorization", headerValue: "Bearer secret", response: `{"models":[]}`},
+		{name: "perplexity", verify: verifyPerplexity, host: "api.perplexity.ai", path: "/router/v1/models", header: "Authorization", headerValue: "Bearer secret", response: `{"data":[]}`},
+		{name: "openrouter", verify: verifyOpenRouter, host: "openrouter.ai", path: "/api/v1/key", header: "Authorization", headerValue: "Bearer secret", response: `{"data":{"label":"key"}}`},
+		{name: "cerebras", verify: verifyCerebras, host: "api.cerebras.ai", path: "/v1/models", header: "Authorization", headerValue: "Bearer secret", response: `{"data":[]}`},
+		{name: "baseten", verify: verifyBaseten, host: "api.baseten.co", path: "/v1/models", header: "Authorization", headerValue: "Bearer secret", response: `{"models":[]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.Header.Get(test.header) != test.headerValue {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				if test.name == "fireworks" && req.URL.Query().Get("pageSize") != "1" {
+					t.Fatalf("unexpected Fireworks query: %s", req.URL.RawQuery)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestFirstLargeBatchClassifiesResponsesBeyondFourKiB(t *testing.T) {
+	body := `{"data":["` + strings.Repeat("x", 5000) + `"]}`
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyMistral(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || len(result.Response) > 100 {
+		t.Fatalf("unexpected large response result: %#v", result)
+	}
+}
+
+func TestFirstLargeBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyElevenLabs, verifyCohere, verifyMistral, verifyTogetherAI, verifyFireworksAI, verifyPerplexity, verifyOpenRouter, verifyCerebras, verifyBaseten} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"error":{"data":[]}}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`null`)), Header: make(http.Header)}, nil
+	})}
+	if result := verifyTogetherAI(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnknown {
+		t.Fatalf("null Together response result=%#v", result)
+	}
+}
+
+func TestFirstLargeBatchKeepsUnauthorizedContextAmbiguous(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"error":"unauthorized"}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyCohere(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnknown || result.ErrorCategory != "authorization" || result.Response != "" {
+		t.Fatalf("unexpected unauthorized batch result: %#v", result)
 	}
 }
 
