@@ -814,7 +814,8 @@ func verifyGoCardless(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
 	req.Header.Set("GoCardless-Version", "2015-07-06")
-	return verifyHTTPRequest(ctx, req)
+	req.Header.Set("Accept", "application/json")
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool { return jsonHasTopLevelArray(body, "creditors") })
 }
 
 func verifyPipedrive(ctx context.Context, secret string) VerificationResult {
@@ -1206,11 +1207,23 @@ func verifyRootly(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyIncidentIO(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.incident.io/v1/identity")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.incident.io/v1/identity", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			Identity struct {
+				Name         string `json:"name"`
+				DashboardURL string `json:"dashboard_url"`
+			} `json:"identity"`
+		}
+		return json.Unmarshal(body, &response) == nil && response.Identity.Name != "" && response.Identity.DashboardURL != ""
+	})
 }
 
 func verifyFireHydrant(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.firehydrant.io/v1/ping")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.firehydrant.io/v1/ping", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool { return jsonHasTopLevelStrings(body, "response") })
 }
 
 func verifySocketDev(ctx context.Context, secret string) VerificationResult {
@@ -1220,11 +1233,15 @@ func verifySocketDev(ctx context.Context, secret string) VerificationResult {
 func verifySemgrep(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://semgrep.dev/api/v1/deployments", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized {
-			return unknownVerificationResult("authorization", "token may lack Web API access"), true
+	return verifyJSONReadRequest(ctx, req, func(body []byte) bool {
+		var response struct {
+			Deployments []struct {
+				ID   int64  `json:"id"`
+				Name string `json:"name"`
+				Slug string `json:"slug"`
+			} `json:"deployments"`
 		}
-		return VerificationResult{}, false
+		return json.Unmarshal(body, &response) == nil && len(response.Deployments) == 1 && response.Deployments[0].ID > 0 && response.Deployments[0].Name != "" && response.Deployments[0].Slug != ""
 	})
 }
 
@@ -1860,7 +1877,17 @@ func verifyPodio(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyGumroad(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.gumroad.com/v2/user")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.gumroad.com/v2/user", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			Success bool `json:"success"`
+			User    struct {
+				UserID string `json:"user_id"`
+			} `json:"user"`
+		}
+		return json.Unmarshal(body, &response) == nil && response.Success && response.User.UserID != ""
+	})
 }
 
 func verifyPDFShift(ctx context.Context, secret string) VerificationResult {
@@ -2049,12 +2076,27 @@ func verifyAPIFlash(ctx context.Context, secret string) VerificationResult {
 func verifyIPInfo(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ipinfo.io/lite/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "unknown token") {
-			return invalidCredentialResult(), true
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		var response struct {
+			IP    string `json:"ip"`
+			Error struct {
+				Title string `json:"title"`
+			} `json:"error"`
 		}
-		return VerificationResult{}, false
+		if json.Unmarshal(body, &response) != nil {
+			return verifyJSONReadClassification(statusCode, body)
+		}
+		switch {
+		case statusCode >= 200 && statusCode < 300 && response.IP != "":
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode == http.StatusForbidden && strings.EqualFold(response.Error.Title, "Unknown token"):
+			return invalidCredentialResult(), true
+		default:
+			return verifyJSONReadClassification(statusCode, body)
+		}
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyBaremetrics(ctx context.Context, secret string) VerificationResult {
@@ -2334,7 +2376,7 @@ func verifyCoinAPI(ctx context.Context, secret string) VerificationResult {
 func verifyPinata(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pinata.cloud/data/testAuthentication", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
 		if statusCode >= 200 && statusCode < 300 {
 			var response struct {
 				Message string `json:"message"`
@@ -2342,12 +2384,18 @@ func verifyPinata(ctx context.Context, secret string) VerificationResult {
 			if json.Unmarshal(body, &response) != nil || response.Message != "Congratulations! You are communicating with the Pinata API!" {
 				return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
 			}
+			return VerificationResult{Status: VerificationVerified}, true
 		}
-		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "INVALID_CREDENTIALS") {
+		if statusCode == http.StatusUnauthorized {
+			if containsAnyFold(string(body), "INVALID_CREDENTIALS") {
+				return invalidCredentialResult(), true
+			}
 			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
 		}
-		return VerificationResult{}, false
+		return verifyJSONReadClassification(statusCode, body)
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyTheOddsAPI(ctx context.Context, secret string) VerificationResult {
@@ -3314,7 +3362,25 @@ func verifyPositionstack(ctx context.Context, secret string) VerificationResult 
 }
 
 func verifyFinnhub(ctx context.Context, secret string) VerificationResult {
-	return verifyQueryAPI(ctx, "https://finnhub.io/api/v1/quote?symbol=AAPL&token="+url.QueryEscape(secret), []string{"c", "t"}, "invalid api key")
+	endpoint := "https://finnhub.io/api/v1/quote?symbol=AAPL&token=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if containsAnyFold(string(body), "invalid api key") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 {
+			var response struct {
+				Current   *float64 `json:"c"`
+				Timestamp *int64   `json:"t"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.Current != nil && response.Timestamp != nil {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+		}
+		return verifyJSONReadClassification(statusCode, body)
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyTradier(ctx context.Context, secret string) VerificationResult {
@@ -3337,18 +3403,27 @@ func verifyWorldWeather(ctx context.Context, secret string) VerificationResult {
 func verifyFinancialModelingPrep(ctx context.Context, secret string) VerificationResult {
 	endpoint := "https://financialmodelingprep.com/stable/available-exchanges?apikey=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
 		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
 			return VerificationResult{}, false
 		}
 		if containsAnyFold(string(body), "invalid api key") {
 			return invalidCredentialResult(), true
 		}
-		if statusCode >= 200 && statusCode < 300 && jsonArray(body) {
-			return VerificationResult{Status: VerificationVerified}, true
+		if statusCode >= 200 && statusCode < 300 {
+			var response []struct {
+				Exchange string `json:"exchange"`
+				Symbol   string `json:"symbol"`
+				Name     string `json:"name"`
+			}
+			if json.Unmarshal(body, &response) == nil && len(response) > 0 && response[0].Name != "" && (response[0].Exchange != "" || response[0].Symbol != "") {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
 		}
 		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyCurrencyFreaks(ctx context.Context, secret string) VerificationResult {
@@ -4772,9 +4847,12 @@ func verifySalesflare(ctx context.Context, secret string) VerificationResult {
 func verifyIlert(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ilert.com/api/users/current", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "provided credentials are invalid", "key_error"))
-	result.Response = ""
-	return result
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			ID int64 `json:"id"`
+		}
+		return json.Unmarshal(body, &response) == nil && response.ID > 0
+	})
 }
 
 func verifyAbyssale(ctx context.Context, secret string) VerificationResult {
@@ -6478,6 +6556,20 @@ func verifyJSONReadRequest(ctx context.Context, req *http.Request, valid func([]
 	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
 		if statusCode >= 200 && statusCode < 300 && valid(body) {
 			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(statusCode, body)
+	})
+	result.Response = ""
+	return result
+}
+
+func verifyJSONReadRequestWithInvalidUnauthorized(ctx context.Context, req *http.Request, valid func([]byte) bool) VerificationResult {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode >= 200 && statusCode < 300 && valid(body) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if statusCode == http.StatusUnauthorized {
+			return invalidCredentialResult(), true
 		}
 		return verifyJSONReadClassification(statusCode, body)
 	})

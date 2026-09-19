@@ -2207,10 +2207,10 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 469,
-		VerificationSafetyReadOnly:   75,
-		VerificationSafetyAuthOnly:   11,
-		VerificationSafetyUnsafe:     12,
+		VerificationSafetyUnreviewed: 447,
+		VerificationSafetyReadOnly:   80,
+		VerificationSafetyAuthOnly:   14,
+		VerificationSafetyUnsafe:     26,
 	}
 	for safety, want := range expected {
 		if counts[safety] != want {
@@ -2221,14 +2221,14 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 98 || report.RequiresHardening != 102 || report.Blocked != 11 || report.PendingReview != 356 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 120 || report.RequiresHardening != 126 || report.Blocked != 15 || report.PendingReview != 306 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
 		t.Fatalf("verification audit accounting mismatch: %#v", report)
 	}
-	if len(verificationAuditAssessments) != 150 {
-		t.Fatalf("audit manifest contains %d assessed entries, want 150", len(verificationAuditAssessments))
+	if len(verificationAuditAssessments) != 200 {
+		t.Fatalf("audit manifest contains %d assessed entries, want 200", len(verificationAuditAssessments))
 	}
 	seen := map[string]VerificationAuditStatus{}
 	for _, entry := range report.Entries {
@@ -2250,6 +2250,141 @@ func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T)
 		if seen[id] != want {
 			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
 		}
+	}
+}
+
+func TestFourthLargeBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"ipinfo-token":                  VerificationSafetyReadOnly,
+		"financialmodelingprep-api-key": VerificationSafetyUnsafe,
+		"finnhub-api-key":               VerificationSafetyUnsafe,
+		"pinata-jwt":                    VerificationSafetyAuthOnly,
+		"incidentio-api-key":            VerificationSafetyAuthOnly,
+		"firehydrant-api-key":           VerificationSafetyAuthOnly,
+		"ilert-api-key":                 VerificationSafetyReadOnly,
+		"semgrep-app-token":             VerificationSafetyReadOnly,
+		"gocardless-access-token":       VerificationSafetyReadOnly,
+		"gumroad-access-token":          VerificationSafetyReadOnly,
+		"coinlayer-api-key":             VerificationSafetyUnsafe,
+		"worldcoinindex-api-key":        VerificationSafetyUnsafe,
+		"fixerio-api-key":               VerificationSafetyUnsafe,
+		"currencylayer-api-key":         VerificationSafetyUnsafe,
+		"exchangerate-api-key":          VerificationSafetyUnsafe,
+		"exchangeratesapi-api-key":      VerificationSafetyUnsafe,
+		"currencyfreaks-api-key":        VerificationSafetyUnsafe,
+		"marketstack-api-key":           VerificationSafetyUnsafe,
+		"vatlayer-api-key":              VerificationSafetyUnsafe,
+		"positionstack-api-key":         VerificationSafetyUnsafe,
+		"geocodio-api-key":              VerificationSafetyUnsafe,
+		"stormglass-api-key":            VerificationSafetyUnsafe,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestFourthLargeBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		secret      string
+		host        string
+		path        string
+		header      string
+		headerValue string
+		query       string
+		response    string
+	}{
+		{name: "ipinfo", verify: verifyIPInfo, secret: "secret", host: "api.ipinfo.io", path: "/lite/me", header: "Authorization", headerValue: "Bearer secret", response: `{"ip":"192.0.2.1"}`},
+		{name: "financial-modeling-prep", verify: verifyFinancialModelingPrep, secret: "secret", host: "financialmodelingprep.com", path: "/stable/available-exchanges", query: "apikey=secret", response: `[{"exchange":"NASDAQ","name":"Nasdaq"}]`},
+		{name: "finnhub", verify: verifyFinnhub, secret: "secret", host: "finnhub.io", path: "/api/v1/quote", query: "symbol=AAPL&token=secret", response: `{"c":1,"t":1}`},
+		{name: "pinata", verify: verifyPinata, secret: "secret", host: "api.pinata.cloud", path: "/data/testAuthentication", header: "Authorization", headerValue: "Bearer secret", response: `{"message":"Congratulations! You are communicating with the Pinata API!"}`},
+		{name: "incidentio", verify: verifyIncidentIO, secret: "secret", host: "api.incident.io", path: "/v1/identity", header: "Authorization", headerValue: "Bearer secret", response: `{"identity":{"name":"key","dashboard_url":"https://app.incident.io"}}`},
+		{name: "firehydrant", verify: verifyFireHydrant, secret: "secret", host: "api.firehydrant.io", path: "/v1/ping", header: "Authorization", headerValue: "Bearer secret", response: `{"response":"pong"}`},
+		{name: "ilert", verify: verifyIlert, secret: "secret", host: "api.ilert.com", path: "/api/users/current", header: "Authorization", headerValue: "Bearer secret", response: `{"id":1}`},
+		{name: "semgrep", verify: verifySemgrep, secret: "secret", host: "semgrep.dev", path: "/api/v1/deployments", header: "Authorization", headerValue: "Bearer secret", response: `{"deployments":[{"id":1,"name":"Example","slug":"example"}]}`},
+		{name: "gocardless", verify: verifyGoCardless, secret: "sandbox_secret", host: "api-sandbox.gocardless.com", path: "/creditors", header: "Authorization", headerValue: "Bearer sandbox_secret", query: "limit=1", response: `{"creditors":[]}`},
+		{name: "gumroad", verify: verifyGumroad, secret: "secret", host: "api.gumroad.com", path: "/v2/user", header: "Authorization", headerValue: "Bearer secret", response: `{"success":true,"user":{"user_id":"user"}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.query || (test.header != "" && req.Header.Get(test.header) != test.headerValue) {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				if test.name == "gocardless" && (req.Header.Get("GoCardless-Version") != "2015-07-06" || req.Header.Get("Accept") != "application/json") {
+					t.Fatalf("unexpected GoCardless headers: %#v", req.Header)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), test.secret)
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestFourthLargeBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyIPInfo, verifyFinancialModelingPrep, verifyFinnhub, verifyPinata, verifyIncidentIO, verifyFireHydrant, verifyIlert, verifySemgrep, verifyGoCardless, verifyGumroad} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestFourthLargeBatchStructuredRejections(t *testing.T) {
+	tests := []struct {
+		verify Verifier
+		status int
+		body   string
+	}{
+		{verify: verifyIPInfo, status: http.StatusForbidden, body: `{"error":{"title":"Unknown token"}}`},
+		{verify: verifyPinata, status: http.StatusUnauthorized, body: `{"error":"INVALID_CREDENTIALS"}`},
+		{verify: verifyFinancialModelingPrep, status: http.StatusUnauthorized, body: `{"error":"Invalid API KEY"}`},
+		{verify: verifyFinnhub, status: http.StatusUnauthorized, body: `{"error":"Invalid API key"}`},
+	}
+	for _, test := range tests {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: test.status, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+		})}
+		result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnverified || result.Response != "" {
+			t.Fatalf("structured rejection result=%#v", result)
+		}
+	}
+}
+
+func TestFourthLargeBatchDefinitiveUnauthorizedResponses(t *testing.T) {
+	for _, verify := range []Verifier{verifyIncidentIO, verifyFireHydrant, verifyIlert, verifyGoCardless, verifyGumroad} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"error":"invalid"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnverified || result.Response != "" {
+			t.Fatalf("unauthorized result=%#v", result)
+		}
+	}
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"error":"web_api_disabled"}`)), Header: make(http.Header)}, nil
+	})}
+	if result := verifySemgrep(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnknown || result.Response != "" {
+		t.Fatalf("Semgrep authorization result=%#v", result)
 	}
 }
 
