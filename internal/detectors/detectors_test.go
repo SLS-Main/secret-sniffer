@@ -2207,9 +2207,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 489,
-		VerificationSafetyReadOnly:   60,
-		VerificationSafetyAuthOnly:   6,
+		VerificationSafetyUnreviewed: 479,
+		VerificationSafetyReadOnly:   69,
+		VerificationSafetyAuthOnly:   7,
 		VerificationSafetyUnsafe:     12,
 	}
 	for safety, want := range expected {
@@ -2221,18 +2221,18 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndFirstBatch(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 78 || report.RequiresHardening != 30 || report.Blocked != 3 || report.PendingReview != 456 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 88 || report.RequiresHardening != 69 || report.Blocked != 4 || report.PendingReview != 406 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
 		t.Fatalf("verification audit accounting mismatch: %#v", report)
 	}
-	if len(verificationAuditAssessments) != 50 {
-		t.Fatalf("first audit batch contains %d entries, want 50", len(verificationAuditAssessments))
+	if len(verificationAuditAssessments) != 100 {
+		t.Fatalf("audit manifest contains %d assessed entries, want 100", len(verificationAuditAssessments))
 	}
 	seen := map[string]VerificationAuditStatus{}
 	for _, entry := range report.Entries {
-		if entry.AuditBatch == 1 {
+		if entry.AuditBatch > 0 {
 			seen[entry.ID] = entry.AuditStatus
 		}
 	}
@@ -2247,6 +2247,35 @@ func TestVerificationAuditReportCoversRegistryAndFirstBatch(t *testing.T) {
 		if seen[id] != want {
 			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
 		}
+	}
+}
+
+func TestSecondLargeBatchSafetyPromotions(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"azure-app-config-connection-string": VerificationSafetyReadOnly,
+		"azure-storage-connection-string":    VerificationSafetyReadOnly,
+		"spectralops-token":                  VerificationSafetyReadOnly,
+		"ringover-api-key":                   VerificationSafetyReadOnly,
+		"mailjet-basic-auth":                 VerificationSafetyReadOnly,
+		"unit-api-token":                     VerificationSafetyReadOnly,
+		"lithic-api-key":                     VerificationSafetyReadOnly,
+		"opticodds-api-key":                  VerificationSafetyReadOnly,
+		"trulioo-api-key":                    VerificationSafetyAuthOnly,
+		"teamwork-token":                     VerificationSafetyReadOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("promoted detectors missing from registry: %#v", expected)
 	}
 }
 
