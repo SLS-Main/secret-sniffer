@@ -186,7 +186,6 @@ AZURE_STORAGE_ACCOUNT='accountname' ./secret-sniffer \
 --no-color            Disable colored console output.
 --list-detectors      Print built-in detector metadata as JSON.
 --trufflehog-parity   Print tracked TruffleHog detector parity mappings as JSON.
---verification-audit  Print the complete verification safety audit inventory as JSON.
 --s3-buckets          Comma-separated S3 bucket names to scan concurrently.
 --s3-all-buckets      Discover and scan all buckets owned by the authenticated AWS account.
 --s3-prefix           Only scan objects under this key prefix.
@@ -888,14 +887,6 @@ Print the tracked TruffleHog parity report:
 ```bash
 ./secret-sniffer --trufflehog-parity > parity.json
 ```
-
-Print the verification audit manifest:
-
-```bash
-./secret-sniffer --verification-audit > verification-audit.json
-```
-
-The audit report includes every built-in detector and separates reviewed hooks, contracts requiring hardening, blocked contracts, pending review, and detectors without a verifier. Audit batch 1 covers the first 50 unreviewed verifier contracts: nine are now reviewed, 38 require bounded classifier or endpoint hardening, and three are blocked by unresolved provider or deployment context. Custom detector and enable/disable flags do not alter this built-in audit inventory.
 
 The parity report includes:
 

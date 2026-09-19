@@ -2220,7 +2220,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 }
 
 func TestVerificationAuditReportCoversRegistryAndFirstBatch(t *testing.T) {
-	report := BuildVerificationAuditReport(DefaultRegistry())
+	report := buildVerificationAuditReport(DefaultRegistry())
 	if report.Total != 1102 || report.Reviewed != 70 || report.RequiresHardening != 38 || report.Blocked != 3 || report.PendingReview != 456 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}

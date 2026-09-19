@@ -90,7 +90,7 @@ var verificationAuditAssessments = map[string]verificationAuditAssessment{
 	"postmark-token":            {Status: VerificationAuditRequiresHardening, Batch: 1, Notes: "Route server and account token variants independently."},
 }
 
-func BuildVerificationAuditReport(ds []Detector) VerificationAuditReport {
+func buildVerificationAuditReport(ds []Detector) VerificationAuditReport {
 	infos := RegistryInfo(ds)
 	report := VerificationAuditReport{Total: len(infos), Entries: make([]VerificationAuditEntry, 0, len(infos))}
 	for _, info := range infos {
