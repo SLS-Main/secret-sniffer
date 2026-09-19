@@ -139,6 +139,57 @@ var verificationAuditAssessments = map[string]verificationAuditAssessment{
 	"statuspage-api-key":                 {Status: VerificationAuditRequiresHardening, Batch: 2, Notes: "Bound or replace page collection and confirm authorization form."},
 	"sendinblue-api-key":                 {Status: VerificationAuditRequiresHardening, Batch: 2, Notes: "Validate account identity and suppress plan and address data."},
 	"teamwork-token":                     {Status: VerificationAuditReviewed, Batch: 2, Notes: "Launchpad identity response is schema-classified and suppressed."},
+
+	"salesblink-api-key":                  {Status: VerificationAuditBlocked, Batch: 3, Notes: "No authoritative provider verification contract or error schema is available."},
+	"mailmodo-api-key":                    {Status: VerificationAuditBlocked, Batch: 3, Notes: "No documented bounded verification endpoint or response contract is available."},
+	"triggerdev-api-key":                  {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Narrow supported key variants and validate the top-level run-list schema."},
+	"resend-api-key":                      {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Narrow key format and schema-classify list and structured error responses."},
+	"clerk-secret-key":                    {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Replace the deprecated clients probe with a current bounded endpoint."},
+	"workos-api-key":                      {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Validate the organization-list schema and suppress organization metadata."},
+	"liveblocks-secret-key":               {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Validate room-list and structured error schemas and suppress room metadata."},
+	"polar-access-token":                  {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Resolve production and sandbox routing and validate organization responses."},
+	"temporal-cloud-api-key":              {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Split API keys from client secrets and validate current identity."},
+	"trayio-api-token":                    {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Resolve token families and regional hosts before promotion."},
+	"airbyte-api-token":                   {Status: VerificationAuditBlocked, Batch: 3, Notes: "Cloud, self-managed, and client-secret credential contexts are conflated."},
+	"hightouch-api-key":                   {Status: VerificationAuditBlocked, Batch: 3, Notes: "The current workspace endpoint lacks a public provider-owned contract."},
+	"deno-deploy-token":                   {Status: VerificationAuditBlocked, Batch: 3, Notes: "The implemented organization collection route is absent from the current API contract."},
+	"supabase-management-token":           {Status: VerificationAuditReviewed, Batch: 3, Notes: "Cloud project collection is schema-validated and suppressed."},
+	"prefect-api-key":                     {Status: VerificationAuditReviewed, Batch: 3, Notes: "Cloud workspace collection is schema-validated and suppressed."},
+	"figma-pat":                           {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Split personal tokens from OAuth variants and validate current-user identity."},
+	"saladcloud-api-key":                  {Status: VerificationAuditBlocked, Batch: 3, Notes: "Safe reads require organization context that the detector does not capture."},
+	"neon-api-key":                        {Status: VerificationAuditReviewed, Batch: 3, Notes: "Dedicated authentication response is schema-validated and suppressed."},
+	"turso-api-token":                     {Status: VerificationAuditReviewed, Batch: 3, Notes: "Organization collection is schema-validated and suppressed."},
+	"xata-api-key":                        {Status: VerificationAuditReviewed, Batch: 3, Notes: "Organization collection is schema-validated and suppressed."},
+	"cockroachcloud-api-key":              {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Narrow credential context and validate the cluster-list schema."},
+	"motherduck-token":                    {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Require top-level account schema and structured authorization errors."},
+	"singlestore-api-key":                 {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Validate current-organization identity and preserve allowlist ambiguity."},
+	"gcp-service-account-json":            {Status: VerificationAuditReviewed, Batch: 3, Notes: "Signed read-only token exchange is schema-classified and suppressed."},
+	"gcp-application-default-credentials": {Status: VerificationAuditReviewed, Batch: 3, Notes: "Authorized-user token exchange is schema-classified and suppressed."},
+	"closecrm-api-key":                    {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Validate current-user identity and remove broad restricted-account classification."},
+	"paystack-secret-key":                 {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Validate balance schema and suppress financial response data."},
+	"wrike-access-token":                  {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Harden token format, regional fallback, and current-contact schema."},
+	"flutterwave-secret-key":              {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Support current key variants and suppress validated balance data."},
+	"pagarme-live-key":                    {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Split current and legacy key formats before endpoint verification."},
+	"rechargepayments-token":              {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Validate store identity and distinguish scoped authorization failures."},
+	"lemonsqueezy-api-token":              {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Harden JWT format and validate JSON:API user identity."},
+	"cloudinary-url":                      {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Correlate cloud identity and suppress validated configuration data."},
+	"helpcrunch-api-key":                  {Status: VerificationAuditReviewed, Batch: 3, Notes: "Department collection and structured rejection are schema-classified and suppressed."},
+	"line-messaging-token":                {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Resolve channel-token variants and validate bot identity."},
+	"courier-api-key":                     {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Move to the current preference-sections endpoint and schema."},
+	"virustotal-api-key":                  {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Parse structured errors, validate sentinel identity, and suppress metadata."},
+	"shodan-api-key":                      {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Validate top-level API-info fields and suppress quota metadata."},
+	"securitytrails-api-key":              {Status: VerificationAuditReviewed, Batch: 3, Notes: "Dedicated ping response is schema-classified and suppressed."},
+	"newsapi-key":                         {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Validate article-list schema and structured key status errors."},
+	"openweather-api-key":                 {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Schema-classify weather responses and account for quota-bearing workload."},
+	"tomorrowio-api-key":                  {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Harden key format, response schema, and quota-bearing workload handling."},
+	"here-api-key":                        {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Validate geocode results and preserve feature-restriction ambiguity."},
+	"polygon-api-key":                     {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Update provider routing and avoid quota-bearing ticker lookup."},
+	"scaleway-secret-key":                 {Status: VerificationAuditBlocked, Batch: 3, Notes: "Project verification requires organization and access-key context."},
+	"braintree-access-token":              {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Suppress GraphQL responses and harden authentication error classification."},
+	"webex-access-token":                  {Status: VerificationAuditReviewed, Batch: 3, Notes: "Current-user identity is schema-validated and suppressed."},
+	"detectify-api-key":                   {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Split V2 and V3 credential formats and endpoint contracts."},
+	"twitter-bearer-token":                {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Replace the billable post lookup with a bounded account endpoint."},
+	"twitch-access-token":                 {Status: VerificationAuditRequiresHardening, Batch: 3, Notes: "Validate token-introspection schema and suppress identity and scope data."},
 }
 
 func buildVerificationAuditReport(ds []Detector) VerificationAuditReport {
@@ -151,23 +202,26 @@ func buildVerificationAuditReport(ds []Detector) VerificationAuditReport {
 		case !info.Verifiable:
 			entry.AuditStatus = VerificationAuditNoVerifier
 			report.NoVerifier++
-		case info.VerificationSafety != VerificationSafetyUnreviewed:
-			entry.AuditStatus = VerificationAuditReviewed
-			if assessed {
-				entry.AuditBatch = assessment.Batch
-				entry.Notes = assessment.Notes
-			}
-			report.Reviewed++
-		default:
-			if !assessed {
+		case !assessed:
+			if info.VerificationSafety == VerificationSafetyUnreviewed {
 				entry.AuditStatus = VerificationAuditPending
 				report.PendingReview++
-				break
+			} else {
+				entry.AuditStatus = VerificationAuditReviewed
+				report.Reviewed++
 			}
+		default:
 			entry.AuditStatus = assessment.Status
 			entry.AuditBatch = assessment.Batch
 			entry.Notes = assessment.Notes
 			switch assessment.Status {
+			case VerificationAuditReviewed:
+				if info.VerificationSafety == VerificationSafetyUnreviewed {
+					entry.AuditStatus = VerificationAuditPending
+					report.PendingReview++
+				} else {
+					report.Reviewed++
+				}
 			case VerificationAuditRequiresHardening:
 				report.RequiresHardening++
 			case VerificationAuditBlocked:

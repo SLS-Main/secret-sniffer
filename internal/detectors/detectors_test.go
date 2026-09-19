@@ -2207,9 +2207,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 479,
-		VerificationSafetyReadOnly:   69,
-		VerificationSafetyAuthOnly:   7,
+		VerificationSafetyUnreviewed: 469,
+		VerificationSafetyReadOnly:   75,
+		VerificationSafetyAuthOnly:   11,
 		VerificationSafetyUnsafe:     12,
 	}
 	for safety, want := range expected {
@@ -2219,16 +2219,16 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 	}
 }
 
-func TestVerificationAuditReportCoversRegistryAndFirstBatch(t *testing.T) {
+func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 88 || report.RequiresHardening != 69 || report.Blocked != 4 || report.PendingReview != 406 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 98 || report.RequiresHardening != 102 || report.Blocked != 11 || report.PendingReview != 356 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
 		t.Fatalf("verification audit accounting mismatch: %#v", report)
 	}
-	if len(verificationAuditAssessments) != 100 {
-		t.Fatalf("audit manifest contains %d assessed entries, want 100", len(verificationAuditAssessments))
+	if len(verificationAuditAssessments) != 150 {
+		t.Fatalf("audit manifest contains %d assessed entries, want 150", len(verificationAuditAssessments))
 	}
 	seen := map[string]VerificationAuditStatus{}
 	for _, entry := range report.Entries {
@@ -2240,6 +2240,9 @@ func TestVerificationAuditReportCoversRegistryAndFirstBatch(t *testing.T) {
 		want := assessment.Status
 		for _, entry := range report.Entries {
 			if entry.ID == id && entry.VerificationSafety != VerificationSafetyUnreviewed {
+				if assessment.Status != VerificationAuditReviewed {
+					t.Fatalf("detector %q was promoted with audit status %q", id, assessment.Status)
+				}
 				want = VerificationAuditReviewed
 				break
 			}
@@ -2247,6 +2250,97 @@ func TestVerificationAuditReportCoversRegistryAndFirstBatch(t *testing.T) {
 		if seen[id] != want {
 			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
 		}
+	}
+}
+
+func TestThirdLargeBatchSafetyPromotions(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"supabase-management-token":           VerificationSafetyReadOnly,
+		"prefect-api-key":                     VerificationSafetyReadOnly,
+		"neon-api-key":                        VerificationSafetyAuthOnly,
+		"turso-api-token":                     VerificationSafetyReadOnly,
+		"xata-api-key":                        VerificationSafetyReadOnly,
+		"gcp-service-account-json":            VerificationSafetyAuthOnly,
+		"gcp-application-default-credentials": VerificationSafetyAuthOnly,
+		"helpcrunch-api-key":                  VerificationSafetyReadOnly,
+		"securitytrails-api-key":              VerificationSafetyAuthOnly,
+		"webex-access-token":                  VerificationSafetyReadOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("promoted detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestThirdLargeBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		host        string
+		path        string
+		header      string
+		headerValue string
+		response    string
+	}{
+		{name: "supabase", verify: verifySupabaseManagement, host: "api.supabase.com", path: "/v1/projects", header: "Authorization", headerValue: "Bearer secret", response: `[]`},
+		{name: "prefect", verify: verifyPrefect, host: "api.prefect.cloud", path: "/api/me/workspaces", header: "Authorization", headerValue: "Bearer secret", response: `[]`},
+		{name: "neon", verify: verifyNeon, host: "console.neon.tech", path: "/api/v2/auth", header: "Authorization", headerValue: "Bearer secret", response: `{"account_id":"account","auth_method":"api_key_user"}`},
+		{name: "turso", verify: verifyTurso, host: "api.turso.tech", path: "/v1/organizations", header: "Authorization", headerValue: "Bearer secret", response: `[]`},
+		{name: "xata", verify: verifyXata, host: "api.xata.tech", path: "/organizations", header: "Authorization", headerValue: "Bearer secret", response: `{"organizations":[]}`},
+		{name: "helpcrunch", verify: verifyHelpCrunch, host: "api.helpcrunch.com", path: "/v1/departments", header: "Authorization", headerValue: "Bearer secret", response: `{"data":[],"meta":{"total":0}}`},
+		{name: "securitytrails", verify: verifySecurityTrails, host: "api.securitytrails.com", path: "/v1/ping", header: "Apikey", headerValue: "secret", response: `{"success":true}`},
+		{name: "webex-access", verify: verifyWebex, host: "webexapis.com", path: "/v1/people/me", header: "Authorization", headerValue: "Bearer secret", response: `{"id":"person","type":"person"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.Header.Get(test.header) != test.headerValue {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestThirdLargeBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifySupabaseManagement, verifyPrefect, verifyNeon, verifyTurso, verifyXata, verifyHelpCrunch, verifySecurityTrails, verifyWebex} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestThirdLargeBatchStructuredRejections(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"errors":[{"code":"unauthorized"}]}`)), Header: make(http.Header)}, nil
+	})}
+	if result := verifyHelpCrunch(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnverified || result.Response != "" {
+		t.Fatalf("HelpCrunch rejection result=%#v", result)
+	}
+	client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"message":"invalid"}`)), Header: make(http.Header)}, nil
+	})}
+	if result := verifySecurityTrails(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnverified || result.Response != "" {
+		t.Fatalf("SecurityTrails rejection result=%#v", result)
 	}
 }
 
