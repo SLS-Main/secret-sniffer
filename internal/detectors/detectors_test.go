@@ -924,7 +924,7 @@ func TestPeopleDataLabsVerifierUsesAuthFirstValidation(t *testing.T) {
 	}{
 		{name: "authenticated validation error", code: http.StatusBadRequest, body: `{"status":400,"error":{"type":["invalid_request_error"],"message":"Missing required input"}}`, status: VerificationVerified},
 		{name: "invalid", code: http.StatusUnauthorized, body: `{"status":401,"error":{"type":["authentication_error"],"message":"Your request contained an invalid api key"}}`, status: VerificationUnverified},
-		{name: "exhausted", code: http.StatusPaymentRequired, body: `{"status":402}`, status: VerificationVerified},
+		{name: "exhausted", code: http.StatusPaymentRequired, body: `{"status":402,"error":{"type":["payment_required"]}}`, status: VerificationVerified},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2207,10 +2207,10 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 447,
-		VerificationSafetyReadOnly:   80,
-		VerificationSafetyAuthOnly:   14,
-		VerificationSafetyUnsafe:     26,
+		VerificationSafetyUnreviewed: 426,
+		VerificationSafetyReadOnly:   85,
+		VerificationSafetyAuthOnly:   18,
+		VerificationSafetyUnsafe:     38,
 	}
 	for safety, want := range expected {
 		if counts[safety] != want {
@@ -2221,14 +2221,14 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 120 || report.RequiresHardening != 126 || report.Blocked != 15 || report.PendingReview != 306 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 141 || report.RequiresHardening != 146 || report.Blocked != 24 || report.PendingReview != 256 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
 		t.Fatalf("verification audit accounting mismatch: %#v", report)
 	}
-	if len(verificationAuditAssessments) != 200 {
-		t.Fatalf("audit manifest contains %d assessed entries, want 200", len(verificationAuditAssessments))
+	if len(verificationAuditAssessments) != 250 {
+		t.Fatalf("audit manifest contains %d assessed entries, want 250", len(verificationAuditAssessments))
 	}
 	seen := map[string]VerificationAuditStatus{}
 	for _, entry := range report.Entries {
@@ -2249,6 +2249,97 @@ func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T)
 		}
 		if seen[id] != want {
 			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
+		}
+	}
+}
+
+func TestFifthLargeBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"hellosign-api-key":      VerificationSafetyReadOnly,
+		"packagecloud-token":     VerificationSafetyReadOnly,
+		"paperform-api-key":      VerificationSafetyReadOnly,
+		"peopledatalabs-api-key": VerificationSafetyAuthOnly,
+		"beamer-api-key":         VerificationSafetyReadOnly,
+		"chartmogul-api-key":     VerificationSafetyAuthOnly,
+		"fullstory-api-key":      VerificationSafetyAuthOnly,
+		"kustomer-api-token":     VerificationSafetyAuthOnly,
+		"planhat-api-token":      VerificationSafetyReadOnly,
+		"mailboxlayer-api-key":   VerificationSafetyUnsafe,
+		"mediastack-api-key":     VerificationSafetyUnsafe,
+		"opencage-api-key":       VerificationSafetyUnsafe,
+		"openuv-api-key":         VerificationSafetyUnsafe,
+		"pandascore-api-key":     VerificationSafetyUnsafe,
+		"serpstack-api-key":      VerificationSafetyUnsafe,
+		"alchemy-api-key":        VerificationSafetyUnsafe,
+		"buttercms-api-token":    VerificationSafetyUnsafe,
+		"clearbit-api-key":       VerificationSafetyUnsafe,
+		"geoapify-api-key":       VerificationSafetyUnsafe,
+		"graphhopper-api-key":    VerificationSafetyUnsafe,
+		"kickbox-api-key":        VerificationSafetyUnsafe,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestFifthLargeBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		method      string
+		host        string
+		path        string
+		query       string
+		header      string
+		headerValue string
+		status      int
+		response    string
+	}{
+		{name: "hellosign", verify: verifyHelloSign, method: http.MethodGet, host: "api.hellosign.com", path: "/v3/account", header: "Authorization", headerValue: "Basic c2VjcmV0Og==", status: http.StatusOK, response: `{"account":{"account_id":"account"}}`},
+		{name: "packagecloud", verify: verifyPackagecloud, method: http.MethodGet, host: "packagecloud.io", path: "/api/v1/repos.json", query: "per_page=1", header: "Authorization", headerValue: "Basic c2VjcmV0Og==", status: http.StatusOK, response: `[]`},
+		{name: "paperform", verify: verifyPaperform, method: http.MethodGet, host: "api.paperform.co", path: "/v1/forms", query: "limit=1", header: "Authorization", headerValue: "Bearer secret", status: http.StatusOK, response: `{"status":"ok","results":{"forms":[]}}`},
+		{name: "people-data-labs", verify: verifyPeopleDataLabs, method: http.MethodGet, host: "api.peopledatalabs.com", path: "/v5/person/enrich", header: "X-Api-Key", headerValue: "secret", status: http.StatusBadRequest, response: `{"error":{"type":["invalid_request_error"]}}`},
+		{name: "beamer", verify: verifyBeamer, method: http.MethodGet, host: "api.getbeamer.com", path: "/v0/url", header: "Beamer-Api-Key", headerValue: "secret", status: http.StatusOK, response: `{"url":"https://example.com"}`},
+		{name: "chartmogul", verify: verifyChartMogul, method: http.MethodGet, host: "api.chartmogul.com", path: "/v1/ping", header: "Authorization", headerValue: "Basic c2VjcmV0Og==", status: http.StatusOK, response: `{"data":"pong!"}`},
+		{name: "fullstory", verify: verifyFullStory, method: http.MethodGet, host: "api.fullstory.com", path: "/me", header: "Authorization", headerValue: "Basic secret", status: http.StatusOK, response: `{"role":"ADMIN"}`},
+		{name: "kustomer", verify: verifyKustomer, method: http.MethodGet, host: "api.kustomerapp.com", path: "/v1/users/current", header: "Authorization", headerValue: "Bearer secret", status: http.StatusOK, response: `{"data":{"type":"user","id":"user"}}`},
+		{name: "planhat", verify: verifyPlanhat, method: http.MethodGet, host: "api.planhat.com", path: "/users", query: "limit=1", header: "Authorization", headerValue: "Bearer secret", status: http.StatusOK, response: `[]`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.query || req.Header.Get(test.header) != test.headerValue {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				return &http.Response{StatusCode: test.status, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestFifthLargeBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyHelloSign, verifyPackagecloud, verifyPaperform, verifyBeamer, verifyChartMogul, verifyFullStory, verifyKustomer, verifyPlanhat} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
 		}
 	}
 }
@@ -3861,7 +3952,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"docusign-client-secret", "docusign client_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"gocardless-access-token", "gocardless access_token=live_" + strings.Repeat("A", 48), "live_" + strings.Repeat("A", 48)},
 		{"gumroad-access-token", "gumroad access_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"hellosign-api-key", "hellosign api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
+		{"hellosign-api-key", "hellosign api_key=\"" + strings.Repeat("A", 63) + "+\"", strings.Repeat("A", 63) + "+"},
 		{"mailboxlayer-api-key", "mailboxlayer access_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"mediastack-api-key", "mediastack access_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"opencage-api-key", "opencage api_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
@@ -3874,7 +3965,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"meaningcloud-api-key", "meaningcloud api_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"openuv-api-key", "openuv api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"pandascore-api-key", "pandascore api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
-		{"paperform-api-key", "paperform api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"paperform-api-key", "paperform api_key=\"" + strings.Repeat("A", 300) + "." + strings.Repeat("B", 300) + "." + strings.Repeat("C", 300) + "\"", strings.Repeat("A", 300) + "." + strings.Repeat("B", 300) + "." + strings.Repeat("C", 300)},
 		{"parsehub-api-key", "parsehub api_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"pdfshift-api-key", "pdfshift api_key=\"" + strings.Repeat("a", 32) + "\"", strings.Repeat("a", 32)},
 		{"peopledatalabs-api-key", "peopledatalabs api_key=\"" + strings.Repeat("A", 64) + "\"", strings.Repeat("A", 64)},

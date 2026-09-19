@@ -840,7 +840,22 @@ func verifySegment(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyFullStory(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.fullstory.com/me", "Authorization", "Basic ")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.fullstory.com/me", nil)
+	req.Header.Set("Authorization", "Basic "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			Role string `json:"role"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return false
+		}
+		switch response.Role {
+		case "USER", "ARCHITECT", "ADMIN":
+			return true
+		default:
+			return false
+		}
+	})
 }
 
 func verifySecurityTrails(ctx context.Context, secret string) VerificationResult {
@@ -2206,7 +2221,17 @@ func verifyVagrantCloud(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPaperform(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.paperform.co/v1/forms?limit=1")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.paperform.co/v1/forms?limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			Status  string `json:"status"`
+			Results struct {
+				Forms []any `json:"forms"`
+			} `json:"results"`
+		}
+		return json.Unmarshal(body, &response) == nil && response.Status == "ok" && response.Results.Forms != nil
+	})
 }
 
 func verifyDaily(ctx context.Context, secret string) VerificationResult {
@@ -2265,7 +2290,15 @@ func verifyFlickr(ctx context.Context, secret string) VerificationResult {
 func verifyHelloSign(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.hellosign.com/v3/account", nil)
 	req.SetBasicAuth(secret, "")
-	return verifyHTTPRequest(ctx, req)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			Account struct {
+				AccountID    string `json:"account_id"`
+				EmailAddress string `json:"email_address"`
+			} `json:"account"`
+		}
+		return json.Unmarshal(body, &response) == nil && (response.Account.AccountID != "" || response.Account.EmailAddress != "")
+	})
 }
 
 func verifyParseHub(ctx context.Context, secret string) VerificationResult {
@@ -2277,7 +2310,7 @@ func verifyParseHub(ctx context.Context, secret string) VerificationResult {
 func verifyPackagecloud(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://packagecloud.io/api/v1/repos.json?per_page=1", nil)
 	req.SetBasicAuth(secret, "")
-	return verifyHTTPRequest(ctx, req)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, jsonIsTopLevelArray)
 }
 
 func verifyOnfido(ctx context.Context, secret string) VerificationResult {
@@ -2944,9 +2977,14 @@ func verifyCloudinary(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyChartMogul(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.chartmogul.com/v1/account", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.chartmogul.com/v1/ping", nil)
 	req.SetBasicAuth(secret, "")
-	return verifyHTTPRequest(ctx, req)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			Data string `json:"data"`
+		}
+		return json.Unmarshal(body, &response) == nil && response.Data == "pong!"
+	})
 }
 
 func verifyIntrinio(ctx context.Context, secret string) VerificationResult {
@@ -3174,7 +3212,17 @@ func verifyCheckly(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyKustomer(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.kustomerapp.com/v1/users/current")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.kustomerapp.com/v1/users/current", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			Data struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+			} `json:"data"`
+		}
+		return json.Unmarshal(body, &response) == nil && response.Data.Type == "user" && response.Data.ID != ""
+	})
 }
 
 func verifySalesloft(ctx context.Context, secret string) VerificationResult {
@@ -3896,7 +3944,15 @@ func verifyCanny(ctx context.Context, secret string) VerificationResult {
 	body, _ := json.Marshal(map[string]any{"apiKey": secret, "limit": 1})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://canny.io/api/v1/boards/list", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"boards"}, "invalid api key"))
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, responseBody []byte) (VerificationResult, bool) {
+		if containsAnyFold(string(responseBody), "invalid api key") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonHasTopLevelArray(responseBody, "boards") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(statusCode, responseBody)
+	})
 	result.Response = ""
 	return result
 }
@@ -4070,13 +4126,20 @@ func verifyPeopleDataLabs(ctx context.Context, secret string) VerificationResult
 		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
 			return VerificationResult{}, false
 		}
-		response := string(body)
+		var response struct {
+			Error struct {
+				Type json.RawMessage `json:"type"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
+		}
 		switch {
-		case statusCode == http.StatusUnauthorized && containsAnyFold(response, "invalid api key", "authentication_error"):
+		case statusCode == http.StatusUnauthorized && jsonStringOrArrayContains(response.Error.Type, "authentication_error"):
 			return invalidCredentialResult(), true
-		case statusCode == http.StatusBadRequest && containsAnyFold(response, "invalid_request_error", "minimum inputs", "missing"):
+		case statusCode == http.StatusBadRequest && jsonStringOrArrayContains(response.Error.Type, "invalid_request_error"):
 			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated the key before validating input"}, true
-		case statusCode == http.StatusPaymentRequired:
+		case statusCode == http.StatusPaymentRequired && jsonStringOrArrayContains(response.Error.Type, "payment_required"):
 			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated an exhausted key"}, true
 		default:
 			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
@@ -4759,7 +4822,7 @@ func verifyMotherDuck(ctx context.Context, secret string) VerificationResult {
 func verifyPlanhat(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.planhat.com/users?limit=1", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyPrivateCollection(ctx, req, "invalid token")
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, jsonIsTopLevelArray)
 }
 
 func verifySlackWebhook(ctx context.Context, secret string) VerificationResult {
@@ -6612,6 +6675,23 @@ func jsonHasTopLevelStrings(body []byte, fields ...string) bool {
 		}
 	}
 	return true
+}
+
+func jsonStringOrArrayContains(raw json.RawMessage, expected string) bool {
+	var value string
+	if json.Unmarshal(raw, &value) == nil {
+		return value == expected
+	}
+	var values []string
+	if json.Unmarshal(raw, &values) != nil {
+		return false
+	}
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func jsonHasTopLevelArray(body []byte, field string) bool {
