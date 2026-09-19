@@ -2207,8 +2207,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 497,
-		VerificationSafetyReadOnly:   52,
+		VerificationSafetyUnreviewed: 489,
+		VerificationSafetyReadOnly:   60,
 		VerificationSafetyAuthOnly:   6,
 		VerificationSafetyUnsafe:     12,
 	}
@@ -2221,7 +2221,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndFirstBatch(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 70 || report.RequiresHardening != 38 || report.Blocked != 3 || report.PendingReview != 456 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 78 || report.RequiresHardening != 30 || report.Blocked != 3 || report.PendingReview != 456 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
@@ -2247,6 +2247,70 @@ func TestVerificationAuditReportCoversRegistryAndFirstBatch(t *testing.T) {
 		if seen[id] != want {
 			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
 		}
+	}
+}
+
+func TestFirstLargeBatchIdentitySafetyPromotions(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"discord-webhook":   VerificationSafetyReadOnly,
+		"webex-bot-token":   VerificationSafetyReadOnly,
+		"groq-api-key":      VerificationSafetyReadOnly,
+		"airtable-pat":      VerificationSafetyReadOnly,
+		"asana-pat":         VerificationSafetyReadOnly,
+		"clickup-token":     VerificationSafetyReadOnly,
+		"nightfall-api-key": VerificationSafetyReadOnly,
+		"pinecone-api-key":  VerificationSafetyReadOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("promoted detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestFirstLargeBatchIdentityRequestContracts(t *testing.T) {
+	discordURL := "https://discord.com/api/webhooks/123456789012345678/" + strings.Repeat("A", 68)
+	tests := []struct {
+		name        string
+		verify      Verifier
+		secret      string
+		host        string
+		path        string
+		header      string
+		headerValue string
+		response    string
+	}{
+		{name: "discord", verify: verifyDiscordWebhook, secret: discordURL, host: "discord.com", path: strings.TrimPrefix(discordURL, "https://discord.com"), response: `{"id":"webhook"}`},
+		{name: "webex", verify: verifyWebex, secret: "secret", host: "webexapis.com", path: "/v1/people/me", header: "Authorization", headerValue: "Bearer secret", response: `{"id":"person","type":"bot"}`},
+		{name: "groq", verify: verifyGroq, secret: "secret", host: "api.groq.com", path: "/openai/v1/models", header: "Authorization", headerValue: "Bearer secret", response: `{"data":[]}`},
+		{name: "airtable", verify: verifyAirtable, secret: "secret", host: "api.airtable.com", path: "/v0/meta/whoami", header: "Authorization", headerValue: "Bearer secret", response: `{"id":"user"}`},
+		{name: "asana", verify: verifyAsana, secret: "secret", host: "app.asana.com", path: "/api/1.0/users/me", header: "Authorization", headerValue: "Bearer secret", response: `{"data":{"gid":"user"}}`},
+		{name: "clickup", verify: verifyClickUp, secret: "secret", host: "api.clickup.com", path: "/api/v2/user", header: "Authorization", headerValue: "secret", response: `{"user":{"id":1}}`},
+		{name: "nightfall", verify: verifyNightfall, secret: "secret", host: "api.nightfall.ai", path: "/v3/detection-rules", header: "Authorization", headerValue: "Bearer secret", response: `{"detectionRules":[]}`},
+		{name: "pinecone", verify: verifyPinecone, secret: "secret", host: "api.pinecone.io", path: "/indexes", header: "Api-Key", headerValue: "secret", response: `{"indexes":[]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Host != test.host || req.URL.Path != test.path || (test.header != "" && req.Header.Get(test.header) != test.headerValue) {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), test.secret)
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
 	}
 }
 

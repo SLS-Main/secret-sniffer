@@ -6255,11 +6255,13 @@ func verifyDiscordWebhook(ctx context.Context, secret string) VerificationResult
 		return VerificationResult{Status: VerificationUnsupported}
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, secret, nil)
-	return verifyHTTPRequest(ctx, req)
+	return verifyTopLevelStringIdentityRequest(ctx, req, "id")
 }
 
 func verifyWebex(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://webexapis.com/v1/people/me")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://webexapis.com/v1/people/me", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyTopLevelStringIdentityRequest(ctx, req, "id", "type")
 }
 
 func verifyHuggingFace(ctx context.Context, secret string) VerificationResult {
@@ -6267,7 +6269,7 @@ func verifyHuggingFace(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyGroq(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.groq.com/openai/v1/models")
+	return verifyBearerJSONCollection(ctx, secret, "https://api.groq.com/openai/v1/models", "data")
 }
 
 func verifyReplicate(ctx context.Context, secret string) VerificationResult {
@@ -6275,15 +6277,21 @@ func verifyReplicate(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAirtable(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.airtable.com/v0/meta/whoami")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.airtable.com/v0/meta/whoami", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyTopLevelStringIdentityRequest(ctx, req, "id")
 }
 
 func verifyAsana(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://app.asana.com/api/1.0/users/me")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.asana.com/api/1.0/users/me", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequest(ctx, req, func(body []byte) bool { return jsonNestedObjectHasString(body, "data", "gid") })
 }
 
 func verifyClickUp(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.clickup.com/api/v2/user", "Authorization", "")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.clickup.com/api/v2/user", nil)
+	req.Header.Set("Authorization", secret)
+	return verifyJSONReadRequest(ctx, req, func(body []byte) bool { return jsonNestedObjectHasField(body, "user", "id") })
 }
 
 func verifyHubSpot(ctx context.Context, secret string) VerificationResult {
@@ -6330,7 +6338,7 @@ func verifyPinecone(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pinecone.io/indexes", nil)
 	req.Header.Set("Api-Key", secret)
 	req.Header.Set("X-Pinecone-Api-Version", "2025-10")
-	return verifyHTTPRequest(ctx, req)
+	return verifyJSONReadRequest(ctx, req, func(body []byte) bool { return jsonHasTopLevelArray(body, "indexes") })
 }
 
 func verifyElevenLabs(ctx context.Context, secret string) VerificationResult {
@@ -6510,6 +6518,19 @@ func jsonNestedObjectHasString(body []byte, object string, fields ...string) boo
 		}
 	}
 	return false
+}
+
+func jsonNestedObjectHasField(body []byte, object, field string) bool {
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return false
+	}
+	nested, ok := payload[object].(map[string]any)
+	if !ok {
+		return false
+	}
+	value, ok := nested[field]
+	return ok && value != nil
 }
 
 func jsonHasAllFields(body []byte, fields ...string) bool {
