@@ -211,6 +211,7 @@ type RegexDetector struct {
 	Keywords           []string
 	Regex              *regexp.Regexp
 	SecretGroup        int
+	SecretGroups       []int
 	PartGroups         map[string]int
 	Verifier           Verifier
 	CompositeVerifier  CompositeVerifier
@@ -247,6 +248,18 @@ func (d RegexDetector) detectContent(content string) []Candidate {
 	out := make([]Candidate, 0, len(matches))
 	for _, m := range matches {
 		group := d.SecretGroup
+		if len(d.SecretGroups) > 0 {
+			group = -1
+			for _, candidateGroup := range d.SecretGroups {
+				if candidateGroup >= 0 && candidateGroup*2+1 < len(m) && m[candidateGroup*2] >= 0 {
+					group = candidateGroup
+					break
+				}
+			}
+			if group < 0 {
+				continue
+			}
+		}
 		if group > 0 && (group*2+1 >= len(m) || m[group*2] < 0) {
 			continue
 		}
@@ -306,6 +319,10 @@ func NewReadOnlyRegex(id, name, severity string, keywords []string, expr string,
 
 func NewAuthOnlyRegex(id, name, severity string, keywords []string, expr string, group int, verifier Verifier) Detector {
 	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: group, Verifier: verifier, VerificationSafety: VerificationSafetyAuthOnly, BroadContext: strings.Contains(expr, `[\s\S]{0,`)}
+}
+
+func NewAuthOnlyRegexGroups(id, name, severity string, keywords []string, expr string, groups []int, verifier Verifier) Detector {
+	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroups: groups, Verifier: verifier, VerificationSafety: VerificationSafetyAuthOnly, BroadContext: strings.Contains(expr, `[\s\S]{0,`)}
 }
 
 func NewUnsafeRegex(id, name, severity string, keywords []string, expr string, group int, verifier Verifier) Detector {
@@ -1309,14 +1326,14 @@ func DefaultRegistry() []Detector {
 		NewRegex("parsers-api-key", "Parsers API Key", "high", []string{"parsers"}, `(?i)\bparsers\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("parseur-api-key", "Parseur API Key", "high", []string{"parseur"}, `(?i)\bparseur\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-f0-9]{40})\b`, 1, verifyParseur),
 		NewRegex("paydirt-api-key", "Paydirt API Key", "high", []string{"paydirt"}, `(?i)\bpaydirt\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
-		NewRegex("paymo-api-key", "Paymo API Key", "high", []string{"paymo"}, `(?i)\bpaymo\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{44})\b`, 1, verifyPaymo),
+		NewReadOnlyRegex("paymo-api-key", "Paymo API Key", "high", []string{"paymo"}, `(?i)\bpaymo\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{44})\b`, 1, verifyPaymo),
 		NewRegex("planview-leankit-api-key", "Planview LeanKit API Key", "high", []string{"planviewleankit", "leankit"}, `(?i)\b(?:planviewleankit|planview[ _-]?leankit|leankit)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("planyo-api-key", "Planyo API Key", "high", []string{"planyo"}, `(?i)\bplanyo\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("pollsapi-key", "Polls API Key", "high", []string{"pollsapi", "polls api"}, `(?i)\b(?:pollsapi|polls[ _-]?api)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("poloniex-api-secret", "Poloniex API Secret", "critical", []string{"poloniex"}, `(?i)\bpoloniex\b.{0,120}\b(?:api[_-]?secret|secret|private[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9+/=_-]{32,256})\b`, 1, nil),
 		NewRegex("postbacks-api-key", "Postbacks API Key", "high", []string{"postbacks"}, `(?i)\bpostbacks\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("powrbot-api-key", "Powrbot API Key", "high", []string{"powrbot"}, `(?i)\bpowrbot\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
-		NewRegex("privacy-api-key", "Privacy.com API Key", "critical", []string{"privacy.com", "privacy"}, `(?i)\b(?:privacy\.com|privacy)\b.{0,80}\b(?:api[_-]?key|key|token|secret)\b\s*[:=]\s*['\"]?([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\b`, 1, verifyPrivacy),
+		NewUnsafeRegex("privacy-api-key", "Privacy.com API Key", "critical", []string{"privacy.com", "privacy"}, `(?i)\b(?:privacy\.com|privacy)\b.{0,80}\b(?:api[_-]?key|key|token|secret)\b\s*[:=]\s*['\"]?([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\b`, 1, verifyPrivacy),
 		NewRegex("prodpad-api-key", "ProdPad API Key", "high", []string{"prodpad"}, `(?i)\bprodpad\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-f0-9]{64})\b`, 1, verifyProdPad),
 		NewRegex("prospectcrm-api-key", "Prospect CRM API Key", "high", []string{"prospectcrm", "prospect crm"}, `(?i)\b(?:prospectcrm|prospect[ _-]?crm)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("protocolsio-api-token", "Protocols.io API Token", "high", []string{"protocols.io", "protocolsio"}, `(?i)\b(?:protocols\.io|protocolsio)\b.{0,80}\b(?:api[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, verifyProtocolsIO),
@@ -1331,7 +1348,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("requestfinance-api-key", "Request Finance API Key", "critical", []string{"requestfinance", "request finance"}, `(?i)\b(?:requestfinance|request[ _-]?finance)\b.{0,80}\b(?:api[_-]?key|key|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("rev-ai-api-key", "Rev.ai API Key", "high", []string{"rev.ai", "rev ai"}, `(?i)\b(?:rev\.ai|rev[ _-]?ai)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, verifyRevAI),
 		NewRegex("revampcrm-api-key", "Revamp CRM API Key", "high", []string{"revampcrm", "revamp crm"}, `(?i)\b(?:revampcrm|revamp[ _-]?crm)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
-		NewRegex("ritekit-api-key", "RiteKit API Key", "high", []string{"ritekit"}, `(?i)\britekit\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-f0-9]{44})\b`, 1, verifyRiteKit),
+		NewUnsafeRegex("ritekit-api-key", "RiteKit API Key", "high", []string{"ritekit"}, `(?i)\britekit\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-f0-9]{44})\b`, 1, verifyRiteKit),
 		NewRegex("roaring-api-key", "Roaring API Key", "high", []string{"roaring"}, `(?i)\broaring\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("robinhoodcrypto-api-secret", "Robinhood Crypto API Secret", "critical", []string{"robinhoodcrypto", "robinhood crypto"}, `(?i)\b(?:robinhoodcrypto|robinhood[ _-]?crypto)\b.{0,120}\b(?:api[_-]?secret|secret|private[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9+/=_-]{32,256})\b`, 1, nil),
 		NewRegex("rownd-api-key", "Rownd API Key", "critical", []string{"rownd"}, `(?i)\brownd\b.{0,80}\b(?:api[_-]?key|key|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
@@ -1348,11 +1365,11 @@ func DefaultRegistry() []Detector {
 		NewRegex("shutterstock-api-token", "Shutterstock API Token", "critical", []string{"shutterstock"}, `(?i)\bshutterstock\b.{0,80}\b(?:api[_-]?token|access[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("shutterstock-oauth-client-secret", "Shutterstock OAuth Client Secret", "critical", []string{"shutterstock", "api.shutterstock.com/oauth"}, `(?i)\b(?:shutterstock|api\.shutterstock\.com/oauth)\b[\s\S]{0,240}\b(?:client[_-]?secret|oauth[_-]?secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._~/-]{32,128})\b`, 1, nil),
 		NewRegex("sigopt-api-token", "SigOpt API Token", "critical", []string{"sigopt"}, `(?i)\bsigopt\b.{0,80}\b(?:api[_-]?token|client[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
-		NewRegex("simfin-api-key", "SimFin API Key", "high", []string{"simfin"}, `(?i)\bsimfin\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{32})\b`, 1, verifySimFin),
+		NewUnsafeRegex("simfin-api-key", "SimFin API Key", "high", []string{"simfin"}, `(?i)\bsimfin\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{32})\b`, 1, verifySimFin),
 		NewRegex("square-app-secret", "Square App Secret", "critical", []string{"square"}, `(?i)\bsquare\b.{0,120}\b(?:app[_-]?secret|client[_-]?secret|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("squarespace-api-key", "Squarespace API Key", "critical", []string{"squarespace"}, `(?i)\bsquarespace\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\b`, 1, verifySquarespace),
 		NewRegex("stitchdata-api-token", "Stitch Data API Token", "critical", []string{"stitchdata", "stitch data"}, `(?i)\b(?:stitchdata|stitch[ _-]?data)\b.{0,80}\b(?:api[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([a-z0-9_]{35})\b`, 1, verifyStitchData),
-		NewRegex("supernotes-api-key", "Supernotes API Key", "high", []string{"supernotes"}, `(?i)\bsupernotes\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, verifySupernotes),
+		NewAuthOnlyRegex("supernotes-api-key", "Supernotes API Key", "high", []string{"supernotes"}, `(?i)\bsupernotes\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{43})\b`, 1, verifySupernotes),
 		NewRegex("surveyanyplace-api-key", "Survey Anyplace API Key", "high", []string{"surveyanyplace", "survey anyplace"}, `(?i)\b(?:surveyanyplace|survey[ _-]?anyplace)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("surveybot-api-key", "Surveybot API Key", "high", []string{"surveybot", "survey bot"}, `(?i)\b(?:surveybot|survey[ _-]?bot)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("surveysparrow-api-key", "SurveySparrow API Key", "high", []string{"surveysparrow", "survey sparrow"}, `(?i)\b(?:surveysparrow|survey[ _-]?sparrow)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{88})\b`, 1, verifySurveySparrow),
@@ -1362,9 +1379,9 @@ func DefaultRegistry() []Detector {
 		NewRegex("technicalanalysisapi-key", "Technical Analysis API Key", "high", []string{"technicalanalysisapi", "technical analysis api"}, `(?i)\b(?:technicalanalysisapi|technical[ _-]?analysis[ _-]?api)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("tefter-api-key", "Tefter API Key", "high", []string{"tefter"}, `(?i)\btefter\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("teletype-api-key", "Teletype API Key", "high", []string{"teletype"}, `(?i)\bteletype\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9-]{64})\b`, 1, verifyTeletype),
-		NewRegex("tly-api-key", "T.LY API Key", "high", []string{"t.ly", "tly"}, `(?i)\b(?:t\.ly|tly)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{60})\b`, 1, verifyTLY),
+		NewReadOnlyRegex("tly-api-key", "T.LY API Key", "high", []string{"t.ly", "tly"}, `(?i)\b(?:t\.ly|tly)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{60})\b`, 1, verifyTLY),
 		NewRegex("tokeet-api-key", "Tokeet API Key", "high", []string{"tokeet"}, `(?i)\btokeet\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
-		NewRegex("travelpayouts-api-key", "Travelpayouts API Key", "high", []string{"travelpayouts", "travel payouts"}, `(?i)\b(?:travelpayouts|travel[ _-]?payouts)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-z0-9]{32})\b`, 1, verifyTravelpayouts),
+		NewUnsafeRegex("travelpayouts-api-key", "Travelpayouts API Key", "high", []string{"travelpayouts", "travel payouts"}, `(?i)\b(?:travelpayouts|travel[ _-]?payouts)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-z0-9]{32})\b`, 1, verifyTravelpayouts),
 		NewRegex("tru-api-key", "tru.ID API Key", "critical", []string{"tru.id", "tru"}, `(?i)\b(?:tru\.id|tru)\b.{0,80}\b(?:api[_-]?key|client[_-]?secret|secret|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("twist-api-token", "Twist API Token", "critical", []string{"twist"}, `(?i)\btwist\b.{0,80}\b(?:api[_-]?token|access[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyTwist),
 		NewRegex("tyntec-api-key", "tyntec API Key", "critical", []string{"tyntec"}, `(?i)\btyntec\b.{0,80}\b(?:api[_-]?key|key|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
@@ -1384,7 +1401,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("worksnaps-api-key", "Worksnaps API Key", "high", []string{"worksnaps"}, `(?i)\bworksnaps\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{40})\b`, 1, verifyWorksnaps),
 		NewRegex("workstack-api-key", "Workstack API Key", "high", []string{"workstack"}, `(?i)\bworkstack\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("yousign-api-key", "Yousign API Key", "critical", []string{"yousign"}, `(?i)\byousign\b.{0,80}\b(?:api[_-]?key|key|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyYousign),
-		NewRegex("zenkit-api-key", "Zenkit API Key", "high", []string{"zenkit"}, `(?i)\bzenkit\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-z0-9]{8}-[A-Za-z0-9]{32})\b`, 1, verifyZenkit),
+		NewReadOnlyRegex("zenkit-api-key", "Zenkit API Key", "high", []string{"zenkit"}, `(?i)\bzenkit\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-z0-9]{8}-[A-Za-z0-9]{32})\b`, 1, verifyZenkit),
 		NewRegex("zipapi-key", "Zip API Key", "high", []string{"zipapi", "zip api"}, `(?i)\b(?:zipapi|zip[ _-]?api)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("zipbooks-api-key", "ZipBooks API Key", "high", []string{"zipbooks", "zip books"}, `(?i)\b(?:zipbooks|zip[ _-]?books)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("zipcodeapi-key", "ZipCodeAPI Key", "high", []string{"zipcodeapi", "zipcode api", "zip code api"}, `(?i)\b(?:zipcodeapi|zipcode[ _-]?api|zip[ _-]?code[ _-]?api)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
@@ -1412,7 +1429,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("onesignal-api-key", "OneSignal API Key", "high", []string{"onesignal", "one signal"}, `(?i)\b(?:onesignal|one[ _-]?signal).{0,80}['\"\s:=]+([A-Za-z0-9_-]{48})\b`, 1, nil),
 		NewRegex("copper-api-key", "Copper API Key", "high", []string{"copper"}, `(?i)\bcopper.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, nil),
 		NewRegex("capsulecrm-api-key", "Capsule CRM API Key", "high", []string{"capsule"}, `(?i)\bcapsule(?:crm)?.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyCapsuleCRM),
-		NewRegex("apollo-api-key", "Apollo API Key", "high", []string{"apollo"}, `(?i)\bapollo.{0,40}['\"\s:=]+([A-Za-z0-9_-]{32,80})\b`, 1, verifyApollo),
+		NewAuthOnlyRegex("apollo-api-key", "Apollo API Key", "high", []string{"apollo"}, `(?i)\bapollo.{0,40}['\"\s:=]+([A-Za-z0-9]{22})\b`, 1, verifyApollo),
 		NewRegex("lemlist-api-key", "Lemlist API Key", "high", []string{"lemlist"}, `(?i)\blemlist.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyLemlist),
 		NewRegex("getresponse-api-key", "GetResponse API Key", "high", []string{"getresponse", "get response"}, `(?i)\b(?:getresponse|get[ _-]?response).{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyGetResponse),
 		NewRegex("alienvault-otx-api-key", "AlienVault OTX API Key", "high", []string{"alienvault", "otx"}, `(?i)\b(?:alienvault|otx).{0,40}['\"\s:=]+([a-f0-9]{64})\b`, 1, verifyAlienVaultOTX),
@@ -1426,26 +1443,26 @@ func DefaultRegistry() []Detector {
 			},
 			PrimaryPart: "api_secret", MaxDistance: 256, StopAtBlankLine: true, CompositeVerifier: verifyCensysCredentials, VerificationSafety: VerificationSafetyReadOnly,
 		},
-		NewRegex("vpnapi-key", "VPNAPI.io API Key", "high", []string{"vpnapi"}, `(?i)\bvpnapi(?:\.io)?.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyVPNAPI),
-		NewRegex("ipqualityscore-api-key", "IPQualityScore API Key", "high", []string{"ipqualityscore", "ipquality"}, `(?i)\b(?:ipqualityscore|ipquality).{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyIPQualityScore),
-		NewRegex("ipstack-api-key", "IPstack API Key", "high", []string{"ipstack"}, `(?i)\bipstack.{0,40}['\"\s:=]+([a-f0-9]{32})\b`, 1, verifyIPStack),
-		NewRegex("ipgeolocation-api-key", "IPGeolocation API Key", "high", []string{"ipgeolocation"}, `(?i)\bipgeolocation.{0,40}['\"\s:=]+([a-f0-9]{32})\b`, 1, verifyIPGeolocation),
+		NewUnsafeRegex("vpnapi-key", "VPNAPI.io API Key", "high", []string{"vpnapi"}, `(?i)\bvpnapi(?:\.io)?.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyVPNAPI),
+		NewUnsafeRegex("ipqualityscore-api-key", "IPQualityScore API Key", "high", []string{"ipqualityscore", "ipquality"}, `(?i)\b(?:ipqualityscore|ipquality).{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyIPQualityScore),
+		NewUnsafeRegex("ipstack-api-key", "IPstack API Key", "high", []string{"ipstack"}, `(?i)\bipstack.{0,40}['\"\s:=]+([a-f0-9]{32})\b`, 1, verifyIPStack),
+		NewUnsafeRegex("ipgeolocation-api-key", "IPGeolocation API Key", "high", []string{"ipgeolocation"}, `(?i)\bipgeolocation.{0,40}['\"\s:=]+([a-f0-9]{32})\b`, 1, verifyIPGeolocation),
 		NewRegex("zerotier-api-token", "ZeroTier API Token", "high", []string{"zerotier", "zero tier"}, `(?i)\b(?:zerotier|zero[ _-]?tier).{0,40}['\"\s:=]+([A-Za-z0-9]{40})\b`, 1, verifyZeroTier),
 		NewRegex("logzio-token", "Logz.io Token", "high", []string{"logz.io", "logzio"}, `(?i)\b(?:logz\.io|logzio).{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, nil),
 		NewRegex("codeclimate-token", "Code Climate Token", "high", []string{"codeclimate", "code climate"}, `(?i)\b(?:codeclimate|code[ _-]?climate).{0,40}['\"\s:=]+([a-f0-9]{64})\b`, 1, nil),
 		NewRegex("codacy-api-token", "Codacy API Token", "high", []string{"codacy"}, `(?i)\bcodacy.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyCodacy),
 		NewRegex("coveralls-repo-token", "Coveralls Repo Token", "high", []string{"coveralls"}, `(?i)\bcoveralls.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, nil),
-		NewRegex("weatherstack-api-key", "Weatherstack API Key", "high", []string{"weatherstack"}, `(?i)\bweatherstack.{0,40}['\"\s:=]+([a-f0-9]{32})\b`, 1, verifyWeatherstack),
-		NewRegex("accuweather-api-key", "AccuWeather API Key", "high", []string{"accuweather"}, `(?i)\baccuweather.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyAccuWeather),
-		NewRegex("weatherbit-api-key", "Weatherbit API Key", "high", []string{"weatherbit"}, `(?i)\bweatherbit.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyWeatherbit),
-		NewRegex("mapquest-api-key", "MapQuest API Key", "high", []string{"mapquest"}, `(?i)\bmapquest.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyMapQuest),
+		NewUnsafeRegex("weatherstack-api-key", "Weatherstack API Key", "high", []string{"weatherstack"}, `(?i)\bweatherstack.{0,40}['\"\s:=]+([a-f0-9]{32})\b`, 1, verifyWeatherstack),
+		NewUnsafeRegex("accuweather-api-key", "AccuWeather API Key", "high", []string{"accuweather"}, `(?i)\baccuweather.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyAccuWeather),
+		NewUnsafeRegex("weatherbit-api-key", "Weatherbit API Key", "high", []string{"weatherbit"}, `(?i)\bweatherbit.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyWeatherbit),
+		NewUnsafeRegex("mapquest-api-key", "MapQuest API Key", "high", []string{"mapquest"}, `(?i)\bmapquest.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyMapQuest),
 		NewRegex("aiven-token", "Aiven Token", "high", []string{"aiven"}, `(?i)\baiven.{0,40}['\"\s:=]+([A-Za-z0-9/+=]{372})`, 1, verifyAiven),
-		NewRegex("abuseipdb-api-key", "AbuseIPDB API Key", "high", []string{"abuseipdb"}, `(?i)\babuseipdb.{0,40}['\"\s:=]+([a-z0-9]{80})\b`, 1, verifyAbuseIPDB),
-		NewRegex("sonarcloud-token", "SonarCloud Token", "high", []string{"sonar", "SONAR_TOKEN"}, `(?i)\bsonar(?:cloud)?.{0,40}['\"\s:=]+([0-9a-z]{40})\b`, 1, verifySonarCloud),
+		NewUnsafeRegex("abuseipdb-api-key", "AbuseIPDB API Key", "high", []string{"abuseipdb"}, `(?i)\babuseipdb.{0,40}['\"\s:=]+([a-z0-9]{80})\b`, 1, verifyAbuseIPDB),
+		NewAuthOnlyRegexGroups("sonarcloud-token", "SonarCloud Token", "high", []string{"sonar", "SONAR_TOKEN", "sqco_"}, `(?i)(?:\b(?:sonar(?:cloud)?|sonar_token)\b.{0,40}['\"\s:=]+([0-9a-z]{40})\b|\b(sqco_[A-Za-z0-9]{59})\b)`, []int{1, 2}, verifySonarCloud),
 		NewRegex("jumpcloud-api-key", "JumpCloud API Key", "high", []string{"jumpcloud"}, `(?i)\bjumpcloud.{0,40}['\"\s:=]+([A-Za-z0-9]{40})\b`, 1, verifyJumpCloud),
-		NewRegex("pipedrive-api-token", "Pipedrive API Token", "high", []string{"pipedrive"}, `(?i)\bpipedrive.{0,40}['\"\s:=]+([A-Za-z0-9]{40})\b`, 1, verifyPipedrive),
+		NewReadOnlyRegex("pipedrive-api-token", "Pipedrive API Token", "high", []string{"pipedrive"}, `(?i)\bpipedrive.{0,40}['\"\s:=]+([A-Za-z0-9]{40})\b`, 1, verifyPipedrive),
 		NewRegex("sparkpost-api-key", "SparkPost API Key", "high", []string{"sparkpost"}, `(?i)\bsparkpost.{0,40}['\"\s:=]+([A-Za-z0-9]{40})\b`, 1, verifySparkPost),
-		NewRegex("dropbox-token", "Dropbox Token", "critical", []string{"sl.", "dropbox"}, `\b(sl\.(?:u\.)?[A-Za-z0-9_-]{130,})\b`, 1, verifyDropbox),
+		NewReadOnlyRegex("dropbox-token", "Dropbox Token", "critical", []string{"sl.", "dropbox"}, `\b(sl\.(?:u\.)?[A-Za-z0-9_-]{130,})\b`, 1, verifyDropbox),
 		NewReadOnlyRegex("readme-api-key", "ReadMe API Key", "critical", []string{"rdme_"}, `\b(rdme_[a-z0-9]{70})\b`, 1, verifyReadMe),
 		NewReadOnlyRegex("rootly-api-key", "Rootly API Key", "critical", []string{"rootly_"}, `\b(rootly_[a-f0-9]{64})\b`, 1, verifyRootly),
 		NewRegex("web3storage-token", "Web3 Storage Token", "critical", []string{"web3", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"}, `\b(eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJ[A-Za-z0-9_-]{100,300}\.[A-Za-z0-9_-]{25,100})\b`, 1, nil),

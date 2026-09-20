@@ -128,10 +128,10 @@ func TestDropboxVerifierUsesReadOnlyRPCAndRecognizesMissingScope(t *testing.T) {
 		if req.Header.Get("Authorization") != "Bearer token" {
 			t.Fatalf("authorization=%q", req.Header.Get("Authorization"))
 		}
-		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"error_summary":"missing_scope"}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"error_summary":"missing_scope"}`)), Header: make(http.Header)}, nil
 	})}
 	result := verifyDropbox(WithVerificationHTTPClient(context.Background(), client), "token")
-	if result.Status != VerificationVerified || result.Response == "" {
+	if result.Status != VerificationVerified || result.Response != "" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -2207,10 +2207,10 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 341,
-		VerificationSafetyReadOnly:   114,
-		VerificationSafetyAuthOnly:   28,
-		VerificationSafetyUnsafe:     84,
+		VerificationSafetyUnreviewed: 320,
+		VerificationSafetyReadOnly:   119,
+		VerificationSafetyAuthOnly:   31,
+		VerificationSafetyUnsafe:     97,
 	}
 	for safety, want := range expected {
 		if counts[safety] != want {
@@ -2221,18 +2221,18 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 226 || report.RequiresHardening != 235 || report.Blocked != 50 || report.PendingReview != 56 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 247 || report.RequiresHardening != 264 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
 		t.Fatalf("verification audit accounting mismatch: %#v", report)
 	}
-	if len(verificationAuditAssessments) != 450 {
-		t.Fatalf("audit manifest contains %d assessed entries, want 450", len(verificationAuditAssessments))
+	if len(verificationAuditAssessments) != 567 {
+		t.Fatalf("audit manifest contains %d assessed entries, want 567", len(verificationAuditAssessments))
 	}
 	seen := map[string]VerificationAuditStatus{}
 	for _, entry := range report.Entries {
-		if entry.AuditBatch > 0 {
+		if entry.AuditBatch > 0 || entry.Notes != "" {
 			seen[entry.ID] = entry.AuditStatus
 		}
 	}
@@ -2249,6 +2249,177 @@ func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T)
 		}
 		if seen[id] != want {
 			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
+		}
+	}
+}
+
+func TestFinalSystematicBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"paymo-api-key":          VerificationSafetyReadOnly,
+		"tly-api-key":            VerificationSafetyReadOnly,
+		"zenkit-api-key":         VerificationSafetyReadOnly,
+		"supernotes-api-key":     VerificationSafetyAuthOnly,
+		"apollo-api-key":         VerificationSafetyAuthOnly,
+		"sonarcloud-token":       VerificationSafetyAuthOnly,
+		"pipedrive-api-token":    VerificationSafetyReadOnly,
+		"dropbox-token":          VerificationSafetyReadOnly,
+		"privacy-api-key":        VerificationSafetyUnsafe,
+		"ritekit-api-key":        VerificationSafetyUnsafe,
+		"simfin-api-key":         VerificationSafetyUnsafe,
+		"travelpayouts-api-key":  VerificationSafetyUnsafe,
+		"vpnapi-key":             VerificationSafetyUnsafe,
+		"ipqualityscore-api-key": VerificationSafetyUnsafe,
+		"ipstack-api-key":        VerificationSafetyUnsafe,
+		"ipgeolocation-api-key":  VerificationSafetyUnsafe,
+		"weatherstack-api-key":   VerificationSafetyUnsafe,
+		"accuweather-api-key":    VerificationSafetyUnsafe,
+		"weatherbit-api-key":     VerificationSafetyUnsafe,
+		"mapquest-api-key":       VerificationSafetyUnsafe,
+		"abuseipdb-api-key":      VerificationSafetyUnsafe,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestFinalSystematicBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		method      string
+		host        string
+		path        string
+		header      string
+		headerValue string
+		response    string
+	}{
+		{name: "paymo", verify: verifyPaymo, method: http.MethodGet, host: "app.paymoapp.com", path: "/api/me", header: "Authorization", headerValue: "Basic c2VjcmV0Olg=", response: `{"id":1}`},
+		{name: "tly", verify: verifyTLY, method: http.MethodGet, host: "api.t.ly", path: "/api/v1/link/list", header: "Authorization", headerValue: "Bearer secret", response: `{"current_page":1,"data":[]}`},
+		{name: "zenkit", verify: verifyZenkit, method: http.MethodGet, host: "base.zenkit.com", path: "/api/v1/users/me", header: "Zenkit-API-Key", headerValue: "secret", response: `{"id":1}`},
+		{name: "supernotes", verify: verifySupernotes, method: http.MethodGet, host: "api.supernotes.app", path: "/v1/user/token", header: "Api-Key", headerValue: "secret", response: `{"user_id":"user"}`},
+		{name: "apollo", verify: verifyApollo, method: http.MethodGet, host: "api.apollo.io", path: "/api/v1/auth/health", header: "x-api-key", headerValue: "secret", response: `{"healthy":true,"is_logged_in":true}`},
+		{name: "sonar", verify: verifySonarCloud, method: http.MethodGet, host: "sonarcloud.io", path: "/api/authentication/validate", header: "Authorization", headerValue: "Bearer sqco_" + strings.Repeat("A", 59), response: `{"valid":true}`},
+		{name: "pipedrive", verify: verifyPipedrive, method: http.MethodGet, host: "api.pipedrive.com", path: "/v1/users/me", header: "x-api-token", headerValue: "secret", response: `{"success":true,"data":{"id":1}}`},
+		{name: "dropbox", verify: verifyDropbox, method: http.MethodPost, host: "api.dropboxapi.com", path: "/2/users/get_current_account", header: "Authorization", headerValue: "Bearer secret", response: `{"account_id":"dbid:account"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.Header.Get(test.header) != test.headerValue {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			secret := "secret"
+			if test.name == "sonar" {
+				secret = "sqco_" + strings.Repeat("A", 59)
+			}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), secret)
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestFinalSystematicBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyPaymo, verifyTLY, verifyZenkit, verifySupernotes, verifyApollo, verifySonarCloud, verifyPipedrive, verifyDropbox} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestFinalSystematicBatchLegacySonarAuthentication(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		username, password, ok := req.BasicAuth()
+		if !ok || username != strings.Repeat("a", 40) || password != "" {
+			t.Fatalf("unexpected Sonar basic auth: username=%q password=%q ok=%v", username, password, ok)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"valid":true}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifySonarCloud(WithVerificationHTTPClient(context.Background(), client), strings.Repeat("a", 40))
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("legacy Sonar result=%#v", result)
+	}
+}
+
+func TestFinalSystematicBatchDetectsLegacySonarToken(t *testing.T) {
+	legacy := strings.Repeat("a", 40)
+	for _, detector := range DefaultRegistry() {
+		if detector.Info().ID != "sonarcloud-token" {
+			continue
+		}
+		candidates := detector.Detect([]byte(`SONAR_TOKEN="` + legacy + `"`))
+		if len(candidates) != 1 || candidates[0].Secret != legacy {
+			t.Fatalf("legacy Sonar candidates=%#v", candidates)
+		}
+		return
+	}
+	t.Fatal("Sonar detector missing")
+}
+
+func TestFinalSystematicBatchRejectsNearValidIdentitySchemas(t *testing.T) {
+	tests := []struct {
+		verify Verifier
+		body   string
+	}{
+		{verify: verifyPaymo, body: `{"id":{}}`},
+		{verify: verifyZenkit, body: `{"id":false}`},
+		{verify: verifyPipedrive, body: `{"success":false,"data":{"id":1}}`},
+	}
+	for _, test := range tests {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+		})}
+		if result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("near-valid identity result=%#v", result)
+		}
+	}
+}
+
+func TestFinalSystematicBatchDropboxDoesNotTrustFailureMarker(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(strings.NewReader(`{"error_summary":"missing_scope"}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyDropbox(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnknown || result.Response != "" {
+		t.Fatalf("Dropbox provider failure result=%#v", result)
+	}
+}
+
+func TestFinalSystematicBatchDropboxDoesNotTrustInvalidMarkerOnFailure(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(strings.NewReader(`{"error_summary":"invalid_access_token"}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyDropbox(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnknown || result.Response != "" {
+		t.Fatalf("Dropbox rate-limit result=%#v", result)
+	}
+}
+
+func TestFinalUnsafeBatchSuppressesProviderResponses(t *testing.T) {
+	for _, verify := range []Verifier{verifyVPNAPI, verifyIPQualityScore, verifyIPStack, verifyIPGeolocation, verifyWeatherstack, verifyAccuWeather, verifyWeatherbit, verifyMapQuest, verifyAbuseIPDB} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		if result := verify(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("unsafe provider failure result=%#v", result)
 		}
 	}
 }
@@ -4609,7 +4780,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"onesignal-api-key", "onesignal_rest_api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"copper-api-key", "copper_api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"capsulecrm-api-key", "capsulecrm_api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
-		{"apollo-api-key", "apollo_api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
+		{"apollo-api-key", "apollo_api_key=\"" + strings.Repeat("A", 22) + "\"", strings.Repeat("A", 22)},
 		{"lemlist-api-key", "lemlist_api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"getresponse-api-key", "getresponse_api_key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"alienvault-otx-api-key", "alienvault_otx_key=\"" + strings.Repeat("a", 64) + "\"", strings.Repeat("a", 64)},
@@ -4629,7 +4800,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"mapquest-api-key", "mapquest key=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
 		{"aiven-token", "aiven_token=\"" + strings.Repeat("A", 372) + "\"", strings.Repeat("A", 372)},
 		{"abuseipdb-api-key", "abuseipdb_key=\"" + strings.Repeat("a", 80) + "\"", strings.Repeat("a", 80)},
-		{"sonarcloud-token", "SONAR_TOKEN=\"" + strings.Repeat("a", 40) + "\"", strings.Repeat("a", 40)},
+		{"sonarcloud-token", "sqco_" + strings.Repeat("A", 59), "sqco_" + strings.Repeat("A", 59)},
 		{"jumpcloud-api-key", "jumpcloud_api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"pipedrive-api-token", "pipedrive_token=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
 		{"sparkpost-api-key", "sparkpost_api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
@@ -5039,7 +5210,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"square-app-secret", "square app_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"squarespace-api-key", "squarespace api_key=\"12345678-1234-1234-1234-123456789abc\"", "12345678-1234-1234-1234-123456789abc"},
 		{"stitchdata-api-token", "stitch data api_token=\"" + strings.Repeat("a", 35) + "\"", strings.Repeat("a", 35)},
-		{"supernotes-api-key", "supernotes api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"supernotes-api-key", "supernotes api_key=\"" + strings.Repeat("A", 43) + "\"", strings.Repeat("A", 43)},
 		{"surveyanyplace-api-key", "survey anyplace api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"surveybot-api-key", "survey bot api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"surveysparrow-api-key", "survey sparrow api_key=\"" + strings.Repeat("A", 88) + "\"", strings.Repeat("A", 88)},
