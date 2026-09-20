@@ -1263,12 +1263,20 @@ func verifySemgrep(ctx context.Context, secret string) VerificationResult {
 func verifyThousandEyes(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.thousandeyes.com/v7/account-groups", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
 		if statusCode == http.StatusForbidden {
 			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
 		}
-		return VerificationResult{}, false
+		if statusCode >= 200 && statusCode < 300 && jsonHasTopLevelArray(body, "accountGroups") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if statusCode == http.StatusUnauthorized {
+			return invalidCredentialResult(), true
+		}
+		return verifyJSONReadClassification(statusCode, body)
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyVultr(ctx context.Context, secret string) VerificationResult {
@@ -2454,7 +2462,7 @@ func verifyPinata(ctx context.Context, secret string) VerificationResult {
 func verifyTheOddsAPI(ctx context.Context, secret string) VerificationResult {
 	endpoint := "https://api.the-odds-api.com/v4/sports/?apiKey=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
 		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "INVALID_KEY") {
 			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
 		}
@@ -2463,6 +2471,8 @@ func verifyTheOddsAPI(ctx context.Context, secret string) VerificationResult {
 		}
 		return VerificationResult{}, false
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyJotform(ctx context.Context, secret string) VerificationResult {
@@ -2683,7 +2693,7 @@ func classifyAPIlayerKey(statusCode int, body []byte) (VerificationResult, bool)
 
 func jsonArray(body []byte) bool {
 	var value []any
-	return json.Unmarshal(body, &value) == nil
+	return json.Unmarshal(body, &value) == nil && value != nil
 }
 
 func jsonObject(body []byte) bool {
@@ -3276,7 +3286,8 @@ func verifySalesloft(ctx context.Context, secret string) VerificationResult {
 func verifyTiingo(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.tiingo.com/api/test", nil)
 	req.Header.Set("Authorization", "Token "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+	req.Header.Set("Content-Type", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
 		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
 			return VerificationResult{}, false
 		}
@@ -3295,6 +3306,8 @@ func verifyTiingo(ctx context.Context, secret string) VerificationResult {
 			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
 		}
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyWorkable(ctx context.Context, secret string) VerificationResult {
@@ -3667,7 +3680,9 @@ func verifyWalkScore(ctx context.Context, secret string) VerificationResult {
 func verifyVeriphone(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.veriphone.io/v2/credits", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"email", "counter", "active"}, "invalid api key"))
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"email", "counter", "active"}, "invalid api key"))
+	result.Response = ""
+	return result
 }
 
 func verifyRAWG(ctx context.Context, secret string) VerificationResult {
@@ -4072,7 +4087,12 @@ func verifySignUpGenius(ctx context.Context, secret string) VerificationResult {
 func verifySportsMonk(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.sportmonks.com/v3/football/leagues?per_page=1", nil)
 	req.Header.Set("Authorization", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"data", "rate_limit", "requested_entity"}, "invalid token provided"))
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token without feed access"}, true
+		}
+		return classifyReadOnlyAPI([]string{"data", "rate_limit", "requested_entity"}, "invalid token provided")(statusCode, body)
+	})
 	result.Response = ""
 	return result
 }
@@ -4340,7 +4360,12 @@ func verifyShotstack(ctx context.Context, secret string) VerificationResult {
 func verifyUpLead(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.uplead.com/v2/credits", nil)
 	req.Header.Set("Authorization", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"credits"}, "api key is invalid"))
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a paused or unsubscribed account"}, true
+		}
+		return classifyReadOnlyAPI([]string{"credits"}, "api key is invalid")(statusCode, body)
+	})
 	result.Response = ""
 	return result
 }
@@ -4474,7 +4499,14 @@ func verifySendbirdOrganization(ctx context.Context, secret string) Verification
 func verifyShipday(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.shipday.com/carriers", nil)
 	req.Header.Set("Authorization", "Basic "+secret)
-	return verifyPrivateCollection(ctx, req)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden {
+			return invalidCredentialResult(), true
+		}
+		return classifyCollectionResponse()(statusCode, body)
+	})
+	result.Response = ""
+	return result
 }
 
 func verifySignaturit(ctx context.Context, secret string) VerificationResult {
@@ -6012,7 +6044,7 @@ func verifySelectPDF(ctx context.Context, secret string) VerificationResult {
 			Used      *int   `json:"used"`
 			Available *int   `json:"available"`
 		}
-		if json.Unmarshal(body, &response) == nil && statusCode >= 200 && statusCode < 300 && response.Status != "" && response.Limit != nil && response.Used != nil && response.Available != nil {
+		if json.Unmarshal(body, &response) == nil && statusCode >= 200 && statusCode < 300 && response.Status == "License key active." && response.Limit != nil && response.Used != nil && response.Available != nil {
 			return VerificationResult{Status: VerificationVerified}, true
 		}
 		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true

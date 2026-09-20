@@ -1656,7 +1656,7 @@ func TestSelectPDFVerifierUsesReadOnlyUsageEndpoint(t *testing.T) {
 		body   string
 		status VerificationStatus
 	}{
-		{name: "valid", code: http.StatusOK, body: `{"status":"active","limit":100,"used":100,"available":0}`, status: VerificationVerified},
+		{name: "valid", code: http.StatusOK, body: `{"status":"License key active.","limit":100,"used":100,"available":0}`, status: VerificationVerified},
 		{name: "invalid", code: http.StatusUnauthorized, body: `License key not valid.`, status: VerificationUnverified},
 		{name: "ambiguous", code: http.StatusForbidden, body: `Plan does not include usage API`, status: VerificationUnknown},
 	}
@@ -2207,10 +2207,10 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 400,
-		VerificationSafetyReadOnly:   90,
-		VerificationSafetyAuthOnly:   23,
-		VerificationSafetyUnsafe:     54,
+		VerificationSafetyUnreviewed: 376,
+		VerificationSafetyReadOnly:   98,
+		VerificationSafetyAuthOnly:   24,
+		VerificationSafetyUnsafe:     69,
 	}
 	for safety, want := range expected {
 		if counts[safety] != want {
@@ -2221,14 +2221,14 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 167 || report.RequiresHardening != 166 || report.Blocked != 28 || report.PendingReview != 206 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 191 || report.RequiresHardening != 188 || report.Blocked != 32 || report.PendingReview != 156 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
 		t.Fatalf("verification audit accounting mismatch: %#v", report)
 	}
-	if len(verificationAuditAssessments) != 300 {
-		t.Fatalf("audit manifest contains %d assessed entries, want 300", len(verificationAuditAssessments))
+	if len(verificationAuditAssessments) != 350 {
+		t.Fatalf("audit manifest contains %d assessed entries, want 350", len(verificationAuditAssessments))
 	}
 	seen := map[string]VerificationAuditStatus{}
 	for _, entry := range report.Entries {
@@ -2249,6 +2249,131 @@ func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T)
 		}
 		if seen[id] != want {
 			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
+		}
+	}
+}
+
+func TestSeventhLargeBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"shipday-api-key":        VerificationSafetyReadOnly,
+		"sportsmonk-api-token":   VerificationSafetyReadOnly,
+		"timecamp-api-token":     VerificationSafetyReadOnly,
+		"theoddsapi-key":         VerificationSafetyReadOnly,
+		"upcdatabase-api-key":    VerificationSafetyReadOnly,
+		"uplead-api-key":         VerificationSafetyReadOnly,
+		"selectpdf-api-key":      VerificationSafetyReadOnly,
+		"veriphone-api-key":      VerificationSafetyReadOnly,
+		"tiingo-api-token":       VerificationSafetyAuthOnly,
+		"linkpreview-api-key":    VerificationSafetyUnsafe,
+		"mockaroo-api-key":       VerificationSafetyUnsafe,
+		"pixabay-api-key":        VerificationSafetyUnsafe,
+		"rawg-api-key":           VerificationSafetyUnsafe,
+		"spoonacular-api-key":    VerificationSafetyUnsafe,
+		"stockdata-api-key":      VerificationSafetyUnsafe,
+		"tatum-api-key":          VerificationSafetyUnsafe,
+		"tomtom-api-key":         VerificationSafetyUnsafe,
+		"unsplash-access-key":    VerificationSafetyUnsafe,
+		"userstack-api-key":      VerificationSafetyUnsafe,
+		"visualcrossing-api-key": VerificationSafetyUnsafe,
+		"yelp-api-key":           VerificationSafetyUnsafe,
+		"ticketmaster-api-key":   VerificationSafetyUnsafe,
+		"uclassify-api-key":      VerificationSafetyUnsafe,
+		"walkscore-api-key":      VerificationSafetyUnsafe,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestSeventhLargeBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		host        string
+		path        string
+		query       string
+		header      string
+		headerValue string
+		response    string
+	}{
+		{name: "shipday", verify: verifyShipday, host: "api.shipday.com", path: "/carriers", header: "Authorization", headerValue: "Basic secret", response: `[]`},
+		{name: "sportsmonk", verify: verifySportsMonk, host: "api.sportmonks.com", path: "/v3/football/leagues", query: "per_page=1", header: "Authorization", headerValue: "secret", response: `{"data":[],"rate_limit":{},"requested_entity":[]}`},
+		{name: "timecamp", verify: verifyTimeCamp, host: "app.timecamp.com", path: "/third_party/api/user", query: "format=json", header: "Authorization", headerValue: "secret", response: `{"user_id":"user"}`},
+		{name: "odds", verify: verifyTheOddsAPI, host: "api.the-odds-api.com", path: "/v4/sports/", query: "apiKey=secret", response: `[]`},
+		{name: "upc", verify: verifyUPCDatabase, host: "api.upcdatabase.org", path: "/account", header: "Authorization", headerValue: "Bearer secret", response: `{"success":true,"api_subscription":{},"api_limits":{},"api_remain":1}`},
+		{name: "uplead", verify: verifyUpLead, host: "api.uplead.com", path: "/v2/credits", header: "Authorization", headerValue: "secret", response: `{"data":{"credits":1}}`},
+		{name: "selectpdf", verify: verifySelectPDF, host: "selectpdf.com", path: "/api2/usage/", query: "get_history=False&key=secret", response: `{"status":"License key active.","limit":10,"used":1,"available":9}`},
+		{name: "veriphone", verify: verifyVeriphone, host: "api.veriphone.io", path: "/v2/credits", header: "Authorization", headerValue: "Bearer secret", response: `{"email":"user@example.com","counter":1,"active":true}`},
+		{name: "tiingo", verify: verifyTiingo, host: "api.tiingo.com", path: "/api/test", header: "Authorization", headerValue: "Token secret", response: `{"message":"You successfully sent a request"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.query || (test.header != "" && req.Header.Get(test.header) != test.headerValue) {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				if test.name == "tiingo" && req.Header.Get("Content-Type") != "application/json" {
+					t.Fatalf("unexpected Tiingo headers: %#v", req.Header)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestSeventhLargeBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyShipday, verifySportsMonk, verifyTimeCamp, verifyTheOddsAPI, verifyUPCDatabase, verifyUpLead, verifySelectPDF, verifyVeriphone, verifyTiingo} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestSeventhLargeBatchRejectsNullCollections(t *testing.T) {
+	for _, verify := range []Verifier{verifyShipday, verifyTheOddsAPI} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`null`)), Header: make(http.Header)}, nil
+		})}
+		if result := verify(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("null collection result=%#v", result)
+		}
+	}
+}
+
+func TestSeventhLargeBatchProviderAuthorizationResponses(t *testing.T) {
+	tests := []struct {
+		verify Verifier
+		status VerificationStatus
+	}{
+		{verify: verifyShipday, status: VerificationUnverified},
+		{verify: verifySportsMonk, status: VerificationVerified},
+		{verify: verifyUpLead, status: VerificationVerified},
+	}
+	for _, test := range tests {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+		})}
+		if result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != test.status || result.Response != "" {
+			t.Fatalf("authorization result=%#v", result)
 		}
 	}
 }
