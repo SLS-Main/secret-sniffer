@@ -1864,7 +1864,7 @@ func verifySquare(ctx context.Context, secret string) VerificationResult {
 func verifyAttio(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.attio.com/v2/self", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
 		if statusCode < 200 || statusCode >= 300 {
 			return VerificationResult{}, false
 		}
@@ -1879,6 +1879,8 @@ func verifyAttio(ctx context.Context, secret string) VerificationResult {
 		}
 		return invalidCredentialResult(), true
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyOnfleet(ctx context.Context, secret string) VerificationResult {
@@ -2249,7 +2251,25 @@ func verifyDaily(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAffinity(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.affinity.co/auth/whoami")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.affinity.co/v2/auth/whoami", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			Tenant struct {
+				ID int64 `json:"id"`
+			} `json:"tenant"`
+			User struct {
+				ID int64 `json:"id"`
+			} `json:"user"`
+			Grant struct {
+				Type string `json:"type"`
+			} `json:"grant"`
+		}
+		if json.Unmarshal(body, &response) != nil || response.Tenant.ID <= 0 || response.User.ID <= 0 {
+			return false
+		}
+		return response.Grant.Type == "api-key" || response.Grant.Type == "access-token"
+	})
 }
 
 func verifyWise(ctx context.Context, secret string) VerificationResult {
@@ -2759,24 +2779,34 @@ func verifyMavenlink(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAshby(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.ashbyhq.com/user.list", strings.NewReader(`{"limit":1}`))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.ashbyhq.com/apiKey.info", strings.NewReader(`{}`))
 	req.SetBasicAuth(secret, "")
 	req.Header.Set("Content-Type", "application/json")
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "missing_endpoint_permission") {
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key without apiKeysRead permission"}, true
+		}
 		if statusCode < 200 || statusCode >= 300 {
 			return VerificationResult{}, false
 		}
 		var response struct {
 			Success *bool `json:"success"`
+			Results struct {
+				Title     string   `json:"title"`
+				CreatedAt string   `json:"createdAt"`
+				Scopes    []string `json:"scopes"`
+			} `json:"results"`
 		}
 		if json.Unmarshal(body, &response) != nil || response.Success == nil {
 			return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
 		}
-		if *response.Success {
+		if *response.Success && response.Results.Title != "" && response.Results.CreatedAt != "" && response.Results.Scopes != nil {
 			return VerificationResult{Status: VerificationVerified}, true
 		}
 		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
 	})
+	result.Response = ""
+	return result
 }
 
 func verifySmartRecruiters(ctx context.Context, secret string) VerificationResult {
@@ -2995,7 +3025,12 @@ func verifyOmnisend(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.omnisend.com/api/brands/current", nil)
 	req.Header.Set("Authorization", "Omnisend-API-Key "+secret)
 	req.Header.Set("Omnisend-Version", "2026-03-15")
-	return verifyHTTPRequest(ctx, req)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			BrandID string `json:"brandID"`
+		}
+		return json.Unmarshal(body, &response) == nil && response.BrandID != ""
+	})
 }
 
 func verifyEasyship(ctx context.Context, secret string) VerificationResult {
@@ -3111,9 +3146,18 @@ func verifyMailboxlayer(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPhotoRoom(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://image-api.photoroom.com/v1/account", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://image-api.photoroom.com/v2/account", nil)
 	req.Header.Set("x-api-key", secret)
-	return positiveOnlyVerification(verifyHTTPRequest(ctx, req), "credential format could not be confirmed as a PhotoRoom secret key")
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			Plan   string `json:"plan"`
+			Images *struct {
+				Available    *int64 `json:"available"`
+				Subscription *int64 `json:"subscription"`
+			} `json:"images"`
+		}
+		return json.Unmarshal(body, &response) == nil && response.Plan != "" && response.Images != nil && response.Images.Available != nil && response.Images.Subscription != nil
+	})
 }
 
 func positiveOnlyVerification(result VerificationResult, message string) VerificationResult {
@@ -3794,7 +3838,22 @@ func verifyAlchemy(ctx context.Context, secret string) VerificationResult {
 func verifyDetectLanguage(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://ws.detectlanguage.com/v3/account/status", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"status", "requests", "daily_requests_limit"}, "invalid api key"))
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if containsAnyFold(string(body), "invalid api key") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 {
+			var response struct {
+				Status             string `json:"status"`
+				Requests           *int64 `json:"requests"`
+				DailyRequestsLimit *int64 `json:"daily_requests_limit"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.Status == "ACTIVE" && response.Requests != nil && response.DailyRequestsLimit != nil {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+		}
+		return verifyJSONReadClassification(statusCode, body)
+	})
 	result.Response = ""
 	return result
 }
@@ -4870,7 +4929,13 @@ func verifyInstantly(ctx context.Context, secret string) VerificationResult {
 		if statusCode == http.StatusPaymentRequired && containsAnyFold(string(body), "active paid plan") {
 			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a workspace without an active paid plan"}, true
 		}
-		return classifyReadOnlyAPI([]string{"id", "name", "owner"}, "invalid api key")(statusCode, body)
+		if containsAnyFold(string(body), "invalid api key") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonHasTopLevelStrings(body, "id", "name", "owner") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(statusCode, body)
 	})
 	result.Response = ""
 	return result

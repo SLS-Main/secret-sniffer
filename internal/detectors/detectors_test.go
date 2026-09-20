@@ -2207,10 +2207,10 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 426,
-		VerificationSafetyReadOnly:   85,
-		VerificationSafetyAuthOnly:   18,
-		VerificationSafetyUnsafe:     38,
+		VerificationSafetyUnreviewed: 400,
+		VerificationSafetyReadOnly:   90,
+		VerificationSafetyAuthOnly:   23,
+		VerificationSafetyUnsafe:     54,
 	}
 	for safety, want := range expected {
 		if counts[safety] != want {
@@ -2221,14 +2221,14 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 141 || report.RequiresHardening != 146 || report.Blocked != 24 || report.PendingReview != 256 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 167 || report.RequiresHardening != 166 || report.Blocked != 28 || report.PendingReview != 206 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
 		t.Fatalf("verification audit accounting mismatch: %#v", report)
 	}
-	if len(verificationAuditAssessments) != 250 {
-		t.Fatalf("audit manifest contains %d assessed entries, want 250", len(verificationAuditAssessments))
+	if len(verificationAuditAssessments) != 300 {
+		t.Fatalf("audit manifest contains %d assessed entries, want 300", len(verificationAuditAssessments))
 	}
 	seen := map[string]VerificationAuditStatus{}
 	for _, entry := range report.Entries {
@@ -2249,6 +2249,144 @@ func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T)
 		}
 		if seen[id] != want {
 			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
+		}
+	}
+}
+
+func TestSixthLargeBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"omnisend-api-key":       VerificationSafetyReadOnly,
+		"photoroom-api-key":      VerificationSafetyReadOnly,
+		"attio-api-key":          VerificationSafetyAuthOnly,
+		"affinity-api-key":       VerificationSafetyAuthOnly,
+		"instantly-api-key":      VerificationSafetyReadOnly,
+		"ashby-api-key":          VerificationSafetyAuthOnly,
+		"apitemplate-api-key":    VerificationSafetyReadOnly,
+		"besttime-api-key":       VerificationSafetyAuthOnly,
+		"detectlanguage-api-key": VerificationSafetyAuthOnly,
+		"diffbot-api-token":      VerificationSafetyReadOnly,
+		"numverify-api-key":      VerificationSafetyUnsafe,
+		"deel-api-token":         VerificationSafetyUnsafe,
+		"airvisual-api-key":      VerificationSafetyUnsafe,
+		"ambee-api-key":          VerificationSafetyUnsafe,
+		"appfollow-api-key":      VerificationSafetyUnsafe,
+		"aviationstack-api-key":  VerificationSafetyUnsafe,
+		"brandfetch-api-key":     VerificationSafetyUnsafe,
+		"calendarific-api-key":   VerificationSafetyUnsafe,
+		"currentsapi-api-key":    VerificationSafetyUnsafe,
+		"debounce-api-key":       VerificationSafetyUnsafe,
+		"ethplorer-api-key":      VerificationSafetyUnsafe,
+		"holidayapi-key":         VerificationSafetyUnsafe,
+		"ip2location-api-key":    VerificationSafetyUnsafe,
+		"ipapi-api-key":          VerificationSafetyUnsafe,
+		"ipinfodb-api-key":       VerificationSafetyUnsafe,
+		"languagelayer-api-key":  VerificationSafetyUnsafe,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestSixthLargeBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		method      string
+		host        string
+		path        string
+		query       string
+		header      string
+		headerValue string
+		response    string
+	}{
+		{name: "omnisend", verify: verifyOmnisend, method: http.MethodGet, host: "api.omnisend.com", path: "/api/brands/current", header: "Authorization", headerValue: "Omnisend-API-Key secret", response: `{"brandID":"brand"}`},
+		{name: "photoroom", verify: verifyPhotoRoom, method: http.MethodGet, host: "image-api.photoroom.com", path: "/v2/account", header: "x-api-key", headerValue: "secret", response: `{"plan":"pro","images":{"available":1,"subscription":1}}`},
+		{name: "attio", verify: verifyAttio, method: http.MethodGet, host: "api.attio.com", path: "/v2/self", header: "Authorization", headerValue: "Bearer secret", response: `{"active":true}`},
+		{name: "affinity", verify: verifyAffinity, method: http.MethodGet, host: "api.affinity.co", path: "/v2/auth/whoami", header: "Authorization", headerValue: "Bearer secret", response: `{"tenant":{"id":1},"user":{"id":2},"grant":{"type":"api-key"}}`},
+		{name: "instantly", verify: verifyInstantly, method: http.MethodGet, host: "api.instantly.ai", path: "/api/v2/workspaces/current", header: "Authorization", headerValue: "Bearer secret", response: `{"id":"workspace","name":"Example","owner":"00000000-0000-0000-0000-000000000001"}`},
+		{name: "ashby", verify: verifyAshby, method: http.MethodPost, host: "api.ashbyhq.com", path: "/apiKey.info", header: "Authorization", headerValue: "Basic c2VjcmV0Og==", response: `{"success":true,"results":{"title":"key","createdAt":"2026-01-01T00:00:00Z","scopes":[]}}`},
+		{name: "apitemplate", verify: verifyAPITemplate, method: http.MethodGet, host: "api.apitemplate.io", path: "/v1/list-templates", header: "X-API-KEY", headerValue: "secret", response: `{"templates":[]}`},
+		{name: "besttime", verify: verifyBestTime, method: http.MethodGet, host: "besttime.app", path: "/api/v1/keys/secret", response: `{"status":"OK","valid":true}`},
+		{name: "detect-language", verify: verifyDetectLanguage, method: http.MethodGet, host: "ws.detectlanguage.com", path: "/v3/account/status", header: "Authorization", headerValue: "Bearer secret", response: `{"status":"ACTIVE","requests":1,"daily_requests_limit":100}`},
+		{name: "diffbot", verify: verifyDiffbot, method: http.MethodGet, host: "api.diffbot.com", path: "/v4/account", query: "days=1&token=secret", response: `{"token":"secret","status":"active","planCredits":100}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.query || (test.header != "" && req.Header.Get(test.header) != test.headerValue) {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				if test.name == "omnisend" && req.Header.Get("Omnisend-Version") != "2026-03-15" {
+					t.Fatalf("unexpected Omnisend headers: %#v", req.Header)
+				}
+				if test.name == "ashby" {
+					body, _ := io.ReadAll(req.Body)
+					if string(body) != `{}` {
+						t.Fatalf("Ashby body=%s", body)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestSixthLargeBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyOmnisend, verifyPhotoRoom, verifyAttio, verifyAffinity, verifyInstantly, verifyAshby, verifyAPITemplate, verifyBestTime, verifyDetectLanguage, verifyDiffbot} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestSixthLargeBatchDocumentedAuthorizationResponses(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"error":"invalid api key"}`)), Header: make(http.Header)}, nil
+	})}
+	if result := verifyPhotoRoom(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnverified || result.Response != "" {
+		t.Fatalf("PhotoRoom rejection result=%#v", result)
+	}
+	client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"errors":[{"message":"missing_endpoint_permission"}]}`)), Header: make(http.Header)}, nil
+	})}
+	if result := verifyAshby(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("Ashby restricted-key result=%#v", result)
+	}
+}
+
+func TestSixthLargeBatchRejectsNearValidSchemas(t *testing.T) {
+	tests := []struct {
+		verify Verifier
+		body   string
+	}{
+		{verify: verifyAffinity, body: `{"tenant":{"id":{}},"user":{"id":[]},"grant":{"type":"invalid"}}`},
+		{verify: verifyAshby, body: `{"success":true,"results":{"scopes":[]}}`},
+	}
+	for _, test := range tests {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+		})}
+		if result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("near-valid schema result=%#v", result)
 		}
 	}
 }
