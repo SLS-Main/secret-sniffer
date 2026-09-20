@@ -4524,7 +4524,7 @@ func verifySignaturit(ctx context.Context, secret string) VerificationResult {
 func verifyIconfinder(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.iconfinder.com/v4/iconsets?count=1", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyPrivateCollection(ctx, req, "provided api key is invalid")
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool { return jsonHasTopLevelArray(body, "iconsets") })
 }
 
 func verifyHappyScribe(ctx context.Context, secret string) VerificationResult {
@@ -5341,7 +5341,17 @@ func verifyFlexport(ctx context.Context, secret string) VerificationResult {
 func verifyJuro(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.juro.com/v3/templates", nil)
 	req.Header.Set("x-api-key", secret)
-	return verifyPrivateCollection(ctx, req, `"message":"forbidden"`)
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), `"message":"forbidden"`, `"message": "forbidden"`) {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonHasTopLevelArray(body, "templates") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(statusCode, body)
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyMindMeister(ctx context.Context, secret string) VerificationResult {
@@ -5652,13 +5662,23 @@ func verifyApacta(ctx context.Context, secret string) VerificationResult {
 func verifyLeadfeeder(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.leadfeeder.com/accounts", nil)
 	req.Header.Set("Authorization", "Token token="+secret)
-	return verifyPrivateCollection(ctx, req, "invalid access token")
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool { return jsonHasTopLevelArray(body, "data") })
 }
 
 func verifyKnapsackPro(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.knapsackpro.com/v1/builds?page=1", nil)
 	req.Header.Set("KNAPSACK-PRO-TEST-SUITE-TOKEN", secret)
-	return verifyPrivateCollection(ctx, req, "invalid test suite token")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "invalid test suite token") {
+			return invalidCredentialResult(), true
+		}
+		if statusCode >= 200 && statusCode < 300 && jsonHasTopLevelArray(body, "data") && jsonHasTopLevelObject(body, "links") && jsonHasTopLevelObject(body, "meta") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(statusCode, body)
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyTLY(ctx context.Context, secret string) VerificationResult {
@@ -6020,7 +6040,7 @@ func verifyNVAPI(ctx context.Context, secret string) VerificationResult {
 		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "unauthorized", "invalid api key") {
 			return invalidCredentialResult(), true
 		}
-		if statusCode >= 200 && statusCode < 300 && jsonObject(body) {
+		if statusCode >= 200 && statusCode < 300 && jsonHasTopLevelStrings(body, "id") {
 			return VerificationResult{Status: VerificationVerified}, true
 		}
 		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true

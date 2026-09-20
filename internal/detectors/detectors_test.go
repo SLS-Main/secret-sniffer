@@ -2207,10 +2207,10 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 357,
-		VerificationSafetyReadOnly:   106,
-		VerificationSafetyAuthOnly:   26,
-		VerificationSafetyUnsafe:     78,
+		VerificationSafetyUnreviewed: 341,
+		VerificationSafetyReadOnly:   114,
+		VerificationSafetyAuthOnly:   28,
+		VerificationSafetyUnsafe:     84,
 	}
 	for safety, want := range expected {
 		if counts[safety] != want {
@@ -2221,14 +2221,14 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 210 || report.RequiresHardening != 211 || report.Blocked != 40 || report.PendingReview != 106 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 226 || report.RequiresHardening != 235 || report.Blocked != 50 || report.PendingReview != 56 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
 		t.Fatalf("verification audit accounting mismatch: %#v", report)
 	}
-	if len(verificationAuditAssessments) != 400 {
-		t.Fatalf("audit manifest contains %d assessed entries, want 400", len(verificationAuditAssessments))
+	if len(verificationAuditAssessments) != 450 {
+		t.Fatalf("audit manifest contains %d assessed entries, want 450", len(verificationAuditAssessments))
 	}
 	seen := map[string]VerificationAuditStatus{}
 	for _, entry := range report.Entries {
@@ -2249,6 +2249,117 @@ func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T)
 		}
 		if seen[id] != want {
 			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
+		}
+	}
+}
+
+func TestNinthLargeBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"glassnode-api-key":     VerificationSafetyReadOnly,
+		"groovehq-api-key":      VerificationSafetyReadOnly,
+		"gtmetrix-api-key":      VerificationSafetyReadOnly,
+		"ibmcloud-user-key":     VerificationSafetyAuthOnly,
+		"iconfinder-api-key":    VerificationSafetyReadOnly,
+		"juro-api-key":          VerificationSafetyReadOnly,
+		"knapsackpro-api-token": VerificationSafetyReadOnly,
+		"kylas-api-key":         VerificationSafetyReadOnly,
+		"leadfeeder-api-key":    VerificationSafetyReadOnly,
+		"madkudu-api-key":       VerificationSafetyAuthOnly,
+		"finage-api-key":        VerificationSafetyUnsafe,
+		"flightapi-key":         VerificationSafetyUnsafe,
+		"geocodify-api-key":     VerificationSafetyUnsafe,
+		"getgeoapi-key":         VerificationSafetyUnsafe,
+		"moralis-api-key":       VerificationSafetyUnsafe,
+		"newscatcher-api-key":   VerificationSafetyUnsafe,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestNinthLargeBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		method      string
+		host        string
+		path        string
+		query       string
+		header      string
+		headerValue string
+		response    string
+	}{
+		{name: "glassnode", verify: verifyGlassnode, method: http.MethodGet, host: "api.glassnode.com", path: "/v1/metadata/metrics", query: "a=BTC", header: "X-Api-Key", headerValue: "secret", response: `[]`},
+		{name: "groove", verify: verifyGrooveHQ, method: http.MethodGet, host: "api.groovehq.com", path: "/v1/me", header: "Authorization", headerValue: "Bearer secret", response: `{"id":"user"}`},
+		{name: "gtmetrix", verify: verifyGTmetrix, method: http.MethodGet, host: "gtmetrix.com", path: "/api/2.0/status", header: "Authorization", headerValue: "Basic c2VjcmV0Og==", response: `{"data":{"type":"status"}}`},
+		{name: "ibm", verify: verifyIBMCloud, method: http.MethodPost, host: "iam.cloud.ibm.com", path: "/identity/token", header: "Authorization", headerValue: "Basic Yng6Yng=", response: `{"access_token":"sensitive","token_type":"Bearer"}`},
+		{name: "iconfinder", verify: verifyIconfinder, method: http.MethodGet, host: "api.iconfinder.com", path: "/v4/iconsets", query: "count=1", header: "Authorization", headerValue: "Bearer secret", response: `{"iconsets":[]}`},
+		{name: "juro", verify: verifyJuro, method: http.MethodGet, host: "api.juro.com", path: "/v3/templates", header: "x-api-key", headerValue: "secret", response: `{"templates":[]}`},
+		{name: "knapsack", verify: verifyKnapsackPro, method: http.MethodGet, host: "api.knapsackpro.com", path: "/v1/builds", query: "page=1", header: "KNAPSACK-PRO-TEST-SUITE-TOKEN", headerValue: "secret", response: `{"data":[],"links":{},"meta":{}}`},
+		{name: "kylas", verify: verifyKylas, method: http.MethodGet, host: "api.kylas.io", path: "/v1/contacts", query: "page=0&size=1", header: "api-key", headerValue: "secret", response: `{"content":[],"totalElements":0}`},
+		{name: "leadfeeder", verify: verifyLeadfeeder, method: http.MethodGet, host: "api.leadfeeder.com", path: "/accounts", header: "Authorization", headerValue: "Token token=secret", response: `{"data":[]}`},
+		{name: "madkudu", verify: verifyMadKudu, method: http.MethodGet, host: "api.madkudu.com", path: "/v1/ping", header: "Authorization", headerValue: "Basic c2VjcmV0Og==", response: `{"status":"ok"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.query || (test.header != "" && req.Header.Get(test.header) != test.headerValue) {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				if test.name == "ibm" {
+					body, _ := io.ReadAll(req.Body)
+					values, err := url.ParseQuery(string(body))
+					if err != nil || values.Get("grant_type") != "urn:ibm:params:oauth:grant-type:apikey" || values.Get("apikey") != "secret" || req.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+						t.Fatalf("unexpected form request: body=%q headers=%#v", body, req.Header)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestNinthLargeBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyGlassnode, verifyGrooveHQ, verifyGTmetrix, verifyIBMCloud, verifyIconfinder, verifyJuro, verifyKnapsackPro, verifyKylas, verifyLeadfeeder, verifyMadKudu} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestNinthLargeBatchDocumentedForbiddenRejections(t *testing.T) {
+	tests := []struct {
+		verify Verifier
+		body   string
+	}{
+		{verify: verifyJuro, body: `{"message":"Forbidden"}`},
+		{verify: verifyKnapsackPro, body: `{"errors":["invalid test suite token"]}`},
+	}
+	for _, test := range tests {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+		})}
+		if result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnverified || result.Response != "" {
+			t.Fatalf("forbidden rejection result=%#v", result)
 		}
 	}
 }
@@ -4809,7 +4920,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"humanity-api-key", "humanity api_key=\"" + strings.Repeat("a", 40) + "\"", strings.Repeat("a", 40)},
 		{"hybiscus-api-key", "hybiscus api_key=\"" + strings.Repeat("A", 43) + "\"", strings.Repeat("A", 43)},
 		{"hypertrack-api-key", "hypertrack secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"ibmcloud-user-key", "ibm cloud user_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"ibmcloud-user-key", "ibm cloud user_key=\"" + strings.Repeat("A", 44) + "\"", strings.Repeat("A", 44)},
 		{"iconfinder-api-key", "iconfinder api_key=\"" + strings.Repeat("A", 64) + "\"", strings.Repeat("A", 64)},
 		{"iexapis-api-key", "iex apis api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"iexcloud-api-key", "iex cloud secret_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -4875,7 +4986,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"nimble-api-key", "nimble api_key=\"" + strings.Repeat("A", 30) + "\"", strings.Repeat("A", 30)},
 		{"noticeable-api-key", "noticeable api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"nozbeteams-api-token", "nozbe teams api_token=\"" + strings.Repeat("A", 16) + "_" + strings.Repeat("A", 64) + "\"", strings.Repeat("A", 16) + "_" + strings.Repeat("A", 64)},
-		{"nvapi-key", "nvapi api_key=\"nvapi-" + strings.Repeat("A", 64) + "\"", "nvapi-" + strings.Repeat("A", 64)},
+		{"nvapi-key", "NVAPI_KEY=nvapi-" + strings.Repeat("A", 63) + "-", "nvapi-" + strings.Repeat("A", 63) + "-"},
 		{"onedesk-api-key", "one desk api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"onepagecrm-api-key", "one page crm api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"oopspam-api-key", "oopspam api_key=\"" + strings.Repeat("A", 40) + "\"", strings.Repeat("A", 40)},
