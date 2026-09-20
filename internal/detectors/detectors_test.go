@@ -1641,7 +1641,7 @@ func TestColumnVerifierUsesBlankBasicUsername(t *testing.T) {
 		if !ok || username != "" || password != "secret" {
 			t.Fatalf("unexpected basic auth: username=%q password=%q ok=%v", username, password, ok)
 		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"entities":[]}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"entities":[],"has_more":false}`)), Header: make(http.Header)}, nil
 	})}
 	result := verifyColumn(WithVerificationHTTPClient(context.Background(), client), "secret")
 	if result.Status != VerificationVerified || result.Response != "" {
@@ -2207,10 +2207,10 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 376,
-		VerificationSafetyReadOnly:   98,
-		VerificationSafetyAuthOnly:   24,
-		VerificationSafetyUnsafe:     69,
+		VerificationSafetyUnreviewed: 357,
+		VerificationSafetyReadOnly:   106,
+		VerificationSafetyAuthOnly:   26,
+		VerificationSafetyUnsafe:     78,
 	}
 	for safety, want := range expected {
 		if counts[safety] != want {
@@ -2221,14 +2221,14 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 191 || report.RequiresHardening != 188 || report.Blocked != 32 || report.PendingReview != 156 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 210 || report.RequiresHardening != 211 || report.Blocked != 40 || report.PendingReview != 106 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
 		t.Fatalf("verification audit accounting mismatch: %#v", report)
 	}
-	if len(verificationAuditAssessments) != 350 {
-		t.Fatalf("audit manifest contains %d assessed entries, want 350", len(verificationAuditAssessments))
+	if len(verificationAuditAssessments) != 400 {
+		t.Fatalf("audit manifest contains %d assessed entries, want 400", len(verificationAuditAssessments))
 	}
 	seen := map[string]VerificationAuditStatus{}
 	for _, entry := range report.Entries {
@@ -2250,6 +2250,104 @@ func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T)
 		if seen[id] != want {
 			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
 		}
+	}
+}
+
+func TestEighthLargeBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"whoxy-api-key":        VerificationSafetyReadOnly,
+		"skrapp-api-key":       VerificationSafetyReadOnly,
+		"abyssale-api-key":     VerificationSafetyAuthOnly,
+		"apimetrics-api-key":   VerificationSafetyReadOnly,
+		"borgbase-api-key":     VerificationSafetyReadOnly,
+		"buddyns-api-key":      VerificationSafetyAuthOnly,
+		"chatbot-api-key":      VerificationSafetyReadOnly,
+		"avaza-api-token":      VerificationSafetyReadOnly,
+		"column-api-key":       VerificationSafetyReadOnly,
+		"diggernaut-api-key":   VerificationSafetyReadOnly,
+		"signupgenius-api-key": VerificationSafetyUnsafe,
+		"aletheia-api-key":     VerificationSafetyUnsafe,
+		"allsports-api-key":    VerificationSafetyUnsafe,
+		"api2cart-api-key":     VerificationSafetyUnsafe,
+		"bugherd-api-key":      VerificationSafetyUnsafe,
+		"calorieninja-api-key": VerificationSafetyUnsafe,
+		"commodities-api-key":  VerificationSafetyUnsafe,
+		"countrylayer-api-key": VerificationSafetyUnsafe,
+		"dandelion-api-key":    VerificationSafetyUnsafe,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestEighthLargeBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		method      string
+		host        string
+		path        string
+		query       string
+		header      string
+		headerValue string
+		response    string
+	}{
+		{name: "whoxy", verify: verifyWhoxy, method: http.MethodGet, host: "api.whoxy.com", path: "/", query: "account=balance&key=secret", response: `{"status":1,"balance":10}`},
+		{name: "skrapp", verify: verifySkrapp, method: http.MethodGet, host: "api.skrapp.io", path: "/api/v2/account", header: "X-Access-Key", headerValue: "secret", response: `{"credits":{"remaining":1}}`},
+		{name: "abyssale", verify: verifyAbyssale, method: http.MethodPost, host: "api.abyssale.com", path: "/auth", header: "x-api-key", headerValue: "secret", response: `{"company":"Example"}`},
+		{name: "apimetrics", verify: verifyAPIMetrics, method: http.MethodGet, host: "client.apimetrics.io", path: "/api/2/calls/", query: "limit=1", header: "Authorization", headerValue: "Bearer secret", response: `{"meta":{},"results":[]}`},
+		{name: "borgbase", verify: verifyBorgBase, method: http.MethodPost, host: "api.borgbase.com", path: "/graphql", header: "Authorization", headerValue: "Bearer secret", response: `{"data":{"repoList":[]}}`},
+		{name: "buddyns", verify: verifyBuddyNS, method: http.MethodGet, host: "www.buddyns.com", path: "/api/v2/user/", header: "Authorization", headerValue: "Token secret", response: `{"email":"user@example.com"}`},
+		{name: "chatbot", verify: verifyChatBot, method: http.MethodGet, host: "api.chatbot.com", path: "/v2/stories", header: "Authorization", headerValue: "Bearer secret", response: `[]`},
+		{name: "avaza", verify: verifyAvaza, method: http.MethodGet, host: "api.avaza.com", path: "/api/Account", header: "Authorization", headerValue: "Bearer secret", response: `{"AccountId":1}`},
+		{name: "column", verify: verifyColumn, method: http.MethodGet, host: "api.column.com", path: "/entities", query: "limit=1", header: "Authorization", headerValue: "Basic OnNlY3JldA==", response: `{"entities":[],"has_more":false}`},
+		{name: "diggernaut", verify: verifyDiggernaut, method: http.MethodGet, host: "www.diggernaut.com", path: "/api/projects/", header: "Authorization", headerValue: "Token secret", response: `[]`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.query || (test.header != "" && req.Header.Get(test.header) != test.headerValue) {
+					t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL.String(), req.Header)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestEighthLargeBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyWhoxy, verifySkrapp, verifyAbyssale, verifyAPIMetrics, verifyBorgBase, verifyBuddyNS, verifyChatBot, verifyAvaza, verifyColumn, verifyDiggernaut} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestEighthLargeBatchColumnRejectsUnauthorized(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"message":"unauthorized"}`)), Header: make(http.Header)}, nil
+	})}
+	if result := verifyColumn(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnverified || result.Response != "" {
+		t.Fatalf("Column rejection result=%#v", result)
 	}
 }
 
@@ -4588,7 +4686,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"blogger-api-key", "blogger api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"bombbomb-api-key", "bomb bomb api_key=\"eyJ" + strings.Repeat("A", 20) + ".eyJ" + strings.Repeat("A", 20) + "." + strings.Repeat("A", 20) + "\"", "eyJ" + strings.Repeat("A", 20) + ".eyJ" + strings.Repeat("A", 20) + "." + strings.Repeat("A", 20)},
 		{"boostnote-api-token", "boost note api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"borgbase-api-key", "borgbase api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"borgbase-api-key", "borgbase api_key=\"" + strings.Repeat("A", 147) + "/\"", strings.Repeat("A", 147) + "/"},
 		{"buddyns-api-key", "buddy ns api_key=\"" + strings.Repeat("a", 40) + "\"", strings.Repeat("a", 40)},
 		{"budibase-api-key", "budibase api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"bugherd-api-key", "bugherd api_key=\"" + strings.Repeat("a", 22) + "\"", strings.Repeat("a", 22)},

@@ -1474,7 +1474,7 @@ func verifyBorgBase(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.borgbase.com/graphql", strings.NewReader(`{"query":"{ repoList { id } }"}`))
 	req.Header.Set("Authorization", "Bearer "+secret)
 	req.Header.Set("Content-Type", "application/json")
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
 		if statusCode < 200 || statusCode >= 300 {
 			return VerificationResult{}, false
 		}
@@ -1501,6 +1501,8 @@ func verifyBorgBase(ctx context.Context, secret string) VerificationResult {
 		}
 		return unknownVerificationResult("authorization", "GraphQL response did not authenticate the credential"), true
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyEverhour(ctx context.Context, secret string) VerificationResult {
@@ -5102,13 +5104,11 @@ func verifyAxonaut(ctx context.Context, secret string) VerificationResult {
 func verifyBuddyNS(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.buddyns.com/api/v2/user/", nil)
 	req.Header.Set("Authorization", "Token "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"email"}, "invalid token"))
-	result.Response = ""
-	return result
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool { return jsonHasTopLevelStrings(body, "email") })
 }
 
 func verifyDiggernaut(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.diggernaut.com/api/projects", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.diggernaut.com/api/projects/", nil)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Token "+secret)
 	return verifyPrivateCollection(ctx, req, "invalid token")
@@ -5313,10 +5313,13 @@ func verifyChatBot(ctx context.Context, secret string) VerificationResult {
 		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
 			return VerificationResult{}, false
 		}
-		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "403 forbidden") {
+		if statusCode == http.StatusUnauthorized {
 			return invalidCredentialResult(), true
 		}
-		return classifyCollectionResponse()(statusCode, body)
+		if statusCode >= 200 && statusCode < 300 && (jsonArray(body) || jsonHasTopLevelArray(body, "stories")) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(statusCode, body)
 	})
 	result.Response = ""
 	return result
@@ -5997,7 +6000,13 @@ func verifyCaptainData(ctx context.Context, secret string) VerificationResult {
 func verifyColumn(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.column.com/entities?limit=1", nil)
 	req.SetBasicAuth("", secret)
-	return verifyPrivateCollection(ctx, req, "no valid api key", "invalid api key")
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		var response struct {
+			Entities []any `json:"entities"`
+			HasMore  *bool `json:"has_more"`
+		}
+		return json.Unmarshal(body, &response) == nil && response.Entities != nil && response.HasMore != nil
+	})
 }
 
 func verifyNVAPI(ctx context.Context, secret string) VerificationResult {
