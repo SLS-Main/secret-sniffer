@@ -2211,9 +2211,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 305,
-		VerificationSafetyReadOnly:   125,
-		VerificationSafetyAuthOnly:   40,
+		VerificationSafetyUnreviewed: 298,
+		VerificationSafetyReadOnly:   127,
+		VerificationSafetyAuthOnly:   45,
 		VerificationSafetyUnsafe:     97,
 	}
 	for safety, want := range expected {
@@ -2225,7 +2225,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 262 || report.RequiresHardening != 249 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 269 || report.RequiresHardening != 242 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
@@ -2739,6 +2739,248 @@ func TestThirdHardeningBatchTokenBoundaries(t *testing.T) {
 	}
 	if candidates := detectorsByID["livestorm-api-key"].Detect([]byte("livestorm token=" + livestorm + "-")); len(candidates) != 0 {
 		t.Fatalf("overlong Livestorm candidates=%#v", candidates)
+	}
+}
+
+func TestFourthHardeningBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"flyio-token":               VerificationSafetyAuthOnly,
+		"xai-api-key":               VerificationSafetyAuthOnly,
+		"sendinblue-api-key":        VerificationSafetyReadOnly,
+		"hubspot-private-app-token": VerificationSafetyReadOnly,
+		"rechargepayments-token":    VerificationSafetyAuthOnly,
+		"closecrm-api-key":          VerificationSafetyAuthOnly,
+		"lemonsqueezy-api-token":    VerificationSafetyAuthOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestFourthHardeningBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		verify      Verifier
+		method      string
+		host        string
+		path        string
+		rawQuery    string
+		headers     map[string]string
+		basicUser   string
+		basicPass   string
+		requestBody string
+		response    string
+	}{
+		{name: "fly", verify: verifyFlyIO, method: http.MethodPost, host: "api.machines.dev", path: "/v1/tokens/authenticate", headers: map[string]string{"Content-Type": "application/json"}, requestBody: `{"header":"secret"}`, response: `[{"header":"redacted"}]`},
+		{name: "xai", verify: verifyXAI, method: http.MethodGet, host: "api.x.ai", path: "/v1/api-key", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"acls":[],"api_key_blocked":false,"api_key_disabled":false,"api_key_id":"key","create_time":"time","modified_by":"user","modify_time":"time","name":"scanner","redacted_api_key":"xai-...","team_blocked":false,"team_id":"team","user_id":"user"}`},
+		{name: "brevo", verify: verifyBrevo, method: http.MethodGet, host: "api.brevo.com", path: "/v3/account", headers: map[string]string{"api-key": "secret", "Accept": "application/json"}, response: `{"organization_id":"org","user_id":1,"enterprise":false,"plan":[],"relay":{"enabled":true}}`},
+		{name: "hubspot", verify: verifyHubSpot, method: http.MethodGet, host: "api.hubapi.com", path: "/account-info/v3/api-usage/daily/private-apps", headers: map[string]string{"Authorization": "Bearer secret", "Accept": "application/json"}, response: `{"results":[{"name":"private-apps-api-calls-daily","usageLimit":1000,"currentUsage":0,"collectedAt":"2026-09-21T12:00:00Z","fetchStatus":"SUCCESS"}]}`},
+		{name: "recharge", verify: verifyRecharge, method: http.MethodGet, host: "api.rechargeapps.com", path: "/token_information", headers: map[string]string{"X-Recharge-Access-Token": "secret", "X-Recharge-Version": "2021-11"}, response: `{"token_information":{"name":"scanner","contact_email":null,"scopes":[]}}`},
+		{name: "close", verify: verifyCloseCRM, method: http.MethodGet, host: "api.close.com", path: "/api/v1/me/", rawQuery: "_fields=id", basicUser: "secret", response: `{"id":"user_1"}`},
+		{name: "lemon", verify: verifyLemonSqueezy, method: http.MethodGet, host: "api.lemonsqueezy.com", path: "/v1/users/me", headers: map[string]string{"Authorization": "Bearer secret", "Accept": "application/vnd.api+json", "Content-Type": "application/vnd.api+json"}, response: `{"data":{"type":"users","id":"1","attributes":{"name":"User"}}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.rawQuery {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+				}
+				for header, want := range test.headers {
+					if got := req.Header.Get(header); got != want {
+						t.Fatalf("header %q=%q, want %q", header, got, want)
+					}
+				}
+				if test.basicUser != "" {
+					username, password, ok := req.BasicAuth()
+					if !ok || username != test.basicUser || password != test.basicPass {
+						t.Fatalf("basic auth username=%q password=%q ok=%v", username, password, ok)
+					}
+				}
+				if test.requestBody != "" {
+					body, err := io.ReadAll(req.Body)
+					if err != nil || string(body) != test.requestBody {
+						t.Fatalf("request body=%q err=%v", body, err)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("verification result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestFourthHardeningBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyFlyIO, verifyXAI, verifyBrevo, verifyHubSpot, verifyRecharge, verifyCloseCRM, verifyLemonSqueezy} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestFourthHardeningBatchClassifiesFailuresWithoutLeakingResponses(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		statusCode int
+		category   string
+	}{
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, category: "rate_limited"},
+		{name: "provider failure", statusCode: http.StatusInternalServerError, category: "provider"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, verify := range []Verifier{verifyFlyIO, verifyXAI, verifyBrevo, verifyHubSpot, verifyRecharge, verifyCloseCRM, verifyLemonSqueezy} {
+				client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: test.statusCode, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+				})}
+				result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+				if result.Status != VerificationUnknown || result.ErrorCategory != test.category || result.Response != "" {
+					t.Fatalf("failure result=%#v", result)
+				}
+			}
+		})
+	}
+}
+
+func TestFourthHardeningBatchClassifiesAuthenticationResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		verify     Verifier
+		statusCode int
+		body       string
+		want       VerificationStatus
+		category   string
+	}{
+		{name: "fly invalid", verify: verifyFlyIO, statusCode: http.StatusBadRequest, body: `{"error":"verify tokens: malformed: bad token"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "fly ambiguous", verify: verifyFlyIO, statusCode: http.StatusBadRequest, body: `{"error":"bad request"}`, want: VerificationUnknown, category: "provider_response"},
+		{name: "xai invalid", verify: verifyXAI, statusCode: http.StatusBadRequest, body: `{"code":"invalid-argument","error":"Incorrect API key provided."}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "xai forbidden", verify: verifyXAI, statusCode: http.StatusForbidden, body: `{}`, want: VerificationUnknown, category: "authorization"},
+		{name: "brevo invalid", verify: verifyBrevo, statusCode: http.StatusUnauthorized, body: `{"code":"unauthorized","message":"Key not found"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "brevo permission", verify: verifyBrevo, statusCode: http.StatusForbidden, body: `{}`, want: VerificationUnknown, category: "authorization"},
+		{name: "hubspot invalid", verify: verifyHubSpot, statusCode: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "hubspot scope", verify: verifyHubSpot, statusCode: http.StatusForbidden, body: `{}`, want: VerificationUnknown, category: "authorization"},
+		{name: "hubspot migration", verify: verifyHubSpot, statusCode: 477, body: `{}`, want: VerificationUnknown, category: "provider"},
+		{name: "recharge invalid", verify: verifyRecharge, statusCode: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "recharge scope", verify: verifyRecharge, statusCode: http.StatusForbidden, body: `{}`, want: VerificationVerified},
+		{name: "recharge bad request", verify: verifyRecharge, statusCode: http.StatusBadRequest, body: `{}`, want: VerificationUnknown, category: "provider_response"},
+		{name: "recharge unacceptable", verify: verifyRecharge, statusCode: http.StatusNotAcceptable, body: `{}`, want: VerificationUnknown, category: "provider_response"},
+		{name: "recharge bad version", verify: verifyRecharge, statusCode: http.StatusUpgradeRequired, body: `{}`, want: VerificationUnknown, category: "provider_response"},
+		{name: "close invalid", verify: verifyCloseCRM, statusCode: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "close restricted", verify: verifyCloseCRM, statusCode: http.StatusPaymentRequired, body: `{}`, want: VerificationUnknown, category: "authorization"},
+		{name: "lemon invalid", verify: verifyLemonSqueezy, statusCode: http.StatusUnauthorized, body: `{"errors":[{"detail":"Unauthenticated.","status":"401","title":"Unauthorized"}]}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "lemon forbidden", verify: verifyLemonSqueezy, statusCode: http.StatusForbidden, body: `{}`, want: VerificationUnknown, category: "authorization"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: test.statusCode, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != test.want || result.ErrorCategory != test.category || result.Response != "" {
+				t.Fatalf("authentication result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestFourthHardeningBatchRecognizesRestrictedXAIKey(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		body := `{"acls":[],"api_key_blocked":false,"api_key_disabled":true,"api_key_id":"key","create_time":"time","modified_by":"user","modify_time":"time","name":"scanner","redacted_api_key":"xai-...","team_blocked":false,"team_id":"team","user_id":"user"}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	result := verifyXAI(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Message == "" || result.Response != "" {
+		t.Fatalf("restricted xAI result=%#v", result)
+	}
+}
+
+func TestFourthHardeningBatchValidatesRechargeTokenInformation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		want VerificationStatus
+	}{
+		{name: "empty scopes", body: `{"token_information":{"name":"no-access","scopes":[]}}`, want: VerificationVerified},
+		{name: "scoped token", body: `{"token_information":{"name":"reader","scopes":["read_customers"]}}`, want: VerificationVerified},
+		{name: "missing name", body: `{"token_information":{"scopes":[]}}`, want: VerificationUnknown},
+		{name: "null scopes", body: `{"token_information":{"name":"token","scopes":null}}`, want: VerificationUnknown},
+		{name: "non-string scope", body: `{"token_information":{"name":"token","scopes":[1]}}`, want: VerificationUnknown},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+			})}
+			result := verifyRecharge(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != test.want || result.Response != "" {
+				t.Fatalf("Recharge token information result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestFourthHardeningBatchTokenBoundaries(t *testing.T) {
+	detectorsByID := map[string]Detector{}
+	for _, detector := range DefaultRegistry() {
+		detectorsByID[detector.Info().ID] = detector
+	}
+	fly := "FlyV1 fm2_" + strings.Repeat("A", 31) + "="
+	if candidates := detectorsByID["flyio-token"].Detect([]byte(fly)); len(candidates) != 1 || candidates[0].Secret != fly {
+		t.Fatalf("Fly candidates=%#v", candidates)
+	}
+	flyBundle := "FlyV1 fm2_" + strings.Repeat("A", 32) + ",fm2_" + strings.Repeat("B", 32)
+	if candidates := detectorsByID["flyio-token"].Detect([]byte(flyBundle)); len(candidates) != 1 || candidates[0].Secret != flyBundle {
+		t.Fatalf("Fly bundle candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["flyio-token"].Detect([]byte("FlyV1 fm1_" + strings.Repeat("A", 32))); len(candidates) != 0 {
+		t.Fatalf("legacy Fly candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["flyio-token"].Detect([]byte("FlyV1 fm2_" + strings.Repeat("A", 1001))); len(candidates) != 0 {
+		t.Fatalf("overlong Fly candidates=%#v", candidates)
+	}
+	xai := "xai-" + strings.Repeat("A", 80)
+	if candidates := detectorsByID["xai-api-key"].Detect([]byte(xai)); len(candidates) != 1 || candidates[0].Secret != xai {
+		t.Fatalf("xAI candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["xai-api-key"].Detect([]byte(xai + "_")); len(candidates) != 0 {
+		t.Fatalf("overlong xAI candidates=%#v", candidates)
+	}
+	brevo := "xkeysib-" + strings.Repeat("A", 80) + "-"
+	if candidates := detectorsByID["sendinblue-api-key"].Detect([]byte(brevo)); len(candidates) != 1 || candidates[0].Secret != brevo {
+		t.Fatalf("Brevo candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["sendinblue-api-key"].Detect([]byte(brevo + "_")); len(candidates) != 0 {
+		t.Fatalf("overlong Brevo candidates=%#v", candidates)
+	}
+	closeKey := "api_" + strings.Repeat("A", 22) + "." + strings.Repeat("B", 24)
+	if candidates := detectorsByID["closecrm-api-key"].Detect([]byte(closeKey)); len(candidates) != 1 || candidates[0].Secret != closeKey {
+		t.Fatalf("Close candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["closecrm-api-key"].Detect([]byte(closeKey + ".")); len(candidates) != 0 {
+		t.Fatalf("overlong Close candidates=%#v", candidates)
+	}
+	lemon := "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", 63) + "_." + strings.Repeat("B", 127) + "-"
+	if candidates := detectorsByID["lemonsqueezy-api-token"].Detect([]byte(`lemonsqueezy token="` + lemon + `"`)); len(candidates) != 1 || candidates[0].Secret != lemon {
+		t.Fatalf("Lemon Squeezy candidates=%#v", candidates)
+	}
+	overlongLemon := "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", 64) + "." + strings.Repeat("B", 1001)
+	if candidates := detectorsByID["lemonsqueezy-api-token"].Detect([]byte("lemonsqueezy token=" + overlongLemon)); len(candidates) != 0 {
+		t.Fatalf("overlong Lemon Squeezy candidates=%#v", candidates)
 	}
 }
 
@@ -4780,7 +5022,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"coda-api-token", "coda_api_key=\"123e4567-e89b-12d3-a456-426614174000\"", "123e4567-e89b-12d3-a456-426614174000"},
 		{"calendly-api-key", "calendly_token=\"eyJ" + strings.Repeat("A", 120) + ".eyJ" + strings.Repeat("B", 120) + "." + strings.Repeat("C", 40) + "\"", "eyJ" + strings.Repeat("A", 120) + ".eyJ" + strings.Repeat("B", 120) + "." + strings.Repeat("C", 40)},
 		{"monday-api-token", "monday_token=\"eyJ" + strings.Repeat("A", 30) + ".eyJ" + strings.Repeat("B", 150) + "." + strings.Repeat("C", 40) + "\"", "eyJ" + strings.Repeat("A", 30) + ".eyJ" + strings.Repeat("B", 150) + "." + strings.Repeat("C", 40)},
-		{"flyio-token", "FlyV1 fm1_" + strings.Repeat("A", 520), "FlyV1 fm1_" + strings.Repeat("A", 520)},
+		{"flyio-token", "FlyV1 fm2_" + strings.Repeat("A", 32), "FlyV1 fm2_" + strings.Repeat("A", 32)},
 		{"cloudflare-ca-key", "cloudflare v1.0-" + strings.Repeat("A", 171), "v1.0-" + strings.Repeat("A", 171)},
 		{"artifactory-access-token", "AKCp" + strings.Repeat("A", 69), "AKCp" + strings.Repeat("A", 69)},
 		{"artifactory-reference-token", "cmVmdGtu" + strings.Repeat("A", 56), "cmVmdGtu" + strings.Repeat("A", 56)},
@@ -4932,7 +5174,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"redis-uri", "rediss://default:FakeRedisPass123@example.redis.cache.windows.net:6380", "rediss://default:FakeRedisPass123@example.redis.cache.windows.net:6380"},
 		{"azure-redis-connection-string", "demo.redis.cache.windows.net:6380,password=" + strings.Repeat("A", 44) + ",ssl=True,abortConnect=False", "demo.redis.cache.windows.net:6380,password=" + strings.Repeat("A", 44) + ",ssl=True,abortConnect=False"},
 		{"couchbase-capella-uri", "couchbases://user:Passw0rd!@cb.abc123.cloud.couchbase.com", "couchbases://user:Passw0rd!@cb.abc123.cloud.couchbase.com"},
-		{"closecrm-api-key", "api_" + strings.Repeat("A", 45), "api_" + strings.Repeat("A", 45)},
+		{"closecrm-api-key", "api_" + strings.Repeat("A", 22) + "." + strings.Repeat("B", 24), "api_" + strings.Repeat("A", 22) + "." + strings.Repeat("B", 24)},
 		{"paystack-secret-key", "sk_test_" + strings.Repeat("A", 40), "sk_test_" + strings.Repeat("A", 40)},
 		{"wrike-access-token", "wrike token ey" + strings.Repeat("A", 333), "ey" + strings.Repeat("A", 333)},
 		{"twitter-consumer-secret", "twitter consumer_secret " + strings.Repeat("A", 50), strings.Repeat("A", 50)},
@@ -4940,7 +5182,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"flutterwave-secret-key", "FLWSECK-0123456789abcdef0123456789abcdef-X", "FLWSECK-0123456789abcdef0123456789abcdef-X"},
 		{"pagarme-live-key", "ak_live_0123456789abcdefghijklmnopqrst", "ak_live_0123456789abcdefghijklmnopqrst"},
 		{"rechargepayments-token", "sk_1x1_" + strings.Repeat("a", 64), "sk_1x1_" + strings.Repeat("a", 64)},
-		{"lemonsqueezy-api-token", "lemonsqueezy token eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", 314) + "." + strings.Repeat("B", 512), "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", 314) + "." + strings.Repeat("B", 512)},
+		{"lemonsqueezy-api-token", "lemonsqueezy token eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", 64) + "." + strings.Repeat("B", 128), "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", 64) + "." + strings.Repeat("B", 128)},
 		{"plaid-access-token", "access-sandbox-01234567-89ab-cdef-0123-456789abcdef", "access-sandbox-01234567-89ab-cdef-0123-456789abcdef"},
 		{"plaid-client-secret", "plaid PLAID_SECRET=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"cloudinary-url", "cloudinary://123456789012345:AbCdEfGhIjKlMnOpQrStUvWxYz1@demo-cloud", "cloudinary://123456789012345:AbCdEfGhIjKlMnOpQrStUvWxYz1@demo-cloud"},
