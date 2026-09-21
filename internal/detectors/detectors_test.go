@@ -238,10 +238,10 @@ func TestUptimeRobotVerifierUsesApplicationStatus(t *testing.T) {
 		if err != nil || !strings.Contains(string(body), "api_key=secret") {
 			t.Fatalf("request body=%q err=%v", string(body), err)
 		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"stat":"fail","error":{"parameter_name":"api_key","message":"invalid api key"}}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"stat":"fail","error":{"type":"invalid_parameter","parameter_name":"api_key","message":"api_key is invalid."}}`)), Header: make(http.Header)}, nil
 	})}
 	result := verifyUptimeRobot(WithVerificationHTTPClient(context.Background(), client), "secret")
-	if result.Status != VerificationUnverified {
+	if result.Status != VerificationUnverified || result.Response != "" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -340,10 +340,13 @@ func TestMapboxVerifierUsesProviderTokenStatus(t *testing.T) {
 				t.Fatalf("access token query=%q", req.URL.RawQuery)
 			}
 			body := `{"code":"` + test.code + `"}`
+			if test.code == "TokenValid" {
+				body = `{"code":"TokenValid","token":{"usage":"sk","user":"account","authorization":"auth"}}`
+			}
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 		})}
 		result := verifyMapbox(WithVerificationHTTPClient(context.Background(), client), "secret")
-		if result.Status != test.status {
+		if result.Status != test.status || result.Response != "" {
 			t.Fatalf("code=%s status=%q result=%#v", test.code, result.Status, result)
 		}
 	}
@@ -1326,7 +1329,7 @@ func TestLivestormVerifierUsesAuthenticatedPing(t *testing.T) {
 		if req.Header.Get("Authorization") != "secret" || req.URL.Path != "/v1/ping" {
 			t.Fatalf("unexpected request: %s %#v", req.URL.Path, req.Header)
 		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":{"type":"ping"}}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
 	})}
 	result := verifyLivestorm(WithVerificationHTTPClient(context.Background(), client), "secret")
 	if result.Status != VerificationVerified || result.Response != "" {
@@ -2208,9 +2211,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 308,
-		VerificationSafetyReadOnly:   124,
-		VerificationSafetyAuthOnly:   38,
+		VerificationSafetyUnreviewed: 305,
+		VerificationSafetyReadOnly:   125,
+		VerificationSafetyAuthOnly:   40,
 		VerificationSafetyUnsafe:     97,
 	}
 	for safety, want := range expected {
@@ -2222,7 +2225,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 259 || report.RequiresHardening != 252 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 262 || report.RequiresHardening != 249 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
@@ -2576,6 +2579,166 @@ func TestSecondHardeningBatchRejectsInvalidMailchimpDataCenterWithoutRequest(t *
 	result := verifyMailchimp(WithVerificationHTTPClient(context.Background(), client), strings.Repeat("a", 32)+"-eu1")
 	if result.Status != VerificationUnsupported || calls != 0 {
 		t.Fatalf("invalid data-center result=%#v calls=%d", result, calls)
+	}
+}
+
+func TestThirdHardeningBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"livestorm-api-key":   VerificationSafetyAuthOnly,
+		"mapbox-secret-token": VerificationSafetyAuthOnly,
+		"uptimerobot-api-key": VerificationSafetyReadOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestThirdHardeningBatchRequestContracts(t *testing.T) {
+	t.Run("livestorm", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodGet || req.URL.String() != "https://api.livestorm.co/v1/ping" || req.Header.Get("Authorization") != "secret" {
+				t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL, req.Header)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+		})}
+		result := verifyLivestorm(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationVerified || result.Response != "" {
+			t.Fatalf("Livestorm result=%#v", result)
+		}
+	})
+
+	t.Run("mapbox", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodGet || req.URL.Scheme != "https" || req.URL.Host != "api.mapbox.com" || req.URL.Path != "/tokens/v2" || req.URL.Query().Get("access_token") != "secret" {
+				t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+			}
+			body := `{"code":"TokenValid","token":{"usage":"sk","user":"account","authorization":"auth"}}`
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		})}
+		result := verifyMapbox(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationVerified || result.Response != "" {
+			t.Fatalf("Mapbox result=%#v", result)
+		}
+	})
+
+	t.Run("uptimerobot", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodPost || req.URL.String() != "https://api.uptimerobot.com/v2/getMonitors" || req.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+				t.Fatalf("unexpected request: %s %s %#v", req.Method, req.URL, req.Header)
+			}
+			if err := req.ParseForm(); err != nil || req.Form.Get("api_key") != "secret" || req.Form.Get("format") != "json" || req.Form.Get("limit") != "1" {
+				t.Fatalf("unexpected form: %#v err=%v", req.Form, err)
+			}
+			body := `{"stat":"ok","pagination":{"offset":0,"limit":1,"total":0},"monitors":[]}`
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		})}
+		result := verifyUptimeRobot(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationVerified || result.Response != "" {
+			t.Fatalf("UptimeRobot result=%#v", result)
+		}
+	})
+}
+
+func TestThirdHardeningBatchClassifiesProviderResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		verify     Verifier
+		statusCode int
+		body       string
+		want       VerificationStatus
+		category   string
+	}{
+		{name: "livestorm invalid", verify: verifyLivestorm, statusCode: http.StatusUnauthorized, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "livestorm blocked", verify: verifyLivestorm, statusCode: http.StatusForbidden, want: VerificationUnknown, category: "authorization"},
+		{name: "livestorm undocumented client error", verify: verifyLivestorm, statusCode: http.StatusBadRequest, want: VerificationUnknown, category: "provider_response"},
+		{name: "livestorm rate limited", verify: verifyLivestorm, statusCode: http.StatusTooManyRequests, want: VerificationUnknown, category: "rate_limited"},
+		{name: "livestorm provider failure", verify: verifyLivestorm, statusCode: http.StatusInternalServerError, want: VerificationUnknown, category: "provider"},
+		{name: "mapbox revoked", verify: verifyMapbox, statusCode: http.StatusOK, body: `{"code":"TokenRevoked"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "mapbox malformed success", verify: verifyMapbox, statusCode: http.StatusOK, body: `{"code":"TokenValid","token":{"usage":"pk"}}`, want: VerificationUnknown, category: "provider_response"},
+		{name: "mapbox valid code on failure", verify: verifyMapbox, statusCode: http.StatusUnauthorized, body: `{"code":"TokenValid","token":{"usage":"sk","user":"account","authorization":"auth"}}`, want: VerificationUnknown, category: "provider_response"},
+		{name: "mapbox undocumented client error", verify: verifyMapbox, statusCode: http.StatusBadRequest, body: `{}`, want: VerificationUnknown, category: "provider_response"},
+		{name: "mapbox rate limited", verify: verifyMapbox, statusCode: http.StatusTooManyRequests, want: VerificationUnknown, category: "rate_limited"},
+		{name: "uptimerobot invalid", verify: verifyUptimeRobot, statusCode: http.StatusOK, body: `{"stat":"fail","error":{"type":"invalid_parameter","parameter_name":"api_key","message":"api_key is invalid."}}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "uptimerobot malformed success", verify: verifyUptimeRobot, statusCode: http.StatusOK, body: `{"stat":"ok"}`, want: VerificationUnknown, category: "provider_response"},
+		{name: "uptimerobot other error", verify: verifyUptimeRobot, statusCode: http.StatusOK, body: `{"stat":"fail","error":{"type":"invalid_parameter","parameter_name":"limit","message":"limit is invalid."}}`, want: VerificationUnknown, category: "provider_response"},
+		{name: "uptimerobot provider failure", verify: verifyUptimeRobot, statusCode: http.StatusInternalServerError, want: VerificationUnknown, category: "provider"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: test.statusCode, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != test.want || result.ErrorCategory != test.category || result.Response != "" {
+				t.Fatalf("provider result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestVerificationHTTPClientNeverFollowsRedirects(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		verify Verifier
+		status int
+	}{
+		{name: "query credential", verify: verifyMapbox, status: http.StatusFound},
+		{name: "form credential", verify: verifyUptimeRobot, status: http.StatusTemporaryRedirect},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				if calls > 1 {
+					t.Fatal("verification followed a provider redirect")
+				}
+				return &http.Response{
+					StatusCode: test.status,
+					Body:       io.NopCloser(strings.NewReader(`{"private":"metadata"}`)),
+					Header:     http.Header{"Location": []string{"https://attacker.example/collect"}},
+				}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if calls != 1 || result.Status != VerificationUnknown || result.ErrorCategory != "redirect" || result.Response != "" {
+				t.Fatalf("redirect result=%#v calls=%d", result, calls)
+			}
+		})
+	}
+}
+
+func TestThirdHardeningBatchTokenBoundaries(t *testing.T) {
+	detectorsByID := map[string]Detector{}
+	for _, detector := range DefaultRegistry() {
+		detectorsByID[detector.Info().ID] = detector
+	}
+	mapbox := "sk." + strings.Repeat("A", 90) + "." + strings.Repeat("B", 42) + "-"
+	if candidates := detectorsByID["mapbox-secret-token"].Detect([]byte(`token="` + mapbox + `"`)); len(candidates) != 1 || candidates[0].Secret != mapbox {
+		t.Fatalf("Mapbox candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["mapbox-secret-token"].Detect([]byte("sk." + strings.Repeat("A", 90))); len(candidates) != 0 {
+		t.Fatalf("two-part Mapbox candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["mapbox-secret-token"].Detect([]byte("sk." + strings.Repeat("A", 90) + "." + strings.Repeat("B", 101))); len(candidates) != 0 {
+		t.Fatalf("overlong Mapbox candidates=%#v", candidates)
+	}
+	livestormPrefix := "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJhcGkubGl2ZXN0b3JtLmNvIiwianRpIjoi"
+	livestorm := livestormPrefix + strings.Repeat("A", 134) + "." + strings.Repeat("B", 42) + "-"
+	if candidates := detectorsByID["livestorm-api-key"].Detect([]byte(`livestorm token="` + livestorm + `"`)); len(candidates) != 1 || candidates[0].Secret != livestorm {
+		t.Fatalf("Livestorm candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["livestorm-api-key"].Detect([]byte("livestorm token=" + livestorm + "-")); len(candidates) != 0 {
+		t.Fatalf("overlong Livestorm candidates=%#v", candidates)
 	}
 }
 
@@ -4670,7 +4833,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"elastic-email-api-key", "elasticemail_api_key=\"" + strings.Repeat("A", 96) + "\"", strings.Repeat("A", 96)},
 		{"shortcut-api-token", "shortcut_token=\"123e4567-e89b-12d3-a456-426614174000\"", "123e4567-e89b-12d3-a456-426614174000"},
 		{"webflow-api-key", "webflow_key=\"" + strings.Repeat("A", 64) + "\"", strings.Repeat("A", 64)},
-		{"mapbox-secret-token", "mapbox_token=\"sk." + strings.Repeat("A", 90) + "\"", "sk." + strings.Repeat("A", 90)},
+		{"mapbox-secret-token", "mapbox_token=\"sk." + strings.Repeat("A", 90) + "." + strings.Repeat("B", 43) + "\"", "sk." + strings.Repeat("A", 90) + "." + strings.Repeat("B", 43)},
 		{"locationiq-api-key", "locationiq_key=\"pk." + strings.Repeat("A", 32) + "\"", "pk." + strings.Repeat("A", 32)},
 		{"coinapi-key", "X-CoinAPI-Key: ABCD1234-EF56-7890-ABCD-1234567890AB", "ABCD1234-EF56-7890-ABCD-1234567890AB"},
 		{"onfido-api-token", "ONFIDO_API_TOKEN=api_live_us." + strings.Repeat("A", 48), "api_live_us." + strings.Repeat("A", 48)},

@@ -549,7 +549,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("elastic-email-api-key", "Elastic Email API Key", "critical", []string{"elasticemail", "elastic email"}, `(?i)\b(?:elasticemail|elastic[ _-]?email).{0,40}['\"\s:=]+([A-Za-z0-9_-]{96})\b`, 1, verifyElasticEmail),
 		NewReadOnlyRegex("shortcut-api-token", "Shortcut API Token", "high", []string{"shortcut"}, `(?i)\bshortcut.{0,40}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, verifyShortcut),
 		NewRegex("webflow-api-key", "Webflow API Key", "high", []string{"webflow"}, `(?i)\bwebflow.{0,40}['\"\s:=]+([A-Za-z0-9]{64})\b`, 1, verifyWebflow),
-		NewRegex("mapbox-secret-token", "Mapbox Secret Token", "critical", []string{"sk.", "mapbox"}, `\b(sk\.[A-Za-z0-9.-]{80,240})\b`, 1, verifyMapbox),
+		NewAuthOnlyRegexWithTrailingBoundary("mapbox-secret-token", "Mapbox Secret Token", "critical", []string{"sk.", "mapbox"}, `\b(sk\.[A-Za-z0-9_-]{20,200}\.[A-Za-z0-9_-]{20,100})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-", verifyMapbox),
 		NewRegex("locationiq-api-key", "LocationIQ API Key", "high", []string{"locationiq", "pk."}, `\b(pk\.[A-Za-z0-9-]{32})\b`, 1, verifyLocationIQ),
 		NewRegex("coinapi-key", "CoinAPI Key", "high", []string{"coinapi", "X-CoinAPI-Key"}, `\b([A-Z0-9]{8}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{12})\b`, 1, verifyCoinAPI),
 		NewRegex("onfido-api-token", "Onfido API Token", "critical", []string{"api_live.", "api_sandbox.", "onfido"}, `\b(api_(?:live|sandbox)(?:_(?:us|ca))?\.[A-Za-z0-9_-]{32,128})\b`, 1, verifyOnfido),
@@ -597,7 +597,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("sourcegraph-token", "Sourcegraph Token", "critical", []string{"sgp_"}, `\b(sgp_(?:[A-Fa-f0-9]{16}|local)_[A-Fa-f0-9]{40}|sgp_[A-Fa-f0-9]{40})\b`, 1, verifySourcegraphCloud),
 		NewRegex("sourcegraph-cody-token", "Sourcegraph Cody Token", "critical", []string{"slk_"}, `\b(slk_[a-f0-9]{64})\b`, 1, verifySourcegraphCody),
 		NewRegex("snyk-api-key", "Snyk API Key", "critical", []string{"snyk", "SNYK_TOKEN"}, `(?i)\bsnyk.{0,40}['\"\s:=]+([0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12})\b`, 1, verifySnyk),
-		NewRegex("uptimerobot-api-key", "UptimeRobot API Key", "high", []string{"uptimerobot", "UPTIMEROBOT_API_KEY"}, `(?i)\buptimerobot.{0,40}['\"\s:=]+([A-Za-z0-9]{9}-[A-Za-z0-9]{24})\b`, 1, verifyUptimeRobot),
+		NewReadOnlyRegex("uptimerobot-api-key", "UptimeRobot API Key", "high", []string{"uptimerobot", "UPTIMEROBOT_API_KEY"}, `(?i)\buptimerobot.{0,40}['\"\s:=]+([A-Za-z0-9]{9}-[A-Za-z0-9]{24})\b`, 1, verifyUptimeRobot),
 		NewRegex("sumologic-access-id", "Sumo Logic Access ID", "high", []string{"sumo", "accessId", "access_id"}, `(?i)\b(?:sumo(?:logic)?|access[_-]?id).{0,40}['\"\s:=]+(su[A-Za-z0-9]{12})\b`, 1, nil),
 		NewRegex("sumologic-access-key", "Sumo Logic Access Key", "high", []string{"sumo", "accessKey", "access_key"}, `(?i)\b(?:sumo(?:logic)?|access[_-]?key).{0,40}['\"\s:=]+([A-Za-z0-9]{64})\b`, 1, nil),
 		NewRegex("statuspage-api-key", "Statuspage API Key", "high", []string{"statuspage"}, `(?i)\bstatuspage.{0,40}['\"\s:=]+([0-9a-z-]{36})\b`, 1, verifyStatuspage),
@@ -1284,7 +1284,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("kraken-api-secret", "Kraken API Secret", "critical", []string{"kraken"}, `(?i)\bkraken\b.{0,120}\b(?:api[_-]?secret|secret|private[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9+/=_-]{32,256})\b`, 1, nil),
 		NewRegex("larksuite-token", "LarkSuite Token", "critical", []string{"lark", "larksuite"}, `(?i)\b(?:larksuite|lark)\b.{0,120}\b(?:app[_-]?secret|tenant[_-]?access[_-]?token|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("liveagent-api-key", "LiveAgent API Key", "high", []string{"liveagent", "live agent"}, `(?i)\b(?:liveagent|live[ _-]?agent)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
-		NewRegex("livestorm-api-key", "Livestorm API Key", "high", []string{"livestorm"}, `(?i)\blivestorm\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?(eyJhbGciOiJIUzI1NiJ9\.eyJhdWQiOiJhcGkubGl2ZXN0b3JtLmNvIiwianRpIjoi[A-Za-z0-9-]{134}\.[A-Za-z0-9_-]{43})\b`, 1, verifyLivestorm),
+		NewAuthOnlyRegexWithTrailingBoundary("livestorm-api-key", "Livestorm API Key", "high", []string{"livestorm"}, `(?i)\blivestorm\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?(eyJhbGciOiJIUzI1NiJ9\.eyJhdWQiOiJhcGkubGl2ZXN0b3JtLmNvIiwianRpIjoi[A-Za-z0-9_-]{134}\.[A-Za-z0-9_-]{43})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-", verifyLivestorm),
 		NewRegex("loadmill-api-key", "Loadmill API Key", "high", []string{"loadmill"}, `(?i)\bloadmill\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{40})\b`, 1, verifyLoadmill),
 		NewRegex("loyverse-api-token", "Loyverse API Token", "high", []string{"loyverse"}, `(?i)\bloyverse\b.{0,80}\b(?:api[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, verifyLoyverse),
 		NewRegex("lunchmoney-api-token", "Lunch Money API Token", "high", []string{"lunchmoney", "lunch money"}, `(?i)\b(?:lunchmoney|lunch[ _-]?money)\b.{0,80}\b(?:api[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, verifyLunchMoney),
@@ -2177,7 +2177,9 @@ func verifyHTTPRequestWithClassifier(ctx context.Context, req *http.Request, cla
 	if configured := verificationHTTPClient(ctx); configured != nil {
 		client = configured
 	}
-	resp, err := client.Do(req)
+	clientWithoutRedirects := *client
+	clientWithoutRedirects.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := clientWithoutRedirects.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return VerificationResult{Status: VerificationUnknown, ErrorCategory: "timeout", Message: "provider request timed out"}

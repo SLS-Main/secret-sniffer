@@ -1387,13 +1387,19 @@ func verifyUptimeRobot(ctx context.Context, secret string) VerificationResult {
 	body := "api_key=" + url.QueryEscape(secret) + "&format=json&limit=1"
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.uptimerobot.com/v2/getMonitors", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode >= 300 && statusCode < 400 {
+			return VerificationResult{}, false
+		}
 		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
 			return VerificationResult{}, false
 		}
 		var response struct {
-			Stat  string `json:"stat"`
-			Error struct {
+			Stat       string          `json:"stat"`
+			Pagination json.RawMessage `json:"pagination"`
+			Monitors   json.RawMessage `json:"monitors"`
+			Error      struct {
+				Type          string `json:"type"`
 				ParameterName string `json:"parameter_name"`
 				Message       string `json:"message"`
 			} `json:"error"`
@@ -1402,14 +1408,16 @@ func verifyUptimeRobot(ctx context.Context, secret string) VerificationResult {
 			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
 		}
 		switch {
-		case response.Stat == "ok":
+		case statusCode >= 200 && statusCode < 300 && response.Stat == "ok" && jsonObject(response.Pagination) && jsonArray(response.Monitors):
 			return VerificationResult{Status: VerificationVerified}, true
-		case response.Stat == "fail" && response.Error.ParameterName == "api_key" && containsAnyFold(response.Error.Message, "invalid"):
+		case statusCode >= 200 && statusCode < 300 && response.Stat == "fail" && response.Error.Type == "invalid_parameter" && response.Error.ParameterName == "api_key" && containsAnyFold(response.Error.Message, "api_key is invalid"):
 			return invalidCredentialResult(), true
 		default:
 			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
 		}
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyApollo(ctx context.Context, secret string) VerificationResult {
@@ -2072,28 +2080,35 @@ func verifyLob(ctx context.Context, secret string) VerificationResult {
 func verifyMapbox(ctx context.Context, secret string) VerificationResult {
 	endpoint := "https://api.mapbox.com/tokens/v2?access_token=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode >= 300 && statusCode < 400 {
+			return VerificationResult{}, false
+		}
 		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
 			return VerificationResult{}, false
 		}
 		var response struct {
-			Code string `json:"code"`
+			Code  string `json:"code"`
+			Token struct {
+				Usage         string `json:"usage"`
+				User          string `json:"user"`
+				Authorization string `json:"authorization"`
+			} `json:"token"`
 		}
 		if json.Unmarshal(body, &response) != nil || response.Code == "" {
-			if statusCode >= 200 && statusCode < 300 {
-				return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
-			}
-			return VerificationResult{}, false
+			return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
 		}
-		switch response.Code {
-		case "TokenValid":
+		switch {
+		case statusCode == http.StatusOK && response.Code == "TokenValid" && response.Token.Usage == "sk" && response.Token.User != "" && response.Token.Authorization != "":
 			return VerificationResult{Status: VerificationVerified}, true
-		case "TokenMalformed", "TokenInvalid", "TokenExpired", "TokenRevoked":
+		case statusCode == http.StatusOK && (response.Code == "TokenMalformed" || response.Code == "TokenInvalid" || response.Code == "TokenExpired" || response.Code == "TokenRevoked"):
 			return invalidCredentialResult(), true
 		default:
 			return unknownVerificationResult("provider_response", "provider returned an ambiguous token status"), true
 		}
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyQase(ctx context.Context, secret string) VerificationResult {
@@ -5372,18 +5387,21 @@ func verifyBugHerd(ctx context.Context, secret string) VerificationResult {
 func verifyLivestorm(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.livestorm.co/v1/ping", nil)
 	req.Header.Set("Authorization", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode == http.StatusOK:
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
+			return unknownVerificationResult("authorization", "provider blocked the credential workspace"), true
+		case statusCode == http.StatusTooManyRequests:
+			return VerificationResult{}, false
+		case statusCode >= 400 && statusCode < 500:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		default:
 			return VerificationResult{}, false
 		}
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "not authorized", `"code":"401"`) {
-			return invalidCredentialResult(), true
-		}
-		var response map[string]any
-		if json.Unmarshal(body, &response) == nil && statusCode >= 200 && statusCode < 300 && len(response) > 0 && response["errors"] == nil {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
 	})
 	result.Response = ""
 	return result
