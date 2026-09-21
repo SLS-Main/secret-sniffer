@@ -859,7 +859,11 @@ func verifyHelpScout(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySegment(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://platform.segmentapis.com/v1beta/workspaces")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://platform.segmentapis.com/v1beta/workspaces", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		return jsonHasTopLevelArray(body, "workspaces")
+	})
 }
 
 func verifyFullStory(ctx context.Context, secret string) VerificationResult {
@@ -925,12 +929,22 @@ func verifyWebflow(ctx context.Context, secret string) VerificationResult {
 func verifyWorkOS(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.workos.com/organizations?limit=1", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300 && jsonTopLevelStringEquals(body, "object", "list") && jsonHasTopLevelArray(body, "data") && jsonHasTopLevelObject(body, "list_metadata"):
+			return VerificationResult{Status: VerificationVerified}, true
+		case statusCode >= 200 && statusCode < 300:
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden:
 			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
+		default:
+			return VerificationResult{}, false
 		}
-		return VerificationResult{}, false
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyDeepgram(ctx context.Context, secret string) VerificationResult {
@@ -1003,12 +1017,40 @@ func verifyBrevo(ctx context.Context, secret string) VerificationResult {
 func verifyDeepSeek(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.deepseek.com/models", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusPaymentRequired {
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		switch {
+		case statusCode >= 200 && statusCode < 300:
+			var response struct {
+				Object string `json:"object"`
+				Data   []struct {
+					ID      string `json:"id"`
+					Object  string `json:"object"`
+					OwnedBy string `json:"owned_by"`
+				} `json:"data"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.Object == "list" && response.Data != nil {
+				valid := true
+				for _, model := range response.Data {
+					if model.ID == "" || model.Object != "model" || model.OwnedBy == "" {
+						valid = false
+						break
+					}
+				}
+				if valid {
+					return VerificationResult{Status: VerificationVerified}, true
+				}
+			}
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		case statusCode == http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case statusCode == http.StatusPaymentRequired:
 			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key with insufficient balance"}, true
+		default:
+			return VerificationResult{}, false
 		}
-		return VerificationResult{}, false
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyShodan(ctx context.Context, secret string) VerificationResult {
@@ -1464,28 +1506,39 @@ func verifyZeroTier(ctx context.Context, secret string) VerificationResult {
 func verifyTwitch(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://id.twitch.tv/oauth2/validate", nil)
 	req.Header.Set("Authorization", "OAuth "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "invalid access token") {
-			return invalidCredentialResult(), true
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode >= 200 && statusCode < 300 {
+			var response struct {
+				ClientID  string   `json:"client_id"`
+				Scopes    []string `json:"scopes"`
+				ExpiresIn int64    `json:"expires_in"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.ClientID != "" && response.Scopes != nil && response.ExpiresIn > 0 {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
 		}
 		if statusCode == http.StatusUnauthorized {
+			var response struct {
+				Status  int    `json:"status"`
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.Status == http.StatusUnauthorized && strings.EqualFold(response.Message, "invalid access token") {
+				return invalidCredentialResult(), true
+			}
 			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
 		}
 		return VerificationResult{}, false
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyPushbullet(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pushbullet.com/v2/users/me", nil)
 	req.Header.Set("Access-Token", secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "invalid_access_token") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode == http.StatusUnauthorized {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		return jsonHasTopLevelStrings(body, "iden")
 	})
 }
 
@@ -6536,9 +6589,18 @@ func verifyMailchimp(ctx context.Context, secret string) VerificationResult {
 		return VerificationResult{Status: VerificationUnsupported, Message: "Mailchimp key does not include a data center"}
 	}
 	dataCenter := secret[separator+1:]
+	if len(dataCenter) < 3 || len(dataCenter) > 4 || !strings.HasPrefix(dataCenter, "us") {
+		return VerificationResult{Status: VerificationUnsupported, Message: "Mailchimp key has an invalid data center"}
+	}
+	dataCenterNumber, err := strconv.Atoi(dataCenter[2:])
+	if err != nil || dataCenterNumber < 1 || dataCenterNumber > 99 {
+		return VerificationResult{Status: VerificationUnsupported, Message: "Mailchimp key has an invalid data center"}
+	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+dataCenter+".api.mailchimp.com/3.0/ping", nil)
 	req.SetBasicAuth("secret-sniffer", secret)
-	return verifyHTTPRequest(ctx, req)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		return jsonTopLevelStringEquals(body, "health_status", "Everything's Chimpy!")
+	})
 }
 
 func verifyIterable(ctx context.Context, secret string) VerificationResult {

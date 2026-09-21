@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -2207,9 +2208,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 314,
-		VerificationSafetyReadOnly:   121,
-		VerificationSafetyAuthOnly:   35,
+		VerificationSafetyUnreviewed: 308,
+		VerificationSafetyReadOnly:   124,
+		VerificationSafetyAuthOnly:   38,
 		VerificationSafetyUnsafe:     97,
 	}
 	for safety, want := range expected {
@@ -2221,7 +2222,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 253 || report.RequiresHardening != 258 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 259 || report.RequiresHardening != 252 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
@@ -2409,6 +2410,172 @@ func TestFirstHardeningBatchTokenBoundaries(t *testing.T) {
 	front := strings.Repeat("A", 36) + "." + strings.Repeat("B", 244)
 	if candidates := detectorsByID["front-api-token"].Detect([]byte("front_token=" + front + "-")); len(candidates) != 0 {
 		t.Fatalf("overlong Front token candidates=%#v", candidates)
+	}
+}
+
+func TestSecondHardeningBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"twitch-access-token": VerificationSafetyAuthOnly,
+		"mailchimp-key":       VerificationSafetyAuthOnly,
+		"deepseek-api-key":    VerificationSafetyReadOnly,
+		"workos-api-key":      VerificationSafetyReadOnly,
+		"segment-api-key":     VerificationSafetyReadOnly,
+		"pushbullet-token":    VerificationSafetyAuthOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestSecondHardeningBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name      string
+		verify    Verifier
+		secret    string
+		host      string
+		path      string
+		rawQuery  string
+		headers   map[string]string
+		basicUser string
+		basicPass string
+		response  string
+	}{
+		{name: "twitch", verify: verifyTwitch, secret: "secret", host: "id.twitch.tv", path: "/oauth2/validate", headers: map[string]string{"Authorization": "OAuth secret"}, response: `{"client_id":"client","scopes":[],"expires_in":3600}`},
+		{name: "mailchimp", verify: verifyMailchimp, secret: strings.Repeat("a", 32) + "-us12", host: "us12.api.mailchimp.com", path: "/3.0/ping", basicUser: "secret-sniffer", basicPass: strings.Repeat("a", 32) + "-us12", response: `{"health_status":"Everything's Chimpy!"}`},
+		{name: "deepseek", verify: verifyDeepSeek, secret: "secret", host: "api.deepseek.com", path: "/models", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"object":"list","data":[{"id":"deepseek-chat","object":"model","owned_by":"deepseek"}]}`},
+		{name: "workos", verify: verifyWorkOS, secret: "secret", host: "api.workos.com", path: "/organizations", rawQuery: "limit=1", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"object":"list","data":[],"list_metadata":{}}`},
+		{name: "segment", verify: verifySegment, secret: "secret", host: "platform.segmentapis.com", path: "/v1beta/workspaces", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"workspaces":[]}`},
+		{name: "pushbullet", verify: verifyPushbullet, secret: "secret", host: "api.pushbullet.com", path: "/v2/users/me", headers: map[string]string{"Access-Token": "secret"}, response: `{"iden":"user"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.rawQuery {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
+				}
+				for header, want := range test.headers {
+					if got := req.Header.Get(header); got != want {
+						t.Fatalf("header %q=%q, want %q", header, got, want)
+					}
+				}
+				if test.basicUser != "" {
+					username, password, ok := req.BasicAuth()
+					if !ok || username != test.basicUser || password != test.basicPass {
+						t.Fatalf("basic auth username=%q password=%q ok=%v", username, password, ok)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), test.secret)
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestSecondHardeningBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyTwitch, verifyMailchimp, verifyDeepSeek, verifyWorkOS, verifySegment, verifyPushbullet} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		secret := "secret"
+		if reflect.ValueOf(verify).Pointer() == reflect.ValueOf(verifyMailchimp).Pointer() {
+			secret = strings.Repeat("a", 32) + "-us12"
+		}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), secret)
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestSecondHardeningBatchClassifiesFailuresWithoutLeakingResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		want       VerificationStatus
+		category   string
+	}{
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, want: VerificationUnknown, category: "rate_limited"},
+		{name: "provider failure", statusCode: http.StatusInternalServerError, want: VerificationUnknown, category: "provider"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, verify := range []Verifier{verifyTwitch, verifyMailchimp, verifyDeepSeek, verifyWorkOS, verifySegment, verifyPushbullet} {
+				client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: test.statusCode, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+				})}
+				secret := "secret"
+				if reflect.ValueOf(verify).Pointer() == reflect.ValueOf(verifyMailchimp).Pointer() {
+					secret = strings.Repeat("a", 32) + "-us12"
+				}
+				result := verify(WithVerificationHTTPClient(context.Background(), client), secret)
+				if result.Status != test.want || result.ErrorCategory != test.category || result.Response != "" {
+					t.Fatalf("failure result=%#v", result)
+				}
+			}
+		})
+	}
+}
+
+func TestSecondHardeningBatchClassifiesAuthenticationResponses(t *testing.T) {
+	tests := []struct {
+		name   string
+		verify Verifier
+		status int
+		body   string
+		want   VerificationStatus
+	}{
+		{name: "twitch invalid", verify: verifyTwitch, status: http.StatusUnauthorized, body: `{"status":401,"message":"invalid access token"}`, want: VerificationUnverified},
+		{name: "mailchimp invalid", verify: verifyMailchimp, status: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified},
+		{name: "deepseek invalid", verify: verifyDeepSeek, status: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified},
+		{name: "workos invalid", verify: verifyWorkOS, status: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified},
+		{name: "segment invalid", verify: verifySegment, status: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified},
+		{name: "pushbullet invalid", verify: verifyPushbullet, status: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified},
+		{name: "deepseek balance", verify: verifyDeepSeek, status: http.StatusPaymentRequired, body: `{}`, want: VerificationVerified},
+		{name: "workos restricted", verify: verifyWorkOS, status: http.StatusForbidden, body: `{}`, want: VerificationVerified},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: test.status, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+			})}
+			secret := "secret"
+			if test.verify == nil {
+				t.Fatal("missing verifier")
+			}
+			if reflect.ValueOf(test.verify).Pointer() == reflect.ValueOf(verifyMailchimp).Pointer() {
+				secret = strings.Repeat("a", 32) + "-us12"
+			}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), secret)
+			if result.Status != test.want || result.Response != "" {
+				t.Fatalf("authentication result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestSecondHardeningBatchRejectsInvalidMailchimpDataCenterWithoutRequest(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("unexpected request")
+	})}
+	result := verifyMailchimp(WithVerificationHTTPClient(context.Background(), client), strings.Repeat("a", 32)+"-eu1")
+	if result.Status != VerificationUnsupported || calls != 0 {
+		t.Fatalf("invalid data-center result=%#v calls=%d", result, calls)
 	}
 }
 
