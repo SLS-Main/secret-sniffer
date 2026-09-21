@@ -2211,9 +2211,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 289,
-		VerificationSafetyReadOnly:   127,
-		VerificationSafetyAuthOnly:   54,
+		VerificationSafetyUnreviewed: 281,
+		VerificationSafetyReadOnly:   132,
+		VerificationSafetyAuthOnly:   57,
 		VerificationSafetyUnsafe:     97,
 	}
 	for safety, want := range expected {
@@ -2225,7 +2225,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 278 || report.RequiresHardening != 233 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 286 || report.RequiresHardening != 225 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
@@ -3201,6 +3201,225 @@ func TestFifthHardeningBatchTokenBoundaries(t *testing.T) {
 	}
 	if candidates := detectorsByID["reachmail-api-key"].Detect([]byte("reachmail api_key=" + reachmail + "_")); len(candidates) != 0 {
 		t.Fatalf("overlong ReachMail candidates=%#v", candidates)
+	}
+}
+
+func TestSixthHardeningBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"braintree-access-token": VerificationSafetyAuthOnly,
+		"calendly-api-key":       VerificationSafetyAuthOnly,
+		"liveblocks-secret-key":  VerificationSafetyReadOnly,
+		"resend-api-key":         VerificationSafetyReadOnly,
+		"deepgram-api-key":       VerificationSafetyReadOnly,
+		"motherduck-token":       VerificationSafetyReadOnly,
+		"qovery-api-token":       VerificationSafetyAuthOnly,
+		"mandrill-api-key":       VerificationSafetyReadOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestSixthHardeningBatchRequestContracts(t *testing.T) {
+	braintreeSecret := "access_token$sandbox$merchant$" + strings.Repeat("A", 32)
+	tests := []struct {
+		name        string
+		verify      Verifier
+		secret      string
+		method      string
+		host        string
+		path        string
+		rawQuery    string
+		headers     map[string]string
+		requestBody string
+		response    string
+	}{
+		{name: "braintree", verify: verifyBraintree, secret: braintreeSecret, method: http.MethodPost, host: "payments.sandbox.braintree-api.com", path: "/graphql", headers: map[string]string{"Authorization": "Bearer " + braintreeSecret, "Braintree-Version": "2019-01-01", "Content-Type": "application/json"}, requestBody: `{"query":"query { ping }"}`, response: `{"data":{"ping":"pong"},"extensions":{"requestId":"request"}}`},
+		{name: "calendly", verify: verifyCalendly, secret: "secret", method: http.MethodGet, host: "api.calendly.com", path: "/users/me", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"resource":{"uri":"https://api.calendly.com/users/user-id","name":"User","slug":"user","email":"user@example.com","scheduling_url":"https://calendly.com/user","timezone":"UTC","avatar_url":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","current_organization":"https://api.calendly.com/organizations/org-id","resource_type":"User","locale":"en"}}`},
+		{name: "liveblocks", verify: verifyLiveblocks, secret: "secret", method: http.MethodGet, host: "api.liveblocks.io", path: "/v2/rooms", rawQuery: "limit=1", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"nextCursor":null,"data":[]}`},
+		{name: "resend", verify: verifyResend, secret: "secret", method: http.MethodGet, host: "api.resend.com", path: "/api-keys", rawQuery: "limit=1", headers: map[string]string{"Authorization": "Bearer secret", "Accept": "application/json"}, response: `{"object":"list","has_more":false,"data":[]}`},
+		{name: "deepgram", verify: verifyDeepgram, secret: "secret", method: http.MethodGet, host: "api.deepgram.com", path: "/v1/projects", headers: map[string]string{"Authorization": "Token secret", "Accept": "application/json"}, response: `{"projects":[]}`},
+		{name: "motherduck", verify: verifyMotherDuck, secret: "secret", method: http.MethodGet, host: "api.motherduck.com", path: "/v1/active_accounts", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"accounts":[]}`},
+		{name: "qovery", verify: verifyQovery, secret: "secret", method: http.MethodGet, host: "api.qovery.com", path: "/account", headers: map[string]string{"Authorization": "Token secret"}, response: `{"id":"123e4567-e89b-12d3-a456-426614174000"}`},
+		{name: "mandrill", verify: verifyMandrill, secret: "secret", method: http.MethodPost, host: "mandrillapp.com", path: "/api/1.0/users/info.json", headers: map[string]string{"Content-Type": "application/json"}, requestBody: `{"key":"secret"}`, response: `{"username":"user","public_id":"public","reputation":0,"hourly_quota":0,"backlog":0,"stats":{"today":{},"last_7_days":{},"last_30_days":{},"last_60_days":{},"last_90_days":{},"all_time":{}}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.rawQuery {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+				}
+				for header, want := range test.headers {
+					if got := req.Header.Get(header); got != want {
+						t.Fatalf("header %q=%q, want %q", header, got, want)
+					}
+				}
+				if test.requestBody != "" {
+					body, err := io.ReadAll(req.Body)
+					if err != nil || string(body) != test.requestBody {
+						t.Fatalf("request body=%q err=%v", body, err)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), test.secret)
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("verification result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestSixthHardeningBatchRejectsMalformedSuccess(t *testing.T) {
+	braintreeSecret := "access_token$production$merchant$" + strings.Repeat("A", 32)
+	for _, test := range []struct {
+		verify Verifier
+		secret string
+	}{
+		{verify: verifyBraintree, secret: braintreeSecret},
+		{verify: verifyCalendly, secret: "secret"},
+		{verify: verifyLiveblocks, secret: "secret"},
+		{verify: verifyResend, secret: "secret"},
+		{verify: verifyDeepgram, secret: "secret"},
+		{verify: verifyMotherDuck, secret: "secret"},
+		{verify: verifyQovery, secret: "secret"},
+		{verify: verifyMandrill, secret: "secret"},
+	} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := test.verify(WithVerificationHTTPClient(context.Background(), client), test.secret)
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestSixthHardeningBatchClassifiesFailuresWithoutLeakingResponses(t *testing.T) {
+	braintreeSecret := "access_token$production$merchant$" + strings.Repeat("A", 32)
+	for _, failure := range []struct {
+		statusCode int
+		category   string
+	}{
+		{statusCode: http.StatusTooManyRequests, category: "rate_limited"},
+		{statusCode: http.StatusInternalServerError, category: "provider"},
+	} {
+		for _, test := range []struct {
+			verify Verifier
+			secret string
+		}{
+			{verify: verifyBraintree, secret: braintreeSecret},
+			{verify: verifyCalendly, secret: "secret"},
+			{verify: verifyLiveblocks, secret: "secret"},
+			{verify: verifyResend, secret: "secret"},
+			{verify: verifyDeepgram, secret: "secret"},
+			{verify: verifyMotherDuck, secret: "secret"},
+			{verify: verifyQovery, secret: "secret"},
+			{verify: verifyMandrill, secret: "secret"},
+		} {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: failure.statusCode, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), test.secret)
+			if result.Status != VerificationUnknown || result.ErrorCategory != failure.category || result.Response != "" {
+				t.Fatalf("failure result=%#v", result)
+			}
+		}
+	}
+}
+
+func TestSixthHardeningBatchClassifiesAuthenticationResponses(t *testing.T) {
+	braintreeSecret := "access_token$production$merchant$" + strings.Repeat("A", 32)
+	tests := []struct {
+		name       string
+		verify     Verifier
+		secret     string
+		statusCode int
+		body       string
+		want       VerificationStatus
+		category   string
+	}{
+		{name: "braintree invalid", verify: verifyBraintree, secret: braintreeSecret, statusCode: http.StatusOK, body: `{"data":{"ping":null},"errors":[{"extensions":{"errorClass":"AUTHENTICATION"}}],"extensions":{"requestId":"request"}}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "braintree restricted", verify: verifyBraintree, secret: braintreeSecret, statusCode: http.StatusOK, body: `{"errors":[{"extensions":{"errorClass":"AUTHORIZATION"}}],"extensions":{"requestId":"request"}}`, want: VerificationVerified},
+		{name: "calendly invalid", verify: verifyCalendly, secret: "secret", statusCode: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "calendly scope", verify: verifyCalendly, secret: "secret", statusCode: http.StatusForbidden, body: `{"title":"Insufficient scope","required_scopes":["users:read"]}`, want: VerificationVerified},
+		{name: "liveblocks invalid", verify: verifyLiveblocks, secret: "secret", statusCode: http.StatusForbidden, body: `{"error":"INVALID_SECRET_KEY"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "liveblocks management scope", verify: verifyLiveblocks, secret: "secret", statusCode: http.StatusForbidden, body: `{"error":"INVALID_MANAGEMENT_API_ACCESS_TOKEN_SCOPE"}`, want: VerificationUnknown, category: "authorization"},
+		{name: "resend restricted", verify: verifyResend, secret: "secret", statusCode: http.StatusUnauthorized, body: `{"name":"restricted_api_key","message":"restricted","statusCode":401}`, want: VerificationVerified},
+		{name: "resend invalid", verify: verifyResend, secret: "secret", statusCode: http.StatusBadRequest, body: `{"name":"validation_error","message":"API key is invalid","statusCode":400}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "deepgram invalid", verify: verifyDeepgram, secret: "secret", statusCode: http.StatusUnauthorized, body: `{"err_code":"INVALID_AUTH","err_msg":"Invalid credentials."}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "deepgram restricted", verify: verifyDeepgram, secret: "secret", statusCode: http.StatusForbidden, body: `{"err_code":"INSUFFICIENT_PERMISSIONS"}`, want: VerificationVerified},
+		{name: "motherduck invalid", verify: verifyMotherDuck, secret: "secret", statusCode: http.StatusForbidden, body: `{"mdFriendlyStatusCode":"AUTHENTICATION_ERROR"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "motherduck restricted", verify: verifyMotherDuck, secret: "secret", statusCode: http.StatusForbidden, body: `{"code":"FORBIDDEN"}`, want: VerificationVerified},
+		{name: "qovery invalid", verify: verifyQovery, secret: "secret", statusCode: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "qovery restricted", verify: verifyQovery, secret: "secret", statusCode: http.StatusForbidden, body: `{}`, want: VerificationUnknown, category: "authorization"},
+		{name: "mandrill invalid", verify: verifyMandrill, secret: "secret", statusCode: http.StatusUnauthorized, body: `{"status":"error","code":401,"name":"Invalid_Key","message":"Invalid API key"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "mandrill ambiguous", verify: verifyMandrill, secret: "secret", statusCode: http.StatusUnauthorized, body: `{"status":"error","code":401,"name":"Access_Denied","message":"IP not permitted"}`, want: VerificationUnknown, category: "authorization"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: test.statusCode, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), test.secret)
+			if result.Status != test.want || result.ErrorCategory != test.category || result.Response != "" {
+				t.Fatalf("authentication result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestSixthHardeningBatchTokenBoundaries(t *testing.T) {
+	detectorsByID := map[string]Detector{}
+	for _, detector := range DefaultRegistry() {
+		detectorsByID[detector.Info().ID] = detector
+	}
+	calendly := "eyJ" + strings.Repeat("A", 24) + ".eyJ" + strings.Repeat("B", 64) + "." + strings.Repeat("C", 43)
+	if candidates := detectorsByID["calendly-api-key"].Detect([]byte(`calendly token="` + calendly + `"`)); len(candidates) != 1 || candidates[0].Secret != calendly {
+		t.Fatalf("Calendly candidates=%#v", candidates)
+	}
+	overlongCalendly := "eyJ" + strings.Repeat("A", 24) + ".eyJ" + strings.Repeat("B", 64) + "." + strings.Repeat("C", 301)
+	if candidates := detectorsByID["calendly-api-key"].Detect([]byte("calendly token=" + overlongCalendly)); len(candidates) != 0 {
+		t.Fatalf("overlong Calendly candidates=%#v", candidates)
+	}
+	resend := "re_" + strings.Repeat("A", 8) + "_" + strings.Repeat("B", 23) + "-"
+	if candidates := detectorsByID["resend-api-key"].Detect([]byte(`RESEND_API_KEY="` + resend + `"`)); len(candidates) != 1 || candidates[0].Secret != resend {
+		t.Fatalf("Resend candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["resend-api-key"].Detect([]byte("RESEND_API_KEY=" + resend + "_")); len(candidates) != 0 {
+		t.Fatalf("overlong Resend candidates=%#v", candidates)
+	}
+	liveblocks := "sk_prod_" + strings.Repeat("A", 31) + "-"
+	if candidates := detectorsByID["liveblocks-secret-key"].Detect([]byte(`LIVEBLOCKS_SECRET_KEY="` + liveblocks + `"`)); len(candidates) != 1 || candidates[0].Secret != liveblocks {
+		t.Fatalf("Liveblocks candidates=%#v", candidates)
+	}
+	mandrill := strings.Repeat("A", 21) + "-"
+	if candidates := detectorsByID["mandrill-api-key"].Detect([]byte(`mandrill_key="` + mandrill + `"`)); len(candidates) != 1 || candidates[0].Secret != mandrill {
+		t.Fatalf("Mandrill candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["mandrill-api-key"].Detect([]byte("mandrill_key=" + strings.Repeat("A", 21))); len(candidates) != 0 {
+		t.Fatalf("short Mandrill candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["mandrill-api-key"].Detect([]byte("mandrill_key=" + strings.Repeat("A", 23))); len(candidates) != 0 {
+		t.Fatalf("long Mandrill candidates=%#v", candidates)
+	}
+	qovery := "qov_" + strings.Repeat("A", 31) + "-"
+	if candidates := detectorsByID["qovery-api-token"].Detect([]byte(qovery)); len(candidates) != 1 || candidates[0].Secret != qovery {
+		t.Fatalf("Qovery candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["qovery-api-token"].Detect([]byte("qovery bearer=eyJ" + strings.Repeat("A", 64))); len(candidates) != 0 {
+		t.Fatalf("Qovery bearer candidates=%#v", candidates)
 	}
 }
 
@@ -5225,7 +5444,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"chroma-cloud-api-key", "api.trychroma.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"voiceflow-api-key", "VF.DM." + strings.Repeat("a", 24) + "." + strings.Repeat("A", 16), "VF.DM." + strings.Repeat("a", 24) + "." + strings.Repeat("A", 16)},
 		{"harness-pat", "harness pat." + strings.Repeat("A", 22) + "." + strings.Repeat("a", 24) + "." + strings.Repeat("B", 20), "pat." + strings.Repeat("A", 22) + "." + strings.Repeat("a", 24) + "." + strings.Repeat("B", 20)},
-		{"resend-api-key", "RESEND_API_KEY=\"re_" + strings.Repeat("A", 32) + "\"", "re_" + strings.Repeat("A", 32)},
+		{"resend-api-key", "RESEND_API_KEY=\"re_" + strings.Repeat("A", 8) + "_" + strings.Repeat("B", 24) + "\"", "re_" + strings.Repeat("A", 8) + "_" + strings.Repeat("B", 24)},
 		{"clerk-secret-key", "CLERK_SECRET_KEY=\"sk_live_" + strings.Repeat("A", 32) + "\"", "sk_live_" + strings.Repeat("A", 32)},
 		{"workos-api-key", "WORKOS_API_KEY=\"sk_test_" + strings.Repeat("B", 32) + "\"", "sk_test_" + strings.Repeat("B", 32)},
 		{"liveblocks-secret-key", "LIVEBLOCKS_SECRET_KEY=\"sk_prod_" + strings.Repeat("C", 32) + "\"", "sk_prod_" + strings.Repeat("C", 32)},
@@ -5714,7 +5933,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"render-api-key", "api.render.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"koyeb-api-token", "api.koyeb.com api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"northflank-api-token", "api.northflank.com api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"qovery-api-token", "api.qovery.com api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"qovery-api-token", "QOVERY_API_TOKEN=\"qov_" + strings.Repeat("A", 48) + "\"", "qov_" + strings.Repeat("A", 48)},
 		{"porter-api-token", "dashboard.porter.run api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"envkey-api-key", "envkey.com server_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"akeyless-access-secret", "api.akeyless.io access_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
