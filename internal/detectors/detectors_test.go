@@ -2207,9 +2207,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 320,
-		VerificationSafetyReadOnly:   119,
-		VerificationSafetyAuthOnly:   31,
+		VerificationSafetyUnreviewed: 314,
+		VerificationSafetyReadOnly:   121,
+		VerificationSafetyAuthOnly:   35,
 		VerificationSafetyUnsafe:     97,
 	}
 	for safety, want := range expected {
@@ -2221,7 +2221,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 247 || report.RequiresHardening != 264 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 253 || report.RequiresHardening != 258 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
@@ -2250,6 +2250,165 @@ func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T)
 		if seen[id] != want {
 			t.Fatalf("detector %q audit status=%q, want %q", id, seen[id], want)
 		}
+	}
+}
+
+func TestFirstHardeningBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"openai-key":        VerificationSafetyReadOnly,
+		"square-token":      VerificationSafetyReadOnly,
+		"huggingface-token": VerificationSafetyAuthOnly,
+		"replicate-token":   VerificationSafetyAuthOnly,
+		"front-api-token":   VerificationSafetyAuthOnly,
+		"coda-api-token":    VerificationSafetyAuthOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestFirstHardeningBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name     string
+		verify   Verifier
+		host     string
+		path     string
+		headers  map[string]string
+		response string
+	}{
+		{name: "openai", verify: verifyOpenAI, host: "api.openai.com", path: "/v1/models", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"object":"list","data":[]}`},
+		{name: "square", verify: verifySquare, host: "connect.squareup.com", path: "/v2/merchants", headers: map[string]string{"Authorization": "Bearer sq0atp-AAAAAAAAAAAAAAAAAAAAAA", "Accept": "application/json", "Square-Version": "2026-08-19"}, response: `{"merchant":[]}`},
+		{name: "huggingface", verify: verifyHuggingFace, host: "huggingface.co", path: "/api/whoami-v2", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"type":"user","id":"user-id","name":"user","auth":{}}`},
+		{name: "replicate", verify: verifyReplicate, host: "api.replicate.com", path: "/v1/account", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"type":"organization","username":"team"}`},
+		{name: "front", verify: verifyFront, host: "api2.frontapp.com", path: "/me", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"_links":{"self":"https://example.api.frontapp.com/me"},"id":"cmp_1","name":"Example"}`},
+		{name: "coda", verify: verifyCoda, host: "coda.io", path: "/apis/v1/whoami", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"name":"User","loginId":"user@example.com","type":"user","tokenName":"scanner","href":"https://coda.io/apis/v1/whoami","workspace":{"id":"ws-1"}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
+				}
+				for header, want := range test.headers {
+					if got := req.Header.Get(header); got != want {
+						t.Fatalf("header %q=%q, want %q", header, got, want)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			secret := "secret"
+			if test.name == "square" {
+				secret = "sq0atp-AAAAAAAAAAAAAAAAAAAAAA"
+			}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), secret)
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("unexpected verification result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestFirstHardeningBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyOpenAI, verifySquare, verifyHuggingFace, verifyReplicate, verifyFront, verifyCoda} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestFirstHardeningBatchClassifiesFailuresWithoutLeakingResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		want       VerificationStatus
+		category   string
+	}{
+		{name: "unauthorized", statusCode: http.StatusUnauthorized, body: `{"errors":[{"code":"UNAUTHORIZED"}]}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "forbidden", statusCode: http.StatusForbidden, body: `{"private":"metadata"}`, want: VerificationUnknown, category: "authorization"},
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, body: `{"private":"metadata"}`, want: VerificationUnknown, category: "rate_limited"},
+		{name: "provider failure", statusCode: http.StatusInternalServerError, body: `{"private":"metadata"}`, want: VerificationUnknown, category: "provider"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, verify := range []Verifier{verifyOpenAI, verifySquare, verifyHuggingFace, verifyReplicate, verifyFront, verifyCoda} {
+				client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: test.statusCode, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+				})}
+				result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+				if result.Status != test.want || result.ErrorCategory != test.category || result.Response != "" {
+					t.Fatalf("failure result=%#v", result)
+				}
+			}
+		})
+	}
+}
+
+func TestFirstHardeningBatchSquareRecognizesInsufficientScope(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"errors":[{"code":"INSUFFICIENT_SCOPES"}]}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifySquare(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationVerified || result.Response != "" {
+		t.Fatalf("Square insufficient-scope result=%#v", result)
+	}
+}
+
+func TestFirstHardeningBatchTokenBoundaries(t *testing.T) {
+	detectorsByID := map[string]Detector{}
+	for _, detector := range DefaultRegistry() {
+		detectorsByID[detector.Info().ID] = detector
+	}
+	replicate := "r8_" + strings.Repeat("A", 37)
+	if candidates := detectorsByID["replicate-token"].Detect([]byte(replicate)); len(candidates) != 1 || candidates[0].Secret != replicate {
+		t.Fatalf("documented Replicate token candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["replicate-token"].Detect([]byte("r8_" + strings.Repeat("A", 40))); len(candidates) != 0 {
+		t.Fatalf("overlong Replicate token candidates=%#v", candidates)
+	}
+	replicateURLSafe := "r8_-_" + strings.Repeat("A", 35)
+	if candidates := detectorsByID["replicate-token"].Detect([]byte(replicateURLSafe)); len(candidates) != 1 || candidates[0].Secret != replicateURLSafe {
+		t.Fatalf("URL-safe Replicate token candidates=%#v", candidates)
+	}
+	replicateTrailingHyphen := "r8_" + strings.Repeat("A", 36) + "-"
+	if candidates := detectorsByID["replicate-token"].Detect([]byte(`token="` + replicateTrailingHyphen + `"`)); len(candidates) != 1 || candidates[0].Secret != replicateTrailingHyphen {
+		t.Fatalf("terminal-hyphen Replicate token candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["replicate-token"].Detect([]byte("r8_" + strings.Repeat("A", 37) + "-")); len(candidates) != 0 {
+		t.Fatalf("boundary-overlong Replicate token candidates=%#v", candidates)
+	}
+	adjacentReplicate := replicate + "\n" + replicateTrailingHyphen
+	if candidates := detectorsByID["replicate-token"].Detect([]byte(adjacentReplicate)); len(candidates) != 2 || candidates[0].Secret != replicate || candidates[1].Secret != replicateTrailingHyphen {
+		t.Fatalf("adjacent Replicate token candidates=%#v", candidates)
+	}
+	huggingFace := "hf_" + strings.Repeat("A", 34)
+	if candidates := detectorsByID["huggingface-token"].Detect([]byte(huggingFace)); len(candidates) != 1 || candidates[0].Secret != huggingFace {
+		t.Fatalf("current Hugging Face token candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["huggingface-token"].Detect([]byte("hf_" + strings.Repeat("A", 35))); len(candidates) != 0 {
+		t.Fatalf("overlong Hugging Face token candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["front-api-token"].Detect([]byte("front_token=" + strings.Repeat("A", 64))); len(candidates) != 0 {
+		t.Fatalf("opaque Front token candidates=%#v", candidates)
+	}
+	front := strings.Repeat("A", 36) + "." + strings.Repeat("B", 244)
+	if candidates := detectorsByID["front-api-token"].Detect([]byte("front_token=" + front + "-")); len(candidates) != 0 {
+		t.Fatalf("overlong Front token candidates=%#v", candidates)
 	}
 }
 
@@ -4218,7 +4377,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"webex-bot-token", "webex " + strings.Repeat("A", 64) + "_AB12_12345678-1234-1234-1234-123456789abc", strings.Repeat("A", 64) + "_AB12_12345678-1234-1234-1234-123456789abc"},
 		{"huggingface-token", "hf_" + strings.Repeat("A", 34), "hf_" + strings.Repeat("A", 34)},
 		{"groq-api-key", "gsk_" + strings.Repeat("A", 52), "gsk_" + strings.Repeat("A", 52)},
-		{"replicate-token", "r8_" + strings.Repeat("A", 40), "r8_" + strings.Repeat("A", 40)},
+		{"replicate-token", "r8_" + strings.Repeat("A", 37), "r8_" + strings.Repeat("A", 37)},
 		{"airtable-pat", "patAbC123dEf4567X." + strings.Repeat("a", 64), "patAbC123dEf4567X." + strings.Repeat("a", 64)},
 		{"airtable-oauth-client-secret", "airtable oauth client_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"asana-pat", "asana 123/1234567890123456/9876543210987654:abcdefghijklmnopqrstuvwxyzABCDEF123456", "123/1234567890123456/9876543210987654:abcdefghijklmnopqrstuvwxyzABCDEF123456"},

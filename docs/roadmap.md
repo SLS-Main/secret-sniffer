@@ -28,18 +28,19 @@ Implemented:
 - TruffleHog parity report with `--trufflehog-parity`.
 - Raw secrets in output by default for remediation workflows.
 - In-memory archive scanning for `zip`, `tar`, `tar.gz`, `tgz`, and `gz` with recursion and decompression limits.
+- Safety assessments for every built-in provider verifier, with unreviewed and unsafe hooks gated behind separate opt-ins.
 
 Partially implemented:
 
 - TruffleHog detector parity. The mapping framework exists, but the detector set is not yet one-for-one complete.
-- Provider verification. Hundreds of provider hooks exist; safety review and context-aware classification remain incomplete.
+- Provider verification. Safety assessment is complete, but provider-specific response hardening and context-aware classification remain incomplete.
 - Git history scanning. It scans git blobs, but does not yet use persistent `git cat-file --batch` workers or full commit attribution.
 - GitHub enterprise scanning. Enterprise org/repo discovery exists, but enterprise-specific rate-limit handling and retry policy need improvement.
 - Resource utilization. Worker controls exist, but there is no adaptive scheduler for CPU, memory, clone bandwidth, or repository size.
 
 ## Near-Term Priorities
 
-1. Complete verification safety and response-classification audits.
+1. Harden the remaining audited provider verification contracts.
 2. Improve GitHub scanning resilience.
 3. Improve git history performance.
 4. Add container and package-artifact expansion.
@@ -80,7 +81,6 @@ Partially implemented:
 
 ### Verification
 
-- Review every existing verifier as `read_only`, `auth_only`, `unsafe`, or intentionally unsupported.
 - Replace aggregate verification-gap arithmetic with an upstream ID-level capability matrix.
 - Add only provider verification backed by safe, deterministic APIs and sufficient endpoint or credential context.
 - Add verification rate limiting.

@@ -205,18 +205,19 @@ type Info struct {
 }
 
 type RegexDetector struct {
-	ID                 string
-	Name               string
-	Severity           string
-	Keywords           []string
-	Regex              *regexp.Regexp
-	SecretGroup        int
-	SecretGroups       []int
-	PartGroups         map[string]int
-	Verifier           Verifier
-	CompositeVerifier  CompositeVerifier
-	VerificationSafety VerificationSafety
-	BroadContext       bool
+	ID                  string
+	Name                string
+	Severity            string
+	Keywords            []string
+	Regex               *regexp.Regexp
+	SecretGroup         int
+	SecretGroups        []int
+	PartGroups          map[string]int
+	Verifier            Verifier
+	CompositeVerifier   CompositeVerifier
+	VerificationSafety  VerificationSafety
+	BroadContext        bool
+	TrailingSecretChars string
 }
 
 var openAIAdminKeyPattern = regexp.MustCompile(`\b(sk-admin-[A-Za-z0-9_-]{58}T3BlbkFJ[A-Za-z0-9_-]{58})\b`)
@@ -267,6 +268,9 @@ func (d RegexDetector) detectContent(content string) []Candidate {
 			group = 0
 		}
 		start, end := m[group*2], m[group*2+1]
+		if end < len(content) && strings.ContainsRune(d.TrailingSecretChars, rune(content[end])) {
+			continue
+		}
 		secret := content[start:end]
 		var secretParts map[string]string
 		if len(d.PartGroups) > 0 {
@@ -321,6 +325,10 @@ func NewAuthOnlyRegex(id, name, severity string, keywords []string, expr string,
 	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: group, Verifier: verifier, VerificationSafety: VerificationSafetyAuthOnly, BroadContext: strings.Contains(expr, `[\s\S]{0,`)}
 }
 
+func NewAuthOnlyRegexWithTrailingBoundary(id, name, severity string, keywords []string, expr string, group int, trailingSecretChars string, verifier Verifier) Detector {
+	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: group, Verifier: verifier, VerificationSafety: VerificationSafetyAuthOnly, BroadContext: strings.Contains(expr, `[\s\S]{0,`), TrailingSecretChars: trailingSecretChars}
+}
+
 func NewAuthOnlyRegexGroups(id, name, severity string, keywords []string, expr string, groups []int, verifier Verifier) Detector {
 	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroups: groups, Verifier: verifier, VerificationSafety: VerificationSafetyAuthOnly, BroadContext: strings.Contains(expr, `[\s\S]{0,`)}
 }
@@ -355,7 +363,7 @@ func DefaultRegistry() []Detector {
 		NewReadOnlyRegex("github-pat-v2", "GitHub Fine-Grained Token", "critical", []string{"github_pat_"}, `\b(github_pat_[A-Za-z0-9_]{80,255})\b`, 1, verifyGitHub),
 		NewAuthOnlyRegex("slack-token", "Slack Token", "critical", []string{"xoxb-", "xoxp-", "xoxa-", "xoxr-", "xoxs-"}, `\b((?:xox[baprs]|xoxa)-[A-Za-z0-9-]{10,200})\b`, 1, verifySlack),
 		NewReadOnlyRegex("stripe-key", "Stripe Secret Key", "critical", []string{"sk_live_", "rk_live_"}, `\b((?:sk|rk)_live_[A-Za-z0-9]{16,99})\b`, 1, verifyStripe),
-		NewRegex("openai-key", "OpenAI API Key", "critical", []string{"sk-", "OPENAI"}, `\b(sk-(?:proj-)?[A-Za-z0-9_-]{32,200})\b`, 1, verifyOpenAI),
+		NewReadOnlyRegex("openai-key", "OpenAI API Key", "critical", []string{"sk-", "OPENAI"}, `\b(sk-(?:proj-)?[A-Za-z0-9_-]{32,200})\b`, 1, verifyOpenAI),
 		NewReadOnlyRegex("anthropic-key", "Anthropic API Key", "critical", []string{"sk-ant-"}, `\b(sk-ant-[A-Za-z0-9_-]{40,200})\b`, 1, verifyAnthropic),
 		NewRegex("google-api-key", "Google API Key", "high", []string{"AIza"}, `\b(AIza[0-9A-Za-z_-]{35})\b`, 1, verifyGoogleAPIKey),
 		NewRegex("google-oauth-client-secret", "Google OAuth Client Secret", "high", []string{"client_secret", "googleusercontent"}, `(?i)\b(client_secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{24})`, 2, nil),
@@ -410,7 +418,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("ftp-credential-url", "FTP Credential URL", "critical", []string{"ftp://", "ftps://", "sftp://"}, `\b((?:s?ftp|ftps)://[^:\s'\"/@]{1,120}:[^@\s'\"/]{8,120}@[^\s'\"<>]+)`, 1, nil),
 		NewRegex("shopify-token", "Shopify Token", "high", []string{"shpat_", "shpca_", "shppa_", "shpss_"}, `\b(shp(?:at|ca|pa|ss)_[A-Za-z0-9]{32})\b`, 1, nil),
 		NewRegex("shopify-oauth-client-secret", "Shopify OAuth Client Secret", "critical", []string{"shopify", "myshopify.com", "shopify_app_secret"}, `(?i)\b(?:shopify|myshopify\.com|shopify[_-]?app[_-]?secret)\b[\s\S]{0,240}\b(?:client[_-]?secret|app[_-]?secret|oauth[_-]?secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._~/-]{32,128})\b`, 1, nil),
-		NewRegex("square-token", "Square Token", "critical", []string{"sq0atp-", "sq0csp-"}, `\b(sq0(?:atp|csp)-[A-Za-z0-9_-]{22,60})\b`, 1, verifySquare),
+		NewReadOnlyRegex("square-token", "Square Token", "critical", []string{"sq0atp-", "sq0csp-"}, `\b(sq0(?:atp|csp)-[A-Za-z0-9_-]{22,60})\b`, 1, verifySquare),
 		NewRegex("paypal-token", "PayPal Token", "high", []string{"paypal"}, `(?i)\bpaypal.{0,20}['\"\s:=]+([A-Za-z0-9_-]{40,128})\b`, 1, nil),
 		NewRegex("razorpay-key", "Razorpay Key ID", "high", []string{"rzp_live_"}, `\b(rzp_live_[A-Za-z0-9]{14})\b`, 1, nil),
 		NewUnsafeRegex("slack-webhook", "Slack Webhook URL", "critical", []string{"hooks.slack.com"}, `\b(https://hooks\.slack\.com/(?:services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]{23,25}|workflows/T[A-Z0-9]+/A[A-Z0-9]+/[0-9]{17,19}/[A-Za-z0-9]{23,25}))\b`, 1, verifySlackWebhook),
@@ -424,9 +432,9 @@ func DefaultRegistry() []Detector {
 		NewRegex("opsgenie-api-key", "Opsgenie API Key", "high", []string{"opsgenie"}, `(?i)\bopsgenie.{0,40}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, verifyOpsgenie),
 		NewRegex("splunk-observability-token", "Splunk Observability Token", "high", []string{"splunk", "signalfx", "X-Sf-Token"}, `(?i)\b(?:splunk|signalfx|x-sf-token).{0,40}['\"\s:=]+([A-Za-z0-9]{22})\b`, 1, nil),
 		NewReadOnlyRegex("webex-bot-token", "Webex Bot Token", "critical", []string{"webex", "spark"}, `\b([A-Za-z0-9]{64}_[A-Za-z0-9]{4}_[A-Za-z0-9]{8}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{12})\b`, 1, verifyWebex),
-		NewRegex("huggingface-token", "Hugging Face Token", "critical", []string{"hf_", "huggingface"}, `\b(hf_[A-Za-z0-9]{34,80})\b`, 1, verifyHuggingFace),
+		NewAuthOnlyRegex("huggingface-token", "Hugging Face Token", "critical", []string{"hf_", "huggingface"}, `\b(hf_[A-Za-z0-9]{34})\b`, 1, verifyHuggingFace),
 		NewReadOnlyRegex("groq-api-key", "Groq API Key", "critical", []string{"gsk_", "groq"}, `\b(gsk_[A-Za-z0-9]{52})\b`, 1, verifyGroq),
-		NewRegex("replicate-token", "Replicate Token", "critical", []string{"r8_", "replicate"}, `\b(r8_[A-Za-z0-9]{40})\b`, 1, verifyReplicate),
+		NewAuthOnlyRegexWithTrailingBoundary("replicate-token", "Replicate Token", "critical", []string{"r8_", "replicate"}, `(?:^|[^A-Za-z0-9_-])(r8_[A-Za-z0-9_-]{37})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-", verifyReplicate),
 		NewReadOnlyRegex("airtable-pat", "Airtable Personal Access Token", "critical", []string{"pat", "airtable"}, `\b(pat[A-Za-z0-9]{14}\.[a-f0-9]{64})\b`, 1, verifyAirtable),
 		NewReadOnlyRegex("asana-pat", "Asana Personal Access Token", "critical", []string{"asana"}, `\b([0-9]+/[0-9]{16,}(?:/[0-9]{16,})?:[A-Za-z0-9]{32,})\b`, 1, verifyAsana),
 		NewReadOnlyRegex("clickup-token", "ClickUp Personal Token", "critical", []string{"pk_", "clickup"}, `\b(pk_[0-9]{7,9}_[0-9A-Z]{32})\b`, 1, verifyClickUp),
@@ -480,12 +488,12 @@ func DefaultRegistry() []Detector {
 		NewRegex("harness-pat", "Harness Personal Access Token", "critical", []string{"harness"}, `\b(pat\.[A-Za-z0-9]{22}\.[0-9a-f]{24}\.[A-Za-z0-9]{20})\b`, 1, verifyHarness),
 		NewRegex("zoho-crm-token", "Zoho CRM Token", "critical", []string{"1000.", "zoho"}, `\b(1000\.[a-f0-9]{32}\.[a-f0-9]{32})\b`, 1, verifyZohoCRM),
 		NewRegex("intercom-access-token", "Intercom Access Token", "critical", []string{"intercom", "dG9rO"}, `(?i)\bintercom.{0,40}['\"\s:=]+(dG9rO[A-Za-z0-9+/]{54}=)`, 1, verifyIntercom),
-		NewRegex("front-api-token", "Front API Token", "critical", []string{"front", "frontapp"}, `(?i)\b(?:front[_-]?token\b\s*[:=]\s*['\"]?|(?:front\b|frontapp\.com|api2\.frontapp\.com|front[_-]?api\b)[\s\S]{0,160}\b(?:api[_-]?token|access[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?)([0-9A-Za-z]{36}\.[0-9A-Za-z._-]{188,244}|[A-Za-z0-9._-]{32,256})\b`, 1, verifyFront),
+		NewAuthOnlyRegexWithTrailingBoundary("front-api-token", "Front API Token", "critical", []string{"front", "frontapp"}, `(?i)\b(?:front[_-]?token\b\s*[:=]\s*['\"]?|(?:front\b|frontapp\.com|api2\.frontapp\.com|front[_-]?api\b)[\s\S]{0,160}\b(?:api[_-]?token|access[_-]?token|bearer|token)\b\s*[:=]\s*['\"]?)([0-9A-Za-z]{36}\.[0-9A-Za-z._-]{188,244})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-", verifyFront),
 		NewRegex("segment-api-key", "Segment API Key", "high", []string{"segment"}, `(?i)\bsegment.{0,40}['\"\s:=]+([A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43})\b`, 1, verifySegment),
 		NewRegex("posthog-personal-api-key", "PostHog Personal API Key", "critical", []string{"phx_", "posthog"}, `\b(phx_[A-Za-z0-9_]{43})\b`, 1, verifyPostHog),
 		NewRegex("launchdarkly-key", "LaunchDarkly Key", "critical", []string{"api-", "sdk-", "launchdarkly"}, `\b((?:api|sdk)-[a-z0-9]{8}-[a-z0-9]{4}-4[a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{12})\b`, 1, verifyLaunchDarkly),
 		NewRegex("postmark-token", "Postmark Server Token", "high", []string{"postmark"}, `(?i)\bpostmark.{0,40}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, verifyPostmark),
-		NewRegex("coda-api-token", "Coda API Token", "high", []string{"coda"}, `(?i)\bcoda.{0,40}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, verifyCoda),
+		NewAuthOnlyRegex("coda-api-token", "Coda API Token", "high", []string{"coda"}, `(?i)\bcoda.{0,40}['\"\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, verifyCoda),
 		NewRegex("calendly-api-key", "Calendly API Key", "high", []string{"calendly"}, `(?i)\bcalendly.{0,40}['\"\s:=]+(eyJ[A-Za-z0-9_-]{100,300}\.eyJ[A-Za-z0-9_-]{100,300}\.[A-Za-z0-9_-]+)\b`, 1, verifyCalendly),
 		NewRegex("monday-api-token", "Monday.com API Token", "high", []string{"monday"}, `(?i)\bmonday.{0,40}['\"\s:=]+(eyJ[A-Za-z0-9_-]{15,100}\.eyJ[A-Za-z0-9_-]{100,300}\.[A-Za-z0-9_-]{25,100})\b`, 1, verifyMonday),
 		NewRegex("flyio-token", "Fly.io Token", "critical", []string{"FlyV1"}, `\b(FlyV1 fm\d+_[A-Za-z0-9+/=,_-]{500,700})\b`, 1, verifyFlyIO),
@@ -2126,7 +2134,9 @@ func verifyGitHub(ctx context.Context, token string) VerificationResult {
 func verifyOpenAI(ctx context.Context, token string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.openai.com/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	return verifyHTTPRequest(ctx, req)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		return jsonTopLevelStringEquals(body, "object", "list") && jsonHasTopLevelArray(body, "data")
+	})
 }
 
 func verifyOpenAIAdmin(ctx context.Context, token string) VerificationResult {

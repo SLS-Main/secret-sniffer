@@ -537,7 +537,13 @@ func verifyLaunchDarkly(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCoda(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://coda.io/apis/v1/whoami")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://coda.io/apis/v1/whoami", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		return jsonTopLevelStringEquals(body, "type", "user") &&
+			jsonHasTopLevelStrings(body, "name", "loginId", "tokenName", "href") &&
+			jsonNestedObjectHasString(body, "workspace", "id")
+	})
 }
 
 func verifyCalendly(ctx context.Context, secret string) VerificationResult {
@@ -641,7 +647,11 @@ func verifyCallRail(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyFront(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api2.frontapp.com/me")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api2.frontapp.com/me", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		return jsonHasTopLevelStrings(body, "id", "name") && jsonNestedObjectHasString(body, "_links", "self")
+	})
 }
 
 func verifyDropbox(ctx context.Context, secret string) VerificationResult {
@@ -1876,20 +1886,30 @@ func verifySquare(ctx context.Context, secret string) VerificationResult {
 		return VerificationResult{Status: VerificationUnsupported, Message: "Square application secrets are not bearer access tokens"}
 	}
 	endpoints := []string{"https://connect.squareup.com/v2/merchants", "https://connect.squareupsandbox.com/v2/merchants"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+	result := verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.Header.Set("Authorization", "Bearer "+secret)
+		req.Header.Set("Accept", "application/json")
 		req.Header.Set("Square-Version", "2026-08-19")
 		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-			if statusCode == http.StatusForbidden && containsAnyFold(string(body), "INSUFFICIENT_SCOPES") {
+			switch {
+			case statusCode >= 200 && statusCode < 300 && jsonHasTopLevelArray(body, "merchant"):
+				return VerificationResult{Status: VerificationVerified}, true
+			case statusCode >= 200 && statusCode < 300:
+				return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+			case statusCode == http.StatusForbidden && containsAnyFold(string(body), "INSUFFICIENT_SCOPES"):
 				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
-			}
-			if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "AUTHENTICATION_ERROR", "UNAUTHORIZED") {
+			case statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "UNAUTHORIZED", "ACCESS_TOKEN_EXPIRED", "ACCESS_TOKEN_REVOKED"):
+				return invalidCredentialResult(), true
+			case statusCode == http.StatusUnauthorized:
 				return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+			default:
+				return VerificationResult{}, false
 			}
-			return VerificationResult{}, false
 		})
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyAttio(ctx context.Context, secret string) VerificationResult {
@@ -6622,7 +6642,12 @@ func verifyWebex(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyHuggingFace(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://huggingface.co/api/whoami-v2")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://huggingface.co/api/whoami-v2", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		return jsonTopLevelStringEquals(body, "type", "user") &&
+			jsonHasTopLevelStrings(body, "id", "name") && jsonHasTopLevelObject(body, "auth")
+	})
 }
 
 func verifyGroq(ctx context.Context, secret string) VerificationResult {
@@ -6630,7 +6655,12 @@ func verifyGroq(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyReplicate(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.replicate.com/v1/account")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.replicate.com/v1/account", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	return verifyJSONReadRequestWithInvalidUnauthorized(ctx, req, func(body []byte) bool {
+		return jsonHasTopLevelStrings(body, "username") &&
+			(jsonTopLevelStringEquals(body, "type", "user") || jsonTopLevelStringEquals(body, "type", "organization"))
+	})
 }
 
 func verifyAirtable(ctx context.Context, secret string) VerificationResult {
@@ -6854,6 +6884,15 @@ func jsonHasTopLevelStrings(body []byte, fields ...string) bool {
 		}
 	}
 	return true
+}
+
+func jsonTopLevelStringEquals(body []byte, field, expected string) bool {
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return false
+	}
+	value, ok := payload[field].(string)
+	return ok && value == expected
 }
 
 func jsonStringOrArrayContains(raw json.RawMessage, expected string) bool {
