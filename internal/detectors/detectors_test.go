@@ -1031,8 +1031,8 @@ func TestBestTimeVerifierRejectsHTTP200InvalidKey(t *testing.T) {
 
 func TestReplyIOVerifierRejectsEmpty401(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.Header.Get("X-Api-Key") != "secret" {
-			t.Fatalf("X-Api-Key=%q", req.Header.Get("X-Api-Key"))
+		if req.Header.Get("Authorization") != "Bearer secret" {
+			t.Fatalf("Authorization=%q", req.Header.Get("Authorization"))
 		}
 		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
 	})}
@@ -1359,13 +1359,13 @@ func TestTenthVerificationMappingBatchIsRegistered(t *testing.T) {
 	}
 }
 
-func TestMindMeisterVerifierRejectsHTTP200OAuthFailure(t *testing.T) {
+func TestMindMeisterVerifierRejectsStructuredInvalidCredential(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("Authorization=%q", req.Header.Get("Authorization"))
 		}
-		body := `{"rsp":{"stat":"fail","err":{"code":"1010","msg":"The OAuth credentials are invalid."}}}`
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		body := `{"error":{"type":"invalidCredentials","message":"Invalid Credentials"}}`
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
 	result := verifyMindMeister(WithVerificationHTTPClient(context.Background(), client), "secret")
 	if result.Status != VerificationUnverified || result.Response != "" {
@@ -2211,9 +2211,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 298,
+		VerificationSafetyUnreviewed: 289,
 		VerificationSafetyReadOnly:   127,
-		VerificationSafetyAuthOnly:   45,
+		VerificationSafetyAuthOnly:   54,
 		VerificationSafetyUnsafe:     97,
 	}
 	for safety, want := range expected {
@@ -2225,7 +2225,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 269 || report.RequiresHardening != 242 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 278 || report.RequiresHardening != 233 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
@@ -2981,6 +2981,226 @@ func TestFourthHardeningBatchTokenBoundaries(t *testing.T) {
 	overlongLemon := "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", 64) + "." + strings.Repeat("B", 1001)
 	if candidates := detectorsByID["lemonsqueezy-api-token"].Detect([]byte("lemonsqueezy token=" + overlongLemon)); len(candidates) != 0 {
 		t.Fatalf("overlong Lemon Squeezy candidates=%#v", candidates)
+	}
+}
+
+func TestFifthHardeningBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"onfleet-api-key":       VerificationSafetyAuthOnly,
+		"toggltrack-api-token":  VerificationSafetyAuthOnly,
+		"replyio-api-key":       VerificationSafetyAuthOnly,
+		"salesflare-api-key":    VerificationSafetyAuthOnly,
+		"mindmeister-api-token": VerificationSafetyAuthOnly,
+		"docparser-api-key":     VerificationSafetyAuthOnly,
+		"codequiry-api-key":     VerificationSafetyAuthOnly,
+		"parseur-api-key":       VerificationSafetyAuthOnly,
+		"reachmail-api-key":     VerificationSafetyAuthOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestFifthHardeningBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name      string
+		verify    Verifier
+		method    string
+		host      string
+		path      string
+		rawQuery  string
+		headers   map[string]string
+		basicUser string
+		basicPass string
+		response  string
+	}{
+		{name: "onfleet", verify: verifyOnfleet, method: http.MethodGet, host: "onfleet.com", path: "/api/v2/auth/test", headers: map[string]string{"Accept": "application/json"}, basicUser: "secret", response: `{"message":"Hello organization","status":200}`},
+		{name: "toggl", verify: verifyTogglTrack, method: http.MethodGet, host: "api.track.toggl.com", path: "/api/v9/me", rawQuery: "with_related_data=false", headers: map[string]string{"Accept": "application/json"}, basicUser: "secret", basicPass: "api_token", response: `{"id":1,"email":"user@example.com"}`},
+		{name: "reply", verify: verifyReplyIO, method: http.MethodGet, host: "api.reply.io", path: "/v3/whoami", headers: map[string]string{"Authorization": "Bearer secret", "Accept": "application/json"}, response: `{"userId":1,"username":"user@example.com","teamId":2}`},
+		{name: "salesflare", verify: verifySalesflare, method: http.MethodGet, host: "api.salesflare.com", path: "/me", headers: map[string]string{"Authorization": "Bearer secret", "Accept": "application/json"}, response: `{"id":1}`},
+		{name: "mindmeister", verify: verifyMindMeister, method: http.MethodGet, host: "www.mindmeister.com", path: "/api/v2/users/me", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"id":1}`},
+		{name: "docparser", verify: verifyDocparser, method: http.MethodGet, host: "api.docparser.com", path: "/v1/ping", basicUser: "secret", response: `{"msg":"pong"}`},
+		{name: "codequiry", verify: verifyCodequiry, method: http.MethodGet, host: "codequiry.com", path: "/api/v1/auth/validate", headers: map[string]string{"apikey": "secret", "Accept": "application/json"}, response: `{"valid":true,"user_id":1}`},
+		{name: "parseur", verify: verifyParseur, method: http.MethodGet, host: "api.parseur.com", path: "/", headers: map[string]string{"Authorization": "secret"}, response: `{"document":"http://api.parseur.com/document","parser":"https://api.parseur.com/parser"}`},
+		{name: "reachmail", verify: verifyReachMail, method: http.MethodGet, host: "services.reachmail.net", path: "/administration/users/current", headers: map[string]string{"Authorization": "Bearer secret", "Accept": "application/json", "Content-Type": "application/json"}, response: `{"AccountId":"123e4567-e89b-12d3-a456-426614174000","AccountKey":"","Username":"","CompanyName":"","Email":"","Name":""}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.rawQuery {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+				}
+				for header, want := range test.headers {
+					if got := req.Header.Get(header); got != want {
+						t.Fatalf("header %q=%q, want %q", header, got, want)
+					}
+				}
+				if test.basicUser != "" {
+					username, password, ok := req.BasicAuth()
+					if !ok || username != test.basicUser || password != test.basicPass {
+						t.Fatalf("basic auth username=%q password=%q ok=%v", username, password, ok)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("verification result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestFifthHardeningBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyTogglTrack, verifyReplyIO, verifySalesflare, verifyMindMeister, verifyDocparser, verifyCodequiry, verifyParseur, verifyReachMail} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestFifthHardeningBatchClassifiesFailuresWithoutLeakingResponses(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		statusCode int
+		category   string
+	}{
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, category: "rate_limited"},
+		{name: "provider failure", statusCode: http.StatusInternalServerError, category: "provider"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, verify := range []Verifier{verifyOnfleet, verifyTogglTrack, verifyReplyIO, verifySalesflare, verifyMindMeister, verifyDocparser, verifyCodequiry, verifyParseur, verifyReachMail} {
+				client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: test.statusCode, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+				})}
+				result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+				if result.Status != VerificationUnknown || result.ErrorCategory != test.category || result.Response != "" {
+					t.Fatalf("failure result=%#v", result)
+				}
+			}
+		})
+	}
+}
+
+func TestFifthHardeningBatchClassifiesAuthenticationResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		verify     Verifier
+		statusCode int
+		body       string
+		want       VerificationStatus
+		category   string
+	}{
+		{name: "onfleet invalid", verify: verifyOnfleet, statusCode: http.StatusUnauthorized, body: `{"message":{"error":1102}}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "onfleet permission", verify: verifyOnfleet, statusCode: http.StatusUnauthorized, body: `{"message":{"error":1101}}`, want: VerificationUnknown, category: "authorization"},
+		{name: "toggl invalid", verify: verifyTogglTrack, statusCode: http.StatusForbidden, body: `Incorrect username and/or password`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "toggl restricted", verify: verifyTogglTrack, statusCode: http.StatusForbidden, body: `Forbidden`, want: VerificationUnknown, category: "authorization"},
+		{name: "reply invalid", verify: verifyReplyIO, statusCode: http.StatusUnauthorized, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "reply structured invalid", verify: verifyReplyIO, statusCode: http.StatusUnauthorized, body: `{"title":"Unauthorized","status":401,"detail":"Authentication credentials are missing or invalid."}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "reply organization context", verify: verifyReplyIO, statusCode: http.StatusForbidden, body: `{"code":"USER_REQUIRED"}`, want: VerificationVerified},
+		{name: "salesflare invalid", verify: verifySalesflare, statusCode: http.StatusUnauthorized, body: `{"statusCode":401,"error":"Unauthorized","message":"Missing authentication"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "mindmeister invalid", verify: verifyMindMeister, statusCode: http.StatusUnauthorized, body: `{"error":{"type":"invalidCredentials"}}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "mindmeister scope", verify: verifyMindMeister, statusCode: http.StatusForbidden, body: `{"error":{"type":"unauthorizedScopes"}}`, want: VerificationVerified},
+		{name: "docparser invalid", verify: verifyDocparser, statusCode: http.StatusForbidden, body: `{"error":"api key not valid"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "codequiry invalid", verify: verifyCodequiry, statusCode: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "codequiry billing", verify: verifyCodequiry, statusCode: http.StatusPaymentRequired, body: `{}`, want: VerificationVerified},
+		{name: "parseur invalid", verify: verifyParseur, statusCode: http.StatusForbidden, body: `{"non_field_errors":"Authentication failed"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "reachmail invalid", verify: verifyReachMail, statusCode: http.StatusUnauthorized, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "reachmail forbidden", verify: verifyReachMail, statusCode: http.StatusForbidden, body: `{}`, want: VerificationUnknown, category: "authorization"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: test.statusCode, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != test.want || result.ErrorCategory != test.category || result.Response != "" {
+				t.Fatalf("authentication result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestFifthHardeningBatchIdentitySchemas(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		verify Verifier
+		body   string
+		want   VerificationStatus
+	}{
+		{name: "reachmail identity", verify: verifyReachMail, body: `{"AccountId":"123e4567-e89b-12d3-a456-426614174000","AccountKey":"","Username":"","CompanyName":"","Email":"","Name":""}`, want: VerificationVerified},
+		{name: "reachmail zero UUID", verify: verifyReachMail, body: `{"AccountId":"00000000-0000-0000-0000-000000000000","AccountKey":"","Username":"","CompanyName":"","Email":"","Name":""}`, want: VerificationUnknown},
+		{name: "reachmail missing field", verify: verifyReachMail, body: `{"AccountId":"123e4567-e89b-12d3-a456-426614174000"}`, want: VerificationUnknown},
+		{name: "parseur discovery", verify: verifyParseur, body: `{"document":"https://api.parseur.com/document","parser":"http://api.parseur.com/parser"}`, want: VerificationVerified},
+		{name: "parseur wrong host", verify: verifyParseur, body: `{"document":"https://attacker.example/document","parser":"https://api.parseur.com/parser"}`, want: VerificationUnknown},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != test.want || result.Response != "" {
+				t.Fatalf("identity result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestFifthHardeningBatchTokenBoundaries(t *testing.T) {
+	detectorsByID := map[string]Detector{}
+	for _, candidate := range DefaultRegistry() {
+		detectorsByID[candidate.Info().ID] = candidate
+	}
+	detector := detectorsByID["parseur-api-key"]
+	if detector == nil {
+		t.Fatal("Parseur detector missing")
+	}
+	legacy := strings.Repeat("a", 40)
+	if candidates := detector.Detect([]byte(`parseur api_key="` + legacy + `"`)); len(candidates) != 1 || candidates[0].Secret != legacy {
+		t.Fatalf("legacy Parseur candidates=%#v", candidates)
+	}
+	current := "sk_" + strings.Repeat("A", 31) + "-"
+	if candidates := detector.Detect([]byte(`parseur api_key="` + current + `"`)); len(candidates) != 1 || candidates[0].Secret != current {
+		t.Fatalf("current Parseur candidates=%#v", candidates)
+	}
+	if candidates := detector.Detect([]byte("parseur api_key=sk_" + strings.Repeat("A", 129))); len(candidates) != 0 {
+		t.Fatalf("overlong Parseur candidates=%#v", candidates)
+	}
+	reply := "AKp2BbuyfS-ugPMkBmd3sg2"
+	if candidates := detectorsByID["replyio-api-key"].Detect([]byte(`reply.io api_key="` + reply + `"`)); len(candidates) != 1 || candidates[0].Secret != reply {
+		t.Fatalf("Reply.io candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["replyio-api-key"].Detect([]byte("reply.io api_key=" + strings.Repeat("A", 65))); len(candidates) != 0 {
+		t.Fatalf("overlong Reply.io candidates=%#v", candidates)
+	}
+	codequiry := strings.Repeat("A", 63) + "-"
+	if candidates := detectorsByID["codequiry-api-key"].Detect([]byte(`codequiry api_key="` + codequiry + `"`)); len(candidates) != 1 || candidates[0].Secret != codequiry {
+		t.Fatalf("Codequiry candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["codequiry-api-key"].Detect([]byte("codequiry api_key=" + codequiry + "A")); len(candidates) != 0 {
+		t.Fatalf("overlong Codequiry candidates=%#v", candidates)
+	}
+	reachmail := strings.Repeat("A", 63) + "-"
+	if candidates := detectorsByID["reachmail-api-key"].Detect([]byte(`reachmail api_key="` + reachmail + `"`)); len(candidates) != 1 || candidates[0].Secret != reachmail {
+		t.Fatalf("ReachMail candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["reachmail-api-key"].Detect([]byte("reachmail api_key=" + reachmail + "_")); len(candidates) != 0 {
+		t.Fatalf("overlong ReachMail candidates=%#v", candidates)
 	}
 }
 

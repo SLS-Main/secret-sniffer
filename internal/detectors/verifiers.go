@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -1213,17 +1214,35 @@ func verifyTaxJar(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyTogglTrack(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.track.toggl.com/api/v9/me", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.track.toggl.com/api/v9/me?with_related_data=false", nil)
 	req.SetBasicAuth(secret, "api_token")
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode != http.StatusForbidden {
-			return VerificationResult{}, false
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusOK {
+			var response struct {
+				ID    int64  `json:"id"`
+				Email string `json:"email"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.ID > 0 && strings.TrimSpace(response.Email) != "" {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
 		}
-		if containsAnyFold(string(body), "incorrect username and/or password") {
+		switch {
+		case statusCode == http.StatusForbidden && strings.EqualFold(strings.TrimSpace(string(body)), "Incorrect username and/or password"):
 			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden || statusCode == http.StatusUnauthorized:
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		case statusCode == http.StatusPaymentRequired || statusCode == http.StatusTooManyRequests:
+			return unknownVerificationResult("rate_limited", "provider limited verification"), true
+		case statusCode >= 500:
+			return unknownVerificationResult("provider", "provider unavailable"), true
+		default:
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
 		}
-		return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyTicketmaster(ctx context.Context, secret string) VerificationResult {
@@ -2131,7 +2150,32 @@ func verifyAttio(ctx context.Context, secret string) VerificationResult {
 func verifyOnfleet(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://onfleet.com/api/v2/auth/test", nil)
 	req.SetBasicAuth(secret, "")
-	return verifyHTTPRequest(ctx, req)
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode >= 200 && statusCode < 300 {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if statusCode == http.StatusUnauthorized {
+			var response struct {
+				Message struct {
+					Error int `json:"error"`
+				} `json:"message"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.Message.Error == 1102 {
+				return invalidCredentialResult(), true
+			}
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		if statusCode == http.StatusForbidden {
+			return unknownVerificationResult("authorization", "provider could not authorize verification"), true
+		}
+		if statusCode >= 400 && statusCode < 500 && statusCode != http.StatusTooManyRequests {
+			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		}
+		return VerificationResult{}, false
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyPodio(ctx context.Context, secret string) VerificationResult {
@@ -4302,9 +4346,32 @@ func verifyProxyCrawl(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCodequiry(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://codequiry.com/api/v1/checks", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://codequiry.com/api/v1/auth/validate", nil)
 	req.Header.Set("apikey", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("unauthorized", "api key is valid"))
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusOK {
+			var response struct {
+				Valid  bool  `json:"valid"`
+				UserID int64 `json:"user_id"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.Valid && response.UserID > 0 {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		}
+		switch statusCode {
+		case http.StatusUnauthorized:
+			return invalidCredentialResult(), true
+		case http.StatusPaymentRequired:
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a billing-restricted account"}, true
+		default:
+			if statusCode >= 400 && statusCode < 500 && statusCode != http.StatusTooManyRequests {
+				return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+			}
+			return VerificationResult{}, false
+		}
+	})
 	result.Response = ""
 	return result
 }
@@ -4709,13 +4776,49 @@ func verifyNightfall(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyReplyIO(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.reply.io/v1/people?limit=1", nil)
-	req.Header.Set("X-Api-Key", secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.reply.io/v3/whoami", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Accept", "application/json")
 	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized {
-			return invalidCredentialResult(), true
+		if statusCode == http.StatusOK {
+			var response struct {
+				UserID   int64  `json:"userId"`
+				Username string `json:"username"`
+				TeamID   int64  `json:"teamId"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.UserID > 0 && strings.TrimSpace(response.Username) != "" && response.TeamID > 0 {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
 		}
-		return classifyCollectionResponse()(statusCode, body)
+		if statusCode == http.StatusUnauthorized {
+			if len(bytes.TrimSpace(body)) == 0 {
+				return invalidCredentialResult(), true
+			}
+			var response struct {
+				Code   string `json:"code"`
+				Title  string `json:"title"`
+				Status int    `json:"status"`
+				Detail string `json:"detail"`
+			}
+			if json.Unmarshal(body, &response) == nil {
+				if response.Code == "USER_NOT_FOUND" {
+					return VerificationResult{Status: VerificationVerified, Message: "provider recognized an organization key without usable user context"}, true
+				}
+				if response.Status == http.StatusUnauthorized && strings.EqualFold(response.Title, "Unauthorized") && containsAnyFold(response.Detail, "credentials are missing or invalid") {
+					return invalidCredentialResult(), true
+				}
+			}
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		var response struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(body, &response)
+		if (statusCode == http.StatusForbidden && (response.Code == "USER_REQUIRED" || response.Code == "TEAM_NOT_ACCESSIBLE")) || (statusCode == http.StatusNotFound && response.Code == "whoami.notFound") {
+			return VerificationResult{Status: VerificationVerified, Message: "provider recognized a restricted or unavailable key context"}, true
+		}
+		return verifyJSONReadClassification(statusCode, body)
 	})
 	result.Response = ""
 	return result
@@ -4973,16 +5076,28 @@ func verifyGoodDay(ctx context.Context, secret string) VerificationResult {
 
 func verifyParseur(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.parseur.com/", nil)
-	req.Header.Set("Authorization", "Token "+secret)
+	req.Header.Set("Authorization", secret)
 	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
 		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
 			return VerificationResult{}, false
 		}
-		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "authentication failed") {
-			return invalidCredentialResult(), true
+		if statusCode == http.StatusForbidden {
+			var response struct {
+				Error string `json:"non_field_errors"`
+			}
+			if json.Unmarshal(body, &response) == nil && (strings.EqualFold(response.Error, "Not authenticated") || strings.EqualFold(response.Error, "Authentication failed")) {
+				return invalidCredentialResult(), true
+			}
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
 		}
-		if statusCode >= 200 && statusCode < 300 && jsonObject(body) {
-			return VerificationResult{Status: VerificationVerified}, true
+		if statusCode == http.StatusOK {
+			var response struct {
+				Document string `json:"document"`
+				Parser   string `json:"parser"`
+			}
+			if json.Unmarshal(body, &response) == nil && parseurDiscoveryURL(response.Document, "/document") && parseurDiscoveryURL(response.Parser, "/parser") {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
 		}
 		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
 	})
@@ -5259,13 +5374,31 @@ func verifyDeel(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySalesflare(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.salesflare.com/me/contacts", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.salesflare.com/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Accept", "application/json")
 	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "missing authentication") {
-			return invalidCredentialResult(), true
+		if statusCode == http.StatusOK {
+			var response struct {
+				ID int64 `json:"id"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.ID > 0 {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
 		}
-		return classifyCollectionResponse()(statusCode, body)
+		if statusCode == http.StatusUnauthorized {
+			var response struct {
+				StatusCode int    `json:"statusCode"`
+				Error      string `json:"error"`
+				Message    string `json:"message"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.StatusCode == http.StatusUnauthorized && strings.EqualFold(response.Error, "Unauthorized") && strings.EqualFold(response.Message, "Missing authentication") {
+				return invalidCredentialResult(), true
+			}
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return verifyJSONReadClassification(statusCode, body)
 	})
 	result.Response = ""
 	return result
@@ -5623,31 +5756,34 @@ func verifyJuro(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyMindMeister(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.mindmeister.com/services/rest/oauth2?method=mm.maps.getList", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.mindmeister.com/api/v2/users/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
 	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
+		if statusCode == http.StatusOK {
+			var response struct {
+				ID int64 `json:"id"`
+			}
+			if json.Unmarshal(body, &response) == nil && response.ID > 0 {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
 		}
 		var response struct {
-			RSP struct {
-				Stat string `json:"stat"`
-				Err  struct {
-					Code string `json:"code"`
-					Msg  string `json:"msg"`
-				} `json:"err"`
-			} `json:"rsp"`
+			Error struct {
+				Type string `json:"type"`
+			} `json:"error"`
 		}
-		if json.Unmarshal(body, &response) != nil {
-			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-		}
-		if statusCode >= 200 && statusCode < 300 && response.RSP.Stat == "ok" {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		if response.RSP.Stat == "fail" && response.RSP.Err.Code == "1010" && containsAnyFold(response.RSP.Err.Msg, "oauth credentials are invalid") {
+		_ = json.Unmarshal(body, &response)
+		switch {
+		case statusCode == http.StatusUnauthorized && response.Error.Type == "invalidCredentials":
 			return invalidCredentialResult(), true
+		case statusCode == http.StatusForbidden && response.Error.Type == "unauthorizedScopes":
+			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
+		case statusCode == http.StatusForbidden || statusCode == http.StatusUnauthorized:
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		default:
+			return verifyJSONReadClassification(statusCode, body)
 		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
 	})
 	result.Response = ""
 	return result
@@ -5671,11 +5807,27 @@ func verifyPrivacy(ctx context.Context, secret string) VerificationResult {
 func verifyReachMail(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://services.reachmail.net/administration/users/current", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
 	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusOK {
+			var response struct {
+				AccountID   string  `json:"AccountId"`
+				AccountKey  *string `json:"AccountKey"`
+				Username    *string `json:"Username"`
+				CompanyName *string `json:"CompanyName"`
+				Email       *string `json:"Email"`
+				Name        *string `json:"Name"`
+			}
+			if json.Unmarshal(body, &response) == nil && validNonzeroUUID(response.AccountID) && response.AccountKey != nil && response.Username != nil && response.CompanyName != nil && response.Email != nil && response.Name != nil {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		}
 		if statusCode == http.StatusUnauthorized {
 			return invalidCredentialResult(), true
 		}
-		return classifyReadOnlyAPI([]string{"id"})(statusCode, body)
+		return verifyJSONReadClassification(statusCode, body)
 	})
 	result.Response = ""
 	return result
@@ -5985,9 +6137,26 @@ func verifyEnvoy(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyDocparser(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://api.docparser.com/v1/parsers?api_key=" + url.QueryEscape(secret)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("api key not valid"))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.docparser.com/v1/ping", nil)
+	req.SetBasicAuth(secret, "")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusOK && jsonTopLevelStringEquals(body, "msg", "pong") {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		if statusCode == http.StatusOK {
+			return unknownVerificationResult("provider_response", "provider returned an unexpected verification response"), true
+		}
+		if statusCode == http.StatusForbidden {
+			var response struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(body, &response) == nil && strings.EqualFold(response.Error, "api key not valid") {
+				return invalidCredentialResult(), true
+			}
+			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
+		}
+		return verifyJSONReadClassification(statusCode, body)
+	})
 	result.Response = ""
 	return result
 }
@@ -7074,6 +7243,28 @@ func containsAnyFold(value string, candidates ...string) bool {
 	value = strings.ToLower(value)
 	for _, candidate := range candidates {
 		if strings.Contains(value, strings.ToLower(candidate)) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseurDiscoveryURL(value, expectedPath string) bool {
+	parsed, err := url.Parse(value)
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host == "api.parseur.com" && parsed.Path == expectedPath && parsed.RawQuery == ""
+}
+
+func validNonzeroUUID(value string) bool {
+	parts := strings.Split(value, "-")
+	if len(parts) != 5 || len(parts[0]) != 8 || len(parts[1]) != 4 || len(parts[2]) != 4 || len(parts[3]) != 4 || len(parts[4]) != 12 {
+		return false
+	}
+	decoded, err := hex.DecodeString(strings.Join(parts, ""))
+	if err != nil {
+		return false
+	}
+	for _, b := range decoded {
+		if b != 0 {
 			return true
 		}
 	}
