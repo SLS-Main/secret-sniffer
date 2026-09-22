@@ -2211,9 +2211,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 281,
-		VerificationSafetyReadOnly:   132,
-		VerificationSafetyAuthOnly:   57,
+		VerificationSafetyUnreviewed: 273,
+		VerificationSafetyReadOnly:   133,
+		VerificationSafetyAuthOnly:   64,
 		VerificationSafetyUnsafe:     97,
 	}
 	for safety, want := range expected {
@@ -2225,7 +2225,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 286 || report.RequiresHardening != 225 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 294 || report.RequiresHardening != 217 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
@@ -3420,6 +3420,169 @@ func TestSixthHardeningBatchTokenBoundaries(t *testing.T) {
 	}
 	if candidates := detectorsByID["qovery-api-token"].Detect([]byte("qovery bearer=eyJ" + strings.Repeat("A", 64))); len(candidates) != 0 {
 		t.Fatalf("Qovery bearer candidates=%#v", candidates)
+	}
+}
+
+func TestSeventhHardeningBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"aftership-api-key":     VerificationSafetyReadOnly,
+		"streak-api-key":        VerificationSafetyAuthOnly,
+		"ynab-api-token":        VerificationSafetyAuthOnly,
+		"salesloft-api-key":     VerificationSafetyAuthOnly,
+		"tmetric-api-token":     VerificationSafetyAuthOnly,
+		"meistertask-api-token": VerificationSafetyAuthOnly,
+		"lunchmoney-api-token":  VerificationSafetyAuthOnly,
+		"podio-api-token":       VerificationSafetyAuthOnly,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestSeventhHardeningBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name      string
+		verify    Verifier
+		method    string
+		host      string
+		path      string
+		rawQuery  string
+		headers   map[string]string
+		basicUser string
+		response  string
+	}{
+		{name: "aftership", verify: verifyAfterShip, method: http.MethodGet, host: "api.aftership.com", path: "/tracking/2026-07/couriers", rawQuery: "slug=usps", headers: map[string]string{"as-api-key": "secret", "Content-Type": "application/json"}, response: `{"meta":{"code":200},"data":{"total":1,"couriers":[{"slug":"usps","name":"USPS"}]}}`},
+		{name: "streak", verify: verifyStreak, method: http.MethodGet, host: "api.streak.com", path: "/api/v1/users/me", basicUser: "secret", response: `{"key":"user-key"}`},
+		{name: "ynab", verify: verifyYNAB, method: http.MethodGet, host: "api.ynab.com", path: "/v1/user", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"data":{"user":{"id":"user"}}}`},
+		{name: "salesloft", verify: verifySalesloft, method: http.MethodGet, host: "api.salesloft.com", path: "/v2/me", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"data":{"id":1}}`},
+		{name: "tmetric", verify: verifyTMetric, method: http.MethodGet, host: "app.tmetric.com", path: "/api/v3/user", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"id":1}`},
+		{name: "meistertask", verify: verifyMeisterTask, method: http.MethodGet, host: "www.meistertask.com", path: "/api/persons/me", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"id":1,"email":"user@example.com"}`},
+		{name: "lunchmoney", verify: verifyLunchMoney, method: http.MethodGet, host: "api.lunchmoney.dev", path: "/v2/me", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"name":"User","email":"user@example.com","id":1,"account_id":2,"budget_name":"Budget","primary_currency":"usd","api_key_label":null}`},
+		{name: "podio", verify: verifyPodio, method: http.MethodGet, host: "api.podio.com", path: "/user/status", headers: map[string]string{"Authorization": "OAuth2 secret"}, response: `{"user":{"user_id":1,"status":"active"}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.rawQuery {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+				}
+				for header, want := range test.headers {
+					if got := req.Header.Get(header); got != want {
+						t.Fatalf("header %q=%q, want %q", header, got, want)
+					}
+				}
+				if test.basicUser != "" {
+					username, password, ok := req.BasicAuth()
+					if !ok || username != test.basicUser || password != "" {
+						t.Fatalf("basic auth username=%q password=%q ok=%v", username, password, ok)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("verification result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestSeventhHardeningBatchRejectsMalformedSuccess(t *testing.T) {
+	for _, verify := range []Verifier{verifyAfterShip, verifyStreak, verifyYNAB, verifySalesloft, verifyTMetric, verifyMeisterTask, verifyLunchMoney, verifyPodio} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+		if result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+}
+
+func TestSeventhHardeningBatchClassifiesFailuresWithoutLeakingResponses(t *testing.T) {
+	for _, failure := range []struct {
+		statusCode int
+		category   string
+	}{
+		{statusCode: http.StatusTooManyRequests, category: "rate_limited"},
+		{statusCode: http.StatusInternalServerError, category: "provider"},
+	} {
+		for _, verify := range []Verifier{verifyAfterShip, verifyStreak, verifyYNAB, verifySalesloft, verifyTMetric, verifyMeisterTask, verifyLunchMoney, verifyPodio} {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: failure.statusCode, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+			})}
+			result := verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationUnknown || result.ErrorCategory != failure.category || result.Response != "" {
+				t.Fatalf("failure result=%#v", result)
+			}
+		}
+	}
+}
+
+func TestSeventhHardeningBatchClassifiesAuthenticationResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		verify     Verifier
+		statusCode int
+		body       string
+		want       VerificationStatus
+		category   string
+	}{
+		{name: "aftership invalid", verify: verifyAfterShip, statusCode: http.StatusUnauthorized, body: `{"meta":{"code":401,"type":"Unauthorized"}}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "aftership forbidden", verify: verifyAfterShip, statusCode: http.StatusForbidden, body: `{}`, want: VerificationUnknown, category: "authorization"},
+		{name: "streak invalid", verify: verifyStreak, statusCode: http.StatusUnauthorized, body: `{"error":"invalid api key"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "ynab invalid", verify: verifyYNAB, statusCode: http.StatusUnauthorized, body: `{"error":{"id":"401"}}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "ynab restricted", verify: verifyYNAB, statusCode: http.StatusForbidden, body: `{"error":{"id":"403.3"}}`, want: VerificationVerified},
+		{name: "salesloft invalid", verify: verifySalesloft, statusCode: http.StatusUnauthorized, body: `{"error":"Invalid Bearer token"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "tmetric invalid", verify: verifyTMetric, statusCode: http.StatusUnauthorized, body: `{}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "meistertask ambiguous", verify: verifyMeisterTask, statusCode: http.StatusUnauthorized, body: `{}`, want: VerificationUnknown, category: "authorization"},
+		{name: "lunchmoney invalid", verify: verifyLunchMoney, statusCode: http.StatusUnauthorized, body: `{"message":"Unauthorized","errors":[{"errMsg":"Access token does not exist."}]}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "podio invalid", verify: verifyPodio, statusCode: http.StatusUnauthorized, body: `{"error":"unauthorized","error_description":"expired_token"}`, want: VerificationUnverified, category: "invalid_credentials"},
+		{name: "podio app context", verify: verifyPodio, statusCode: http.StatusUnauthorized, body: `{"error":"invalid_request"}`, want: VerificationUnknown, category: "credential_type"},
+		{name: "podio rate limited", verify: verifyPodio, statusCode: 420, body: `{}`, want: VerificationUnknown, category: "rate_limited"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: test.statusCode, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != test.want || result.ErrorCategory != test.category || result.Response != "" {
+				t.Fatalf("authentication result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestSeventhHardeningBatchTokenBoundaries(t *testing.T) {
+	detectorsByID := map[string]Detector{}
+	for _, detector := range DefaultRegistry() {
+		detectorsByID[detector.Info().ID] = detector
+	}
+	afterShip := "asat_" + strings.Repeat("a", 32)
+	if candidates := detectorsByID["aftership-api-key"].Detect([]byte(afterShip)); len(candidates) != 1 || candidates[0].Secret != afterShip {
+		t.Fatalf("AfterShip candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["aftership-api-key"].Detect([]byte(afterShip + "a")); len(candidates) != 0 {
+		t.Fatalf("overlong AfterShip candidates=%#v", candidates)
+	}
+	salesloft := "ak_" + strings.Repeat("a", 64)
+	if candidates := detectorsByID["salesloft-api-key"].Detect([]byte(salesloft)); len(candidates) != 1 || candidates[0].Secret != salesloft {
+		t.Fatalf("Salesloft candidates=%#v", candidates)
+	}
+	if candidates := detectorsByID["salesloft-api-key"].Detect([]byte(salesloft + "a")); len(candidates) != 0 {
+		t.Fatalf("overlong Salesloft candidates=%#v", candidates)
 	}
 }
 
@@ -5870,7 +6033,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"gong-api-token", "api.gong.io access_key_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"chorus-api-key", "api.chorus.ai api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"outreach-api-token", "api.outreach.io access_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"salesloft-api-key", "api.salesloft.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"salesloft-api-key", "SALESLOFT_API_KEY=\"ak_" + strings.Repeat("a", 64) + "\"", "ak_" + strings.Repeat("a", 64)},
 		{"clay-api-key", "api.clay.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"instantly-api-key", "api.instantly.ai api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"smartlead-api-key", "api.smartlead.ai api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
@@ -6022,7 +6185,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"easypost-api-key", "api.easypost.com api_key=\"EZAK" + strings.Repeat("A", 48) + "\"", "EZAK" + strings.Repeat("A", 48)},
 		{"shipstation-api-secret", "ssapi.shipstation.com api_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"shipengine-api-key", "api.shipengine.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
-		{"aftership-api-key", "api.aftership.com api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"aftership-api-key", "AFTERSHIP_API_KEY=\"asat_" + strings.Repeat("a", 32) + "\"", "asat_" + strings.Repeat("a", 32)},
 		{"easyship-api-token", "api.easyship.com api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"sendcloud-api-key", "panel.sendcloud.sc api_secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"strava-client-secret", "strava client_secret=\"" + strings.Repeat("a", 40) + "\"", strings.Repeat("a", 40)},
