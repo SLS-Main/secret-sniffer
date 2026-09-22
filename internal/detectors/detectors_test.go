@@ -1548,7 +1548,7 @@ func TestVBOUTVerifierUsesApplicationStatus(t *testing.T) {
 		body   string
 		status VerificationStatus
 	}{
-		{name: "valid", code: http.StatusOK, body: `{"response":{"header":{"status":"success"},"data":{"id":1}}}`, status: VerificationVerified},
+		{name: "valid", code: http.StatusOK, body: `{"business":{"businessname":"Business","vboutName":"tenant"}}`, status: VerificationVerified},
 		{name: "invalid", code: http.StatusUnauthorized, body: `{"response":{"header":{"status":"error"},"data":{"errorCode":1000}}}`, status: VerificationUnverified},
 	}
 	for _, tt := range tests {
@@ -2211,10 +2211,10 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 263,
-		VerificationSafetyReadOnly:   136,
+		VerificationSafetyUnreviewed: 246,
+		VerificationSafetyReadOnly:   152,
 		VerificationSafetyAuthOnly:   70,
-		VerificationSafetyUnsafe:     98,
+		VerificationSafetyUnsafe:     99,
 	}
 	for safety, want := range expected {
 		if counts[safety] != want {
@@ -2225,7 +2225,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 304 || report.RequiresHardening != 207 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 321 || report.RequiresHardening != 190 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
@@ -3750,6 +3750,163 @@ func TestEighthHardeningBatchTokenBoundaries(t *testing.T) {
 	courier := "pk_" + strings.Repeat("A", 31) + "-"
 	if candidates := detectorsByID["courier-api-key"].Detect([]byte(`courier key="` + courier + `"`)); len(candidates) != 1 || candidates[0].Secret != courier {
 		t.Fatalf("Courier candidates=%#v", candidates)
+	}
+}
+
+func TestNinthHardeningBatchSafetyClassifications(t *testing.T) {
+	expected := map[string]VerificationSafety{
+		"callrail-api-key":    VerificationSafetyReadOnly,
+		"voyageai-api-key":    VerificationSafetyReadOnly,
+		"lokalise-token":      VerificationSafetyReadOnly,
+		"parsehub-api-key":    VerificationSafetyReadOnly,
+		"dyspatch-api-key":    VerificationSafetyReadOnly,
+		"loadmill-api-key":    VerificationSafetyReadOnly,
+		"statuscake-api-key":  VerificationSafetyReadOnly,
+		"shodan-api-key":      VerificationSafetyReadOnly,
+		"urlscan-api-key":     VerificationSafetyReadOnly,
+		"apiflash-access-key": VerificationSafetyReadOnly,
+		"captaindata-api-key": VerificationSafetyReadOnly,
+		"hybiscus-api-key":    VerificationSafetyReadOnly,
+		"rocketreach-api-key": VerificationSafetyReadOnly,
+		"telnyx-api-key":      VerificationSafetyReadOnly,
+		"browshot-api-key":    VerificationSafetyReadOnly,
+		"vbout-api-key":       VerificationSafetyReadOnly,
+		"mailsac-api-key":     VerificationSafetyUnsafe,
+	}
+	for _, detector := range DefaultRegistry() {
+		info := detector.Info()
+		want, ok := expected[info.ID]
+		if !ok {
+			continue
+		}
+		if info.VerificationSafety != want {
+			t.Fatalf("detector %q safety=%q, want %q", info.ID, info.VerificationSafety, want)
+		}
+		delete(expected, info.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("classified detectors missing from registry: %#v", expected)
+	}
+}
+
+func TestNinthHardeningBatchRequestContracts(t *testing.T) {
+	tests := []struct {
+		name      string
+		verify    Verifier
+		method    string
+		host      string
+		path      string
+		rawQuery  string
+		headers   map[string]string
+		basicUser string
+		response  string
+	}{
+		{name: "callrail", verify: verifyCallRail, method: http.MethodGet, host: "api.callrail.com", path: "/v3/a.json", rawQuery: "per_page=1", headers: map[string]string{"Authorization": `Token token="secret"`, "Accept": "application/json"}, response: `{"page":1,"per_page":1,"total_pages":0,"total_records":0,"accounts":[]}`},
+		{name: "voyage", verify: verifyVoyageAI, method: http.MethodGet, host: "api.voyageai.com", path: "/v1/files", rawQuery: "limit=1", headers: map[string]string{"Authorization": "Bearer secret", "Accept": "application/json"}, response: `{"object":"list","data":[],"has_more":false}`},
+		{name: "lokalise", verify: verifyLokalise, method: http.MethodGet, host: "api.lokalise.com", path: "/api2/projects", rawQuery: "limit=1", headers: map[string]string{"X-Api-Token": "secret", "Accept": "application/json"}, response: `{"projects":[]}`},
+		{name: "parsehub", verify: verifyParseHub, method: http.MethodGet, host: "www.parsehub.com", path: "/api/v2/projects", rawQuery: "api_key=secret&offset=0&limit=1", response: `{"projects":[],"total_projects":0}`},
+		{name: "dyspatch", verify: verifyDyspatch, method: http.MethodGet, host: "api.dyspatch.io", path: "/templates", headers: map[string]string{"Authorization": "Bearer secret", "Accept": "application/vnd.dyspatch.2026.07+json"}, response: `{"data":[],"cursor":{"hasMore":false,"next":""}}`},
+		{name: "loadmill", verify: verifyLoadmill, method: http.MethodGet, host: "app.loadmill.com", path: "/api/v1/labels", headers: map[string]string{"Authorization": "Bearer secret", "Accept": "application/json"}, response: `{"teamLabels":[]}`},
+		{name: "statuscake", verify: verifyStatusCake, method: http.MethodGet, host: "api.statuscake.com", path: "/v1/uptime", rawQuery: "page=1&limit=1&nouptime", headers: map[string]string{"Authorization": "Bearer secret"}, response: `{"data":[],"metadata":{}}`},
+		{name: "shodan", verify: verifyShodan, method: http.MethodGet, host: "api.shodan.io", path: "/api-info", rawQuery: "key=secret", response: `{"plan":"dev","query_credits":0}`},
+		{name: "urlscan", verify: verifyURLScan, method: http.MethodGet, host: "urlscan.io", path: "/api/v1/quotas", headers: map[string]string{"API-Key": "secret", "Accept": "application/json"}, response: `{"scope":"team","limits":{"private":{}}}`},
+		{name: "apiflash", verify: verifyAPIFlash, method: http.MethodGet, host: "api.apiflash.com", path: "/v1/urltoimage/quota", rawQuery: "access_key=secret", response: `{"limit":100,"remaining":50,"reset":1893456000}`},
+		{name: "captain", verify: verifyCaptainData, method: http.MethodGet, host: "api.captaindata.com", path: "/v1/quotas", headers: map[string]string{"X-API-Key": "secret", "Accept": "application/json"}, response: `{"name":"Workspace","credits_left":1,"credits_max":2,"credits_used":1}`},
+		{name: "hybiscus", verify: verifyHybiscus, method: http.MethodGet, host: "api.hybiscus.dev", path: "/api/v1/get-remaining-quota", headers: map[string]string{"X-API-KEY": "secret", "Accept": "application/json"}, response: `{"period_start":"2026-01-01T00:00:00Z","period_end":"2026-02-01T00:00:00Z","subscription_active":true}`},
+		{name: "rocketreach", verify: verifyRocketReach, method: http.MethodGet, host: "api.rocketreach.co", path: "/api/v2/account/", headers: map[string]string{"Api-Key": "secret", "Accept": "application/json"}, response: `{"id":1,"state":"registered"}`},
+		{name: "telnyx", verify: verifyTelnyx, method: http.MethodGet, host: "api.telnyx.com", path: "/v2/balance", headers: map[string]string{"Authorization": "Bearer secret", "Accept": "application/json"}, response: `{"data":{"record_type":"balance","balance":"1.00","currency":"USD"}}`},
+		{name: "browshot", verify: verifyBrowshot, method: http.MethodGet, host: "api.browshot.com", path: "/api/v1/account/info", rawQuery: "key=secret", response: `{"balance":1,"free_screenshots_left":1,"private_instances":0,"hosting_browshot":0}`},
+		{name: "vbout", verify: verifyVBOUT, method: http.MethodGet, host: "api.vbout.com", path: "/1/app/me.json", rawQuery: "key=secret", response: `{"business":{"businessname":"Business","vboutName":"tenant"}}`},
+		{name: "mailsac", verify: verifyMailsac, method: http.MethodGet, host: "mailsac.com", path: "/api/me", headers: map[string]string{"Mailsac-Key": "secret"}, response: `{"_id":"user"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != test.method || req.URL.Scheme != "https" || req.URL.Host != test.host || req.URL.Path != test.path || req.URL.RawQuery != test.rawQuery {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+				}
+				for header, want := range test.headers {
+					if got := req.Header.Get(header); got != want {
+						t.Fatalf("header %q=%q, want %q", header, got, want)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.response)), Header: make(http.Header)}, nil
+			})}
+			result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret")
+			if result.Status != VerificationVerified || result.Response != "" {
+				t.Fatalf("verification result=%#v", result)
+			}
+		})
+	}
+}
+
+func TestNinthHardeningBatchRejectsMalformedAndTransientResponses(t *testing.T) {
+	verifiers := []Verifier{verifyCallRail, verifyVoyageAI, verifyLokalise, verifyParseHub, verifyDyspatch, verifyLoadmill, verifyStatusCake, verifyShodan, verifyURLScan, verifyAPIFlash, verifyCaptainData, verifyHybiscus, verifyRocketReach, verifyTelnyx, verifyBrowshot, verifyVBOUT, verifyMailsac}
+	for _, verify := range verifiers {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+		})}
+		if result := verify(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnknown || result.Response != "" {
+			t.Fatalf("malformed success result=%#v", result)
+		}
+	}
+	for _, failure := range []struct {
+		status   int
+		category string
+	}{{http.StatusTooManyRequests, "rate_limited"}, {http.StatusInternalServerError, "provider"}} {
+		for _, verify := range verifiers {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: failure.status, Body: io.NopCloser(strings.NewReader(`{"private":"metadata"}`)), Header: make(http.Header)}, nil
+			})}
+			if result := verify(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != VerificationUnknown || result.ErrorCategory != failure.category || result.Response != "" {
+				t.Fatalf("transient result=%#v", result)
+			}
+		}
+	}
+}
+
+func TestNinthHardeningBatchClassifiesCredentialResponses(t *testing.T) {
+	tests := []struct {
+		verify Verifier
+		status int
+		body   string
+		want   VerificationStatus
+	}{
+		{verifyCallRail, http.StatusUnauthorized, `{"error":"HTTP Token: Access denied"}`, VerificationUnverified},
+		{verifyVoyageAI, http.StatusUnauthorized, `{"detail":"Provided API key is invalid."}`, VerificationUnverified},
+		{verifyLokalise, http.StatusBadRequest, "{\"error\":{\"code\":400,\"message\":\"Invalid `X-Api-Token` header\"}}", VerificationUnverified},
+		{verifyParseHub, http.StatusUnauthorized, `{}`, VerificationUnverified},
+		{verifyDyspatch, http.StatusUnauthorized, `{"code":"unauthenticated"}`, VerificationUnverified},
+		{verifyLoadmill, http.StatusUnauthorized, `{"error":"unauthorized"}`, VerificationUnverified},
+		{verifyStatusCake, http.StatusUnauthorized, `{}`, VerificationUnverified},
+		{verifyShodan, http.StatusUnauthorized, `<html>Unauthorized</html>`, VerificationUnverified},
+		{verifyURLScan, http.StatusUnauthorized, `{"status":401}`, VerificationUnverified},
+		{verifyAPIFlash, http.StatusUnauthorized, `The provided access key cannot be found.`, VerificationUnverified},
+		{verifyCaptainData, http.StatusForbidden, `{"error":{"code":403,"status":"Forbidden","message":"You are not authorized to access this resource"}}`, VerificationUnknown},
+		{verifyHybiscus, http.StatusForbidden, `{"detail":"API key supplied is invalid."}`, VerificationUnverified},
+		{verifyRocketReach, http.StatusUnauthorized, `{"error_code":"authentication_failed"}`, VerificationUnverified},
+		{verifyTelnyx, http.StatusUnauthorized, `{"errors":[{"code":"10009"}]}`, VerificationUnverified},
+		{verifyBrowshot, http.StatusBadRequest, `{"error":"Wrong or missing API key"}`, VerificationUnverified},
+		{verifyVBOUT, http.StatusUnauthorized, `{"response":{"header":{"status":"error"}}}`, VerificationUnverified},
+		{verifyMailsac, http.StatusOK, `null`, VerificationUnverified},
+	}
+	for _, test := range tests {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: test.status, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+		})}
+		if result := test.verify(WithVerificationHTTPClient(context.Background(), client), "secret"); result.Status != test.want || result.Response != "" {
+			t.Fatalf("credential result=%#v", result)
+		}
+	}
+}
+
+func TestNinthHardeningBatchDoesNotTrustRestrictedMarkersOnProviderFailure(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(strings.NewReader(`{"code":"limited_usage"}`)), Header: make(http.Header)}, nil
+	})}
+	result := verifyDyspatch(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnknown || result.ErrorCategory != "provider" || result.Response != "" {
+		t.Fatalf("Dyspatch provider failure result=%#v", result)
 	}
 }
 
@@ -6627,7 +6784,7 @@ func TestDefaultRegistryFindsExpandedParityTokens(t *testing.T) {
 		{"magicbell-api-key", "magic bell secret=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"magnetic-api-key", "magnetic api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"mailjetsms-api-token", "mailjet sms api_token=\"" + strings.Repeat("A", 32) + "\"", strings.Repeat("A", 32)},
-		{"mailsac-api-key", "mailsac api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
+		{"mailsac-api-key", "mailsac api_key=\"k_" + strings.Repeat("a", 24) + "\"", "k_" + strings.Repeat("a", 24)},
 		{"manifest-api-key", "manifest api_key=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"mavenlink-api-token", "mavenlink api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
 		{"meistertask-api-token", "meister task api_token=\"" + strings.Repeat("A", 48) + "\"", strings.Repeat("A", 48)},
