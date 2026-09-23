@@ -293,7 +293,7 @@ func (d RegexDetector) detectContent(content string) []Candidate {
 		if d.ID == "openai-key" && openAIAdminKeyPattern.MatchString(secret) {
 			continue
 		}
-		if plausibleSecret(secret) && !(d.ID == "generic-assigned-secret" && looksLikeAssignedReference(content, start)) {
+		if plausibleSecret(secret) && !(d.ID == "generic-assigned-secret" && (looksLikeAssignedReference(content, start) || looksLikeNamedResourceReference(secret))) {
 			out = append(out, Candidate{DetectorID: d.ID, Name: d.Name, Severity: d.Severity, Secret: secret, SecretParts: secretParts, VerificationSafety: d.VerificationSafety, Start: start, End: end, Verifier: d.Verifier, CompositeVerifier: d.CompositeVerifier})
 		}
 	}
@@ -315,6 +315,10 @@ func RegistryInfo(ds []Detector) []Info {
 
 func NewRegex(id, name, severity string, keywords []string, expr string, group int, verifier Verifier) Detector {
 	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: group, Verifier: verifier, BroadContext: strings.Contains(expr, `[\s\S]{0,`)}
+}
+
+func NewRegexWithTrailingBoundary(id, name, severity string, keywords []string, expr string, group int, trailingSecretChars string, verifier Verifier) Detector {
+	return RegexDetector{ID: id, Name: name, Severity: severity, Keywords: keywords, Regex: regexp.MustCompile(expr), SecretGroup: group, Verifier: verifier, BroadContext: strings.Contains(expr, `[\s\S]{0,`), TrailingSecretChars: trailingSecretChars}
 }
 
 func NewReadOnlyRegex(id, name, severity string, keywords []string, expr string, group int, verifier Verifier) Detector {
@@ -352,14 +356,14 @@ func NewMultipartRegexWithSafety(id, name, severity string, keywords []string, e
 func DefaultRegistry() []Detector {
 	return []Detector{
 		NewRegex("aws-access-key", "AWS Access Key", "critical", []string{"AKIA", "ASIA"}, `\b((?:AKIA|ASIA)[A-Z0-9]{16})\b`, 1, nil),
-		NewRegex("aws-secret-key", "AWS Secret Access Key", "critical", []string{"aws_secret", "secret_access_key", "AWS_SECRET_ACCESS_KEY"}, `(?i)(aws(.{0,20})?(secret|private).{0,20})['\"\s:=]+([A-Za-z0-9/+=]{40})\b`, 4, nil),
+		NewRegexWithTrailingBoundary("aws-secret-key", "AWS Secret Access Key", "critical", []string{"aws_secret", "secret_access_key", "AWS_SECRET_ACCESS_KEY"}, `(?i)(aws(.{0,20})?(secret|private).{0,20})['\"\s:=]+([A-Za-z0-9/+=]{40})`, 4, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/+=", nil),
 		CorrelatedDetector{
 			ID: "aws-credentials", Name: "AWS Credentials", Severity: "critical",
 			Keywords: []string{"AKIA", "ASIA", "aws_secret_access_key", "aws-secret-access-key", "secretaccesskey", "secret_key", "secret-key"},
 			Fields: []CorrelatedField{
 				{Name: "access_key_id", Regex: regexp.MustCompile(`\b((?:AKIA|ASIA)[A-Z0-9]{16})\b`), ValueGroup: 1, Required: true},
-				{Name: "secret_access_key", Regex: regexp.MustCompile(`(?i:\b(?:aws[_-]?)?(?:secret[_-]?access[_-]?key|secret[_-]?key)\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9/+=]{40})\b`), ValueGroup: 1, Required: true},
-				{Name: "session_token", Regex: regexp.MustCompile(`(?i:\b(?:aws[_-]?)?session[_-]?token\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9/+=]{80,1000})\b`), ValueGroup: 1},
+				{Name: "secret_access_key", Regex: regexp.MustCompile(`(?i)(?:(?:\b(?:aws[_-]?)?(?:secret[_-]?access[_-]?key|secret[_-]?key)\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9/+=]{40})|\bname\s*:\s*[\"']?(?:AWS_SECRET_ACCESS_KEY|SECRET_ACCESS_KEY|AWS_SECRET_KEY|SECRET_KEY)[\"']?[ \t]*(?:#[^\r\n]*)?\r?\n(?:[ \t]*#[^\r\n]*\r?\n)*\s*value\s*:\s*[\"']?([A-Za-z0-9/+=]{40})|\bvalue\s*:\s*[\"']?([A-Za-z0-9/+=]{40})[\"']?[ \t]*(?:#[^\r\n]*)?\r?\n(?:[ \t]*#[^\r\n]*\r?\n)*\s*name\s*:\s*[\"']?(?:AWS_SECRET_ACCESS_KEY|SECRET_ACCESS_KEY|AWS_SECRET_KEY|SECRET_KEY)|[\"']name[\"']\s*:\s*[\"'](?:AWS_SECRET_ACCESS_KEY|SECRET_ACCESS_KEY|AWS_SECRET_KEY|SECRET_KEY)[\"']\s*,\s*[\"']value[\"']\s*:\s*[\"']([A-Za-z0-9/+=]{40})|[\"']value[\"']\s*:\s*[\"']([A-Za-z0-9/+=]{40})[\"']\s*,\s*[\"']name[\"']\s*:\s*[\"'](?:AWS_SECRET_ACCESS_KEY|SECRET_ACCESS_KEY|AWS_SECRET_KEY|SECRET_KEY)[\"'])`), ValueGroups: []int{1, 2, 3, 4, 5}, TrailingSecretChars: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/+=", Required: true},
+				{Name: "session_token", Regex: regexp.MustCompile(`(?i)(?:(?:\b(?:aws[_-]?)?session[_-]?token\b)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9/+=]{80,})|\bname\s*:\s*[\"']?AWS_SESSION_TOKEN[\"']?[ \t]*(?:#[^\r\n]*)?\r?\n(?:[ \t]*#[^\r\n]*\r?\n)*\s*value\s*:\s*[\"']?([A-Za-z0-9/+=]{80,})|\bvalue\s*:\s*[\"']?([A-Za-z0-9/+=]{80,})[\"']?[ \t]*(?:#[^\r\n]*)?\r?\n(?:[ \t]*#[^\r\n]*\r?\n)*\s*name\s*:\s*[\"']?AWS_SESSION_TOKEN|[\"']name[\"']\s*:\s*[\"']AWS_SESSION_TOKEN[\"']\s*,\s*[\"']value[\"']\s*:\s*[\"']([A-Za-z0-9/+=]{80,})|[\"']value[\"']\s*:\s*[\"']([A-Za-z0-9/+=]{80,})[\"']\s*,\s*[\"']name[\"']\s*:\s*[\"']AWS_SESSION_TOKEN[\"'])`), ValueGroups: []int{1, 2, 3, 4, 5}, TrailingSecretChars: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/+="},
 			},
 			PrimaryPart: "secret_access_key", MaxDistance: 256, StopAtBlankLine: true, CompositeVerifier: verifyAWSCredentials, VerificationSafety: VerificationSafetyReadOnly,
 		},
@@ -696,7 +700,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("tomorrowio-api-key", "Tomorrow.io API Key", "high", []string{"tomorrow.io", "tomorrowio"}, `(?i)\b(?:tomorrow\.io|tomorrowio).{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyTomorrowIO),
 		NewRegex("here-api-key", "HERE API Key", "high", []string{"hereapi", "here.com", "platform.here.com"}, `(?i)\b(?:hereapi|here\.com|platform\.here\.com).{0,80}\b([A-Za-z0-9_-]{43})\b`, 1, verifyHERE),
 		NewRegex("polygon-api-key", "Polygon.io API Key", "high", []string{"polygon.io", "POLYGON_API_KEY"}, `(?i)\b(?:polygon\.io|polygon_api_key).{0,40}['\"\s:=]+([A-Za-z0-9_-]{32})\b`, 1, verifyPolygon),
-		NewRegex("aws-session-token", "AWS Session Token", "critical", []string{"aws_session_token", "AWS_SESSION_TOKEN"}, `(?i)\baws[_-]?session[_-]?token\b\s*[:=]\s*['\"]?([A-Za-z0-9/+=]{80,1000})\b`, 1, nil),
+		NewRegexWithTrailingBoundary("aws-session-token", "AWS Session Token", "critical", []string{"aws_session_token", "AWS_SESSION_TOKEN"}, `(?i)\baws[_-]?session[_-]?token\b\s*[:=]\s*['\"]?([A-Za-z0-9/+=]{80,})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/+=", nil),
 		NewRegex("alibaba-access-key", "Alibaba Cloud Access Key", "critical", []string{"LTAI", "alibaba", "aliyun"}, `\b(LTAI[A-Za-z0-9]{20})\b`, 1, nil),
 		NewRegex("scaleway-secret-key", "Scaleway Secret Key", "critical", []string{"SCW_SECRET_KEY", "scaleway"}, `(?i)\b(?:scw[_-]?secret[_-]?key|scaleway.{0,20}(?:secret|token|key))\b\s*[:=]\s*['\"]?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`, 1, verifyScaleway),
 		NewRegex("github-oauth-client-secret", "GitHub OAuth Client Secret", "critical", []string{"GITHUB_CLIENT_SECRET", "github_oauth", "github"}, `(?i)\b(?:github[_-]?oauth|github|github_client_secret)\b[\s\S]{0,120}\bclient[_-]?secret\b\s*[:=]\s*['\"]?([a-f0-9]{40})\b`, 1, nil),
@@ -1744,6 +1748,7 @@ var variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-
 var sensitiveAssignmentPattern = regexp.MustCompile(`(?i)(?:^|[;\s])(?:password|passwd|pwd|secret|token|api[_-]?key|client[_-]?secret|credential|credentials)\s*=\s*("[^"]*"|'[^']*'|[^;\s]+)`)
 var memberReferencePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+(?:\s*\[[^\]\r\n]{1,200}\])?(?:\s*\([^;\r\n]{0,200}\))?`)
 var accessorReferencePattern = regexp.MustCompile(`(?i)^(?:os\.getenv|os\.environ|process\.env|env\.fetch|config(?:uration)?\.get|settings\.get|vault\.read|secrets?\.get)\s*(?:\.|\[|\()`)
+var namedResourceReferencePattern = regexp.MustCompile(`^[a-z]+(?:-[a-z]+)+$`)
 
 func looksLikeVariableReference(s string) bool {
 	t := strings.Trim(strings.TrimSpace(s), `'"`)
@@ -1849,6 +1854,25 @@ func looksLikeAssignedReference(content string, start int) bool {
 	}
 	rest := strings.TrimSpace(strings.TrimPrefix(expr, match))
 	return rest == ""
+}
+
+func looksLikeNamedResourceReference(secret string) bool {
+	if !namedResourceReferencePattern.MatchString(secret) {
+		return false
+	}
+	segments := strings.Split(secret, "-")
+	knownInfrastructureSegments := 0
+	for index, segment := range segments {
+		switch segment {
+		case "secret", "secrets", "password", "passwords", "credential", "credentials":
+			if index == len(segments)-1 {
+				return true
+			}
+		case "cassandra", "elasticsearch", "nats", "sysdig":
+			knownInfrastructureSegments++
+		}
+	}
+	return knownInfrastructureSegments >= 2
 }
 
 func knownReferenceRoot(root string) bool {

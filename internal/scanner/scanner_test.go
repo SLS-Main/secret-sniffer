@@ -48,7 +48,7 @@ func TestScannerFindsSecretInFile(t *testing.T) {
 
 func TestScannerCorrelatesAWSCredentialsWithinOneFile(t *testing.T) {
 	dir := t.TempDir()
-	secret := strings.Repeat("a", 40)
+	secret := strings.Repeat("a", 39) + "="
 	content := "AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\nAWS_SECRET_ACCESS_KEY=" + secret
 	if err := os.WriteFile(filepath.Join(dir, "credentials.env"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestScannerCorrelatesAWSCredentialsWithinOneFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, finding := range findings {
-		if finding.DetectorID == "aws-credentials" && finding.Secret == secret && finding.SecretParts["access_key_id"] == "AKIAABCDEFGHIJKLMNOP" {
+		if finding.DetectorID == "aws-credentials" && finding.Secret == secret && finding.SecretParts["access_key_id"] == "AKIAABCDEFGHIJKLMNOP" && finding.SecretParts["secret_access_key"] == secret {
 			return
 		}
 	}

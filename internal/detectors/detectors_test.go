@@ -1847,6 +1847,83 @@ func TestAWSCredentialsCorrelateInEitherOrderWithinRecordBoundaries(t *testing.T
 	}
 }
 
+func TestAWSCredentialsCorrelateCommonFormatsAndCredentialEndings(t *testing.T) {
+	accessKey := "AKIAABCDEFGHIJKLMNOP"
+	tests := []struct {
+		name   string
+		secret string
+		input  func(string) string
+	}{
+		{name: "env forward", secret: strings.Repeat("a", 40), input: func(secret string) string {
+			return "AWS_ACCESS_KEY_ID=" + accessKey + "\nAWS_SECRET_ACCESS_KEY=" + secret
+		}},
+		{name: "ini reverse slash", secret: strings.Repeat("b", 39) + "/", input: func(secret string) string {
+			return "aws_secret_access_key = " + secret + "\naws_access_key_id = " + accessKey
+		}},
+		{name: "yaml camel plus", secret: strings.Repeat("c", 39) + "+", input: func(secret string) string {
+			return `secretAccessKey: "` + secret + `"` + "\n" + `accessKeyId: "` + accessKey + `"`
+		}},
+		{name: "json equals", secret: strings.Repeat("d", 39) + "=", input: func(secret string) string {
+			return `{"AWS_ACCESS_KEY_ID":"` + accessKey + `","AWS_SECRET_ACCESS_KEY":"` + secret + `"}`
+		}},
+		{name: "kubernetes env entries", secret: strings.Repeat("e", 40), input: func(secret string) string {
+			return "- name: AWS_ACCESS_KEY_ID\n  value: " + accessKey + "\n- name: AWS_SECRET_ACCESS_KEY\n  value: " + secret
+		}},
+		{name: "kubernetes reversed mappings", secret: strings.Repeat("f", 40), input: func(secret string) string {
+			return "- value: " + secret + "\n  name: AWS_SECRET_ACCESS_KEY\n- value: " + accessKey + "\n  name: AWS_ACCESS_KEY_ID"
+		}},
+		{name: "kubernetes comments", secret: strings.Repeat("g", 40), input: func(secret string) string {
+			return "- name: AWS_ACCESS_KEY_ID # credential\n  value: " + accessKey + "\n- name: AWS_SECRET_ACCESS_KEY # credential\n  value: " + secret
+		}},
+		{name: "kubernetes comment lines", secret: strings.Repeat("i", 40), input: func(secret string) string {
+			return "- name: AWS_ACCESS_KEY_ID\n  # literal credential\n  value: " + accessKey + "\n- name: AWS_SECRET_ACCESS_KEY\n  # literal credential\n  value: " + secret
+		}},
+		{name: "kubernetes json", secret: strings.Repeat("h", 40), input: func(secret string) string {
+			return `[{"name":"AWS_ACCESS_KEY_ID","value":"` + accessKey + `"},{"value":"` + secret + `","name":"AWS_SECRET_ACCESS_KEY"}]`
+		}},
+	}
+	var detector Detector
+	for _, candidate := range DefaultRegistry() {
+		if candidate.Info().ID == "aws-credentials" {
+			detector = candidate
+			break
+		}
+	}
+	if detector == nil {
+		t.Fatal("AWS credentials detector missing")
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			found := detector.Detect([]byte(test.input(test.secret)))
+			if len(found) != 1 || found[0].Secret != test.secret || found[0].SecretParts["access_key_id"] != accessKey || found[0].SecretParts["secret_access_key"] != test.secret {
+				t.Fatalf("AWS candidates=%#v", found)
+			}
+		})
+	}
+}
+
+func TestAWSCredentialsRejectYAMLDocumentBoundary(t *testing.T) {
+	accessKey := "AKIAABCDEFGHIJKLMNOP"
+	secret := strings.Repeat("a", 40)
+	inputs := []string{
+		"AWS_ACCESS_KEY_ID=" + accessKey + "\n---\nAWS_SECRET_ACCESS_KEY=" + secret,
+		"AWS_SECRET_ACCESS_KEY=" + secret + "\n---\nAWS_ACCESS_KEY_ID=" + accessKey,
+		"AWS_SECRET_ACCESS_KEY=" + secret + "\n...\nAWS_ACCESS_KEY_ID=" + accessKey,
+		"AWS_SECRET_ACCESS_KEY=" + secret + "\n--- # production\nAWS_ACCESS_KEY_ID=" + accessKey,
+		"AWS_SECRET_ACCESS_KEY=" + secret + "\n... # end\nAWS_ACCESS_KEY_ID=" + accessKey,
+		"AWS_SECRET_ACCESS_KEY=" + secret + "\n---  # production\nAWS_ACCESS_KEY_ID=" + accessKey,
+		"AWS_SECRET_ACCESS_KEY=" + secret + "\n...\t# end\nAWS_ACCESS_KEY_ID=" + accessKey,
+		`{"AWS_ACCESS_KEY_ID":"` + accessKey + `"}` + "\n" + `{"AWS_SECRET_ACCESS_KEY":"` + secret + `"}`,
+	}
+	for _, input := range inputs {
+		for _, detector := range DefaultRegistry() {
+			if detector.Info().ID == "aws-credentials" && len(detector.Detect([]byte(input))) != 0 {
+				t.Fatalf("correlated AWS credentials across structured records: %q", input)
+			}
+		}
+	}
+}
+
 func TestAWSCredentialsRejectDistantAndCrossRecordFields(t *testing.T) {
 	accessKey := "AKIAABCDEFGHIJKLMNOP"
 	secret := strings.Repeat("a", 40)
@@ -1866,8 +1943,8 @@ func TestAWSCredentialsRejectDistantAndCrossRecordFields(t *testing.T) {
 func TestAWSCredentialsAttachAndVerifySessionToken(t *testing.T) {
 	accessKey := "ASIAABCDEFGHIJKLMNOP"
 	secret := strings.Repeat("a", 40)
-	sessionToken := strings.Repeat("b", 80)
-	input := "AWS_SECRET_ACCESS_KEY=" + secret + "\nAWS_SESSION_TOKEN=" + sessionToken + "\nAWS_ACCESS_KEY_ID=" + accessKey
+	sessionToken := strings.Repeat("b", 1199) + "="
+	input := "AWS_SESSION_TOKEN=" + sessionToken + "\nAWS_SECRET_ACCESS_KEY=" + secret + "\nAWS_ACCESS_KEY_ID=" + accessKey
 	var candidate Candidate
 	for _, detector := range DefaultRegistry() {
 		if detector.Info().ID == "aws-credentials" {
@@ -7024,6 +7101,36 @@ func TestGenericAssignedSecretRejectsMemberReferences(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGenericAssignedSecretRejectsNamedResourceReferences(t *testing.T) {
+	for _, input := range []string{
+		"secret: cassandra-secret",
+		"secret: elasticsearch-passwords",
+		"secret: nats-credentials-sysdig",
+	} {
+		t.Run(input, func(t *testing.T) {
+			for _, detector := range DefaultRegistry() {
+				for _, candidate := range detector.Detect([]byte(input)) {
+					if candidate.DetectorID == "generic-assigned-secret" {
+						t.Fatalf("resource reference %q was detected as secret %q", input, candidate.Secret)
+					}
+				}
+			}
+		})
+	}
+	for _, literal := range []string{"correct-horse-battery-staple", "v9K2pQ7m-X4rT8nW3", "prod-password-2026-abcdef", "customer-secret-phrase-2026", "correct-horse-secret-staple", "production-password-backup"} {
+		if !registryFinds("generic-assigned-secret", "secret: "+literal, literal) {
+			t.Fatalf("literal secret %q was filtered", literal)
+		}
+	}
+}
+
+func TestAWSSessionTokenAllowsOpaqueLengthAndBase64Ending(t *testing.T) {
+	token := strings.Repeat("A", 1199) + "/"
+	if !registryFinds("aws-session-token", `AWS_SESSION_TOKEN="`+token+`"`, token) {
+		t.Fatal("expected long slash-terminated AWS session token to be detected")
 	}
 }
 

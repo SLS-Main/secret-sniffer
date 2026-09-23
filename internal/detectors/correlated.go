@@ -6,10 +6,12 @@ import (
 )
 
 type CorrelatedField struct {
-	Name       string
-	Regex      *regexp.Regexp
-	ValueGroup int
-	Required   bool
+	Name                string
+	Regex               *regexp.Regexp
+	ValueGroup          int
+	ValueGroups         []int
+	TrailingSecretChars string
+	Required            bool
 }
 
 type CorrelatedDetector struct {
@@ -69,17 +71,33 @@ func (d CorrelatedDetector) detectContent(content string) []Candidate {
 		}
 		for _, match := range field.Regex.FindAllStringSubmatchIndex(content, -1) {
 			group := field.ValueGroup
+			if len(field.ValueGroups) > 0 {
+				group = -1
+				for _, candidateGroup := range field.ValueGroups {
+					if candidateGroup >= 0 && candidateGroup*2+1 < len(match) && match[candidateGroup*2] >= 0 {
+						group = candidateGroup
+						break
+					}
+				}
+				if group < 0 {
+					continue
+				}
+			}
 			if group < 0 {
 				group = 0
 			}
 			if group*2+1 >= len(match) || match[group*2] < 0 {
 				continue
 			}
+			valueEnd := match[group*2+1]
+			if valueEnd < len(content) && strings.ContainsRune(field.TrailingSecretChars, rune(content[valueEnd])) {
+				continue
+			}
 			occurrences[fieldIndex] = append(occurrences[fieldIndex], correlatedOccurrence{
 				matchStart: match[0],
 				matchEnd:   match[1],
 				valueStart: match[group*2],
-				valueEnd:   match[group*2+1],
+				valueEnd:   valueEnd,
 				value:      content[match[group*2]:match[group*2+1]],
 			})
 		}
@@ -180,7 +198,7 @@ func (d CorrelatedDetector) nearestOccurrence(content string, occurrences []corr
 		if d.MaxDistance > 0 && distance > d.MaxDistance {
 			continue
 		}
-		if d.StopAtBlankLine && hasContextBoundary(between) {
+		if d.StopAtBlankLine && hasCorrelationBoundary(between) {
 			continue
 		}
 		if bestIndex < 0 || distance < bestDistance {
@@ -188,4 +206,30 @@ func (d CorrelatedDetector) nearestOccurrence(content string, occurrences []corr
 		}
 	}
 	return bestIndex
+}
+
+func hasCorrelationBoundary(s string) bool {
+	if hasContextBoundary(s) {
+		return true
+	}
+	lines := strings.Split(s, "\n")
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if yamlDocumentMarker(trimmed, "---") || yamlDocumentMarker(trimmed, "...") {
+			return true
+		}
+	}
+	compact := strings.NewReplacer(" ", "", "\t", "", "\r", "").Replace(s)
+	if strings.Contains(compact, "}\n{") {
+		return true
+	}
+	return false
+}
+
+func yamlDocumentMarker(line, marker string) bool {
+	if !strings.HasPrefix(line, marker) {
+		return false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(line, marker))
+	return rest == "" || strings.HasPrefix(rest, "#")
 }
