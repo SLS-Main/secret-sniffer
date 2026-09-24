@@ -814,24 +814,49 @@ func (l lineIndex) location(pos int) (int, int) {
 
 func (s *Scanner) scanByteView(ctx context.Context, file, commit string, view []byte, lines lineIndex, seen map[string]struct{}) []detectors.Finding {
 	var findings []detectors.Finding
-	for _, d := range s.plan.selectDetectors(view) {
-		for _, c := range detectPlanned(d, view) {
-			line, col := lines.location(c.Start)
-			f := detectors.ToFindingAt(c, file, commit, line, col, false)
-			s.enrichFindingSource(&f)
-			if s.cfg.Verify {
-				f.Verification = s.verification.verifyWithPolicy(ctx, c, detectors.VerificationPolicy{AllowUnreviewed: s.cfg.AllowUnreviewedVerification, AllowUnsafe: s.cfg.AllowUnsafeVerification})
-				f.Verified = f.Verification.Status == detectors.VerificationVerified
-			}
-			key := f.Fingerprint
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			findings = append(findings, f)
+	for _, c := range s.detectCandidates(view) {
+		line, col := lines.location(c.Start)
+		f := detectors.ToFindingAt(c, file, commit, line, col, false)
+		s.enrichFindingSource(&f)
+		if s.cfg.Verify {
+			f.Verification = s.verification.verifyWithPolicy(ctx, c, detectors.VerificationPolicy{AllowUnreviewed: s.cfg.AllowUnreviewedVerification, AllowUnsafe: s.cfg.AllowUnsafeVerification})
+			f.Verified = f.Verification.Status == detectors.VerificationVerified
 		}
+		key := f.Fingerprint
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		findings = append(findings, f)
 	}
 	return findings
+}
+
+// Consolidate before verification and fingerprint deduplication, while offsets
+// still identify individual occurrences in this exact (possibly decoded) view.
+func (s *Scanner) detectCandidates(view []byte) []detectors.Candidate {
+	var candidates []detectors.Candidate
+	type occurrence struct {
+		start, end int
+		secret     string
+	}
+	specific := make(map[occurrence]bool)
+	for _, d := range s.plan.selectDetectors(view) {
+		for _, c := range detectPlanned(d, view) {
+			candidates = append(candidates, c)
+			if c.DetectorID != "generic-assigned-secret" && c.DetectorID != "jwt" && c.DetectorID != "basic-auth-url" {
+				specific[occurrence{c.Start, c.End, c.Secret}] = true
+			}
+		}
+	}
+	out := candidates[:0]
+	for _, c := range candidates {
+		if c.DetectorID == "generic-assigned-secret" && specific[occurrence{c.Start, c.End, c.Secret}] {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 func (s *Scanner) scanDecodedBase64(ctx context.Context, file, commit string, b []byte, lines lineIndex, seen map[string]struct{}) []detectors.Finding {
@@ -857,29 +882,27 @@ func (s *Scanner) scanDecodedBase64(ctx context.Context, file, commit string, b 
 			continue
 		}
 		decodedSeen[decodedKey] = struct{}{}
-		for _, d := range s.plan.selectDetectors(decoded) {
-			for _, c := range detectPlanned(d, decoded) {
-				// Report the source line/column of the encoded blob while preserving
-				// the decoded secret value for remediation.
-				c.Start = start
-				c.End = end
-				line, col := lines.location(c.Start)
-				f := detectors.ToFindingAt(c, file, commit, line, col, false)
-				s.enrichFindingSource(&f)
-				if f.Provenance != nil {
-					f.Provenance.DecoderChain = append(f.Provenance.DecoderChain, "base64")
-				}
-				if s.cfg.Verify {
-					f.Verification = s.verification.verifyWithPolicy(ctx, c, detectors.VerificationPolicy{AllowUnreviewed: s.cfg.AllowUnreviewedVerification, AllowUnsafe: s.cfg.AllowUnsafeVerification})
-					f.Verified = f.Verification.Status == detectors.VerificationVerified
-				}
-				key := f.Fingerprint
-				if _, ok := seen[key]; ok {
-					continue
-				}
-				seen[key] = struct{}{}
-				findings = append(findings, f)
+		for _, c := range s.detectCandidates(decoded) {
+			// Report the source line/column of the encoded blob while preserving
+			// the decoded secret value for remediation.
+			c.Start = start
+			c.End = end
+			line, col := lines.location(c.Start)
+			f := detectors.ToFindingAt(c, file, commit, line, col, false)
+			s.enrichFindingSource(&f)
+			if f.Provenance != nil {
+				f.Provenance.DecoderChain = append(f.Provenance.DecoderChain, "base64")
 			}
+			if s.cfg.Verify {
+				f.Verification = s.verification.verifyWithPolicy(ctx, c, detectors.VerificationPolicy{AllowUnreviewed: s.cfg.AllowUnreviewedVerification, AllowUnsafe: s.cfg.AllowUnsafeVerification})
+				f.Verified = f.Verification.Status == detectors.VerificationVerified
+			}
+			key := f.Fingerprint
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			findings = append(findings, f)
 		}
 	}
 	return findings

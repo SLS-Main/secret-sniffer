@@ -271,6 +271,9 @@ func (d RegexDetector) detectContent(content string) []Candidate {
 		if end < len(content) && strings.ContainsRune(d.TrailingSecretChars, rune(content[end])) {
 			continue
 		}
+		if d.BroadContext && end < len(content) && strings.ContainsRune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_~-/+=", rune(content[end])) {
+			continue
+		}
 		secret := content[start:end]
 		var secretParts map[string]string
 		if len(d.PartGroups) > 0 {
@@ -287,7 +290,7 @@ func (d RegexDetector) detectContent(content string) []Candidate {
 				continue
 			}
 		}
-		if d.BroadContext && hasContextBoundary(content[m[0]:start]) {
+		if d.BroadContext && hasProviderContextBoundary(content, m[0], start) {
 			continue
 		}
 		if d.ID == "openai-key" && openAIAdminKeyPattern.MatchString(secret) {
@@ -374,7 +377,7 @@ func DefaultRegistry() []Detector {
 		NewReadOnlyRegex("openai-key", "OpenAI API Key", "critical", []string{"sk-", "OPENAI"}, `\b(sk-(?:proj-)?[A-Za-z0-9_-]{32,200})\b`, 1, verifyOpenAI),
 		NewReadOnlyRegex("anthropic-key", "Anthropic API Key", "critical", []string{"sk-ant-"}, `\b(sk-ant-[A-Za-z0-9_-]{40,200})\b`, 1, verifyAnthropic),
 		NewRegex("google-api-key", "Google API Key", "high", []string{"AIza"}, `\b(AIza[0-9A-Za-z_-]{35})\b`, 1, verifyGoogleAPIKey),
-		NewRegex("google-oauth-client-secret", "Google OAuth Client Secret", "high", []string{"client_secret", "googleusercontent"}, `(?i)\b(client_secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{24})`, 2, nil),
+		RegexDetector{ID: "google-oauth-client-secret", Name: "Google OAuth Client Secret", Severity: "high", Keywords: []string{"google", "GOCSPX-"}, Regex: regexp.MustCompile(`(?:\b(GOCSPX-[A-Za-z0-9_-]{28})|(?i:\b(?:google|[A-Za-z0-9.-]+\.googleusercontent\.com)\b[\s\S]{0,240}\bclient[_-]?secret\b["']?[ \t]*[:=][ \t]*['\"]?)([A-Za-z0-9_-]{24}))`), SecretGroups: []int{1, 2}, BroadContext: true, TrailingSecretChars: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"},
 		NewRegex("airtable-oauth-client-secret", "Airtable OAuth Client Secret", "critical", []string{"airtable", "airtable.com/oauth"}, `(?i)\b(?:airtable|airtable\.com/oauth)\b[\s\S]{0,240}\b(?:client[_-]?secret|oauth[_-]?secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._~/-]{32,128})\b`, 1, nil),
 		NewRegex("anypoint-oauth-client-secret", "Anypoint OAuth Client Secret", "critical", []string{"anypoint", "mulesoft"}, `(?i)\b(?:anypoint|mulesoft)\b[\s\S]{0,240}\b(?:client[_-]?secret|oauth[_-]?secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._~/-]{32,128})\b`, 1, nil),
 		NewRegex("asana-oauth-client-secret", "Asana OAuth Client Secret", "critical", []string{"asana", "app.asana.com/-/oauth"}, `(?i)\b(?:asana|app\.asana\.com/-/oauth)\b[\s\S]{0,240}\b(?:client[_-]?secret|oauth[_-]?secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._~/-]{32,128})\b`, 1, nil),
@@ -1498,7 +1501,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("private-key", "Private Key", "critical", []string{"BEGIN", "PRIVATE KEY"}, `-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`, 0, nil),
 		NewRegex("ssh-private-key", "SSH Private Key", "critical", []string{"OPENSSH PRIVATE KEY", "RSA PRIVATE KEY"}, `-----BEGIN (?:OPENSSH|RSA|DSA|EC) PRIVATE KEY-----[\s\S]+?-----END (?:OPENSSH|RSA|DSA|EC) PRIVATE KEY-----`, 0, nil),
 		NewRegex("basic-auth-url", "Basic Auth URL", "high", []string{"://"}, `\b[a-z][a-z0-9+.-]*://[^\s:/?#]+:([^\s@/?#]{8,})@[^\s]+`, 1, nil),
-		NewRegex("generic-assigned-secret", "Assigned Secret", "medium", []string{"password", "passwd", "secret", "token", "api_key", "apikey"}, `(?i)\b(password|passwd|secret|token|api[_-]?key|client[_-]?secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9_./+=-]{16,})`, 2, nil),
+		AssignedSecretDetector{},
 	}
 }
 
