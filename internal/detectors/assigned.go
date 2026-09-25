@@ -10,7 +10,7 @@ import (
 type AssignedSecretDetector struct{}
 
 func (AssignedSecretDetector) Info() Info {
-	return Info{ID: "generic-assigned-secret", Name: "Assigned Secret", Severity: "medium", Keywords: []string{"password", "passwd", "secret", "token", "api_key", "api-key", "apikey"}}
+	return Info{ID: "generic-assigned-secret", Name: "Assigned Secret", Severity: "medium", Keywords: []string{"password", "passwd", "secret", "token", "api_key", "api-key", "apikey", `\u`, `\x`}}
 }
 
 func (d AssignedSecretDetector) Detect(b []byte) []Candidate { return d.DetectPrefiltered(b) }
@@ -18,6 +18,9 @@ func (d AssignedSecretDetector) Detect(b []byte) []Candidate { return d.DetectPr
 var assignedKey = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_.-])["']?(password|passwd|secret|token|api[_-]?key|client[_-]?secret)["']?[ \t]*[:=][ \t]*`)
 
 func (d AssignedSecretDetector) DetectPrefiltered(b []byte) []Candidate {
+	if candidates, ok := d.detectStructuredAssignments(b); ok {
+		return candidates
+	}
 	content := string(b)
 	var out []Candidate
 	consumed := 0

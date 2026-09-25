@@ -18,6 +18,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/bodgit/sevenzip v1.5.2
 	github.com/ulikunitz/xz v0.5.16
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

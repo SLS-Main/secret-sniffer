@@ -1,10 +1,19 @@
 # Detection accuracy
 
 Generic Assigned Secret detection uses scalar extraction after a sensitive field
-name. It accepts quoted JSON keys, env/INI/YAML assignments, and quoted source
-literals. It preserves punctuation and spaces inside quoted values and reports
-the value's byte location. Assignment whitespace cannot consume a newline and
-mistake a YAML child key for its parent's value.
+name. Valid JSON and YAML documents use structured parsing, with text extraction
+as a fallback for env/INI assignments and source fragments. JSON escapes,
+including Unicode surrogate pairs and escaped field names, are decoded. YAML
+literal/folded blocks, indentation indicators, chomping, multiline quotes, and
+single-quote escaping use YAML scalar semantics. Numeric password scalars retain
+their original spelling rather than passing through floating-point conversion.
+
+Findings contain the decoded credential value and the original source location.
+Quoted spans exclude their delimiters; block spans begin at the `|` or `>`
+indicator. Unicode parser columns are translated into byte offsets. Scalar
+aliases resolve to the literal at its anchor; container aliases are not expanded.
+Assignment whitespace in the fallback cannot consume a newline and mistake a
+YAML child key for its parent's value.
 
 ## Reducing noise
 
@@ -13,7 +22,7 @@ mistake a YAML child key for its parent's value.
   Google Secret Manager references are excluded from generic detection.
 - Explicit instructional placeholders are excluded using a small exact-match
   list. Words such as `secret`, `password`, or `test` are not blanket exclusions.
-- Versioned resource names are excluded under explicit YAML reference containers
+- Versioned resource names are excluded under explicit JSON/YAML reference containers
   (`secretRef`, `secretKeyRef`, `remoteRef`, `externalSecretRef`). Without that
   context, ambiguous slugs remain possible passwords. Existing narrowly targeted
   resource-name heuristics also remain active.
@@ -33,9 +42,11 @@ No blanket entropy threshold is used: low-entropy passwords and readable
 passphrases are valid findings. Verification status remains separate from these
 local detection decisions.
 
-These are conservative text-scanning rules, not a full language parser. Complex
-multiline scalars, language-specific escaping, and arbitrary expression syntax
-remain areas for additional format-specific extraction work.
+Source-code fragments still use conservative text-scanning rules rather than a
+full language parser. Language-specific escaping and arbitrary expression syntax
+remain areas for additional format-specific extraction work. Provider-specific
+regex rules still inspect source bytes; escaped or folded provider tokens may
+therefore be reported as generic credentials rather than provider findings.
 
 ## Regression corpus
 
