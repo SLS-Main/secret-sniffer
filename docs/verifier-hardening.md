@@ -24,25 +24,25 @@ subtype, rate limiting, and provider failure.
 7. Update the internal audit assessment, safety category, regression totals, and
    documentation. Then run repository validation.
 
-Batches are grouped by engineering requirements, not an arbitrary number of
-providers. Region/subtype work is usually more involved than repairing a known
+Batches from batch 14 onward cover at least ten verifiers, grouped by engineering
+requirements. Region/subtype work is usually more involved than repairing a known
 endpoint and its response classifier. Mocked tests exercise the contracts without
 using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 14:
+After remediation batch 15:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 358 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 153 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 368 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 143 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 188
-`read_only`, 71 `auth_only`, 99 `unsafe`, and 209 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 197
+`read_only`, 72 `auth_only`, 99 `unsafe`, and 199 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -279,3 +279,48 @@ Evidence checked 2026-09-25:
 - [ImageKit official list request](https://github.com/imagekit-developer/imagekit-python/blob/master/src/imagekitio/resources/assets.py), [array response](https://github.com/imagekit-developer/imagekit-python/blob/master/src/imagekitio/types/asset_list_response.py), and [file model](https://github.com/imagekit-developer/imagekit-python/blob/master/src/imagekitio/types/file.py).
 - [Lob authentication and address list](https://docs.lob.com/#tag/Addresses/operation/addresses_list).
 - [Qase project list](https://developers.qase.io/reference/get-projects).
+
+## Remediation batch 15: ten account, usage and token-context verifiers
+
+Nine probes are now `read_only`; Miro token introspection is `auth_only`.
+Every probe requires HTTP 200 and provider-specific evidence, suppresses its
+response body, and preserves ambiguous rejection as `unknown`.
+
+| Provider | Request and authentication | Required evidence |
+| --- | --- | --- |
+| Restpack HTML to PDF | `GET /api/html2pdf/usage`, `X-Access-Token` | String from/to range, nonnegative integer limit/total, and a non-null days array with string day and integer count. No rendering operation. |
+| Restpack Screenshot | `GET /api/screenshot/usage`, `X-Access-Token` | Same usage evidence; a lone usage, limit or remaining field is insufficient. |
+| PDFShift | `GET /v3/credits/usage`, current `X-API-Key` authentication | Explicit success=true plus integer base/remaining/total/used credits; zero accepted. Replaces legacy Basic auth. |
+| ConvertKit | `GET /v3/account?api_secret=…`, escaped query authentication | Documented string name and primary_email_address, rather than an undocumented id requirement. V3 secrets retain the V3 endpoint. |
+| Lemlist | `GET /api/team`, Basic auth with empty username | String _id and name; member data and webhook URLs suppressed. |
+| Squarespace | `GET /1.0/authorization/website`, Bearer and required User-Agent | String id, siteId and title; subscription and key-family ambiguity preserved. |
+| Help Scout | `GET /v1/collections`, Basic auth with key username and dummy password | Non-null collections.items array with string id/siteId/name. Payment errors no longer mean invalid credentials. |
+| Aiven | `GET /v1/project`, `Authorization: aivenv1 …` | Non-null projects array with string project_name; token-family and scope rejection stay unknown. |
+| SparkPost | `GET /api/v1/account`, raw Authorization key | Nested results customer_id, company_name and status; permission/scope errors no longer count as successful authentication. |
+| Miro | `GET /v1/oauth-token`, Bearer | oAuthToken type, user type/id and non-null string scopes list; token context suppressed. |
+
+SparkPost uses fixed US/EU endpoints with authorization-only fallback. Malformed
+success, redirects, throttling, outages, transport/read errors and cancellation
+stop further attempts. Help Scout reads the first page (up to 50 collections);
+Aiven uses the documented project-list request. Neither follows pagination or
+response URLs, and both use the shared bounded response reader. Legitimate empty
+collections and scope lists are accepted. No additional API calls are made to
+inspect account members, webhooks, projects, or documents.
+
+Tests cover all ten exact requests under ordinary verification policy, required
+fields and types, valid empty/zero values, numeric quota boundaries, malformed or
+contradictory success, payment/scope errors, non-200 success-looking bodies,
+response suppression, transport/read errors, SparkPost fallback and cancellation.
+
+Official evidence checked 2026-09-25:
+
+- [Restpack HTML to PDF usage and authentication](https://restpack.io/html2pdf/docs#route_usage_GET).
+- [Restpack Screenshot usage and authentication](https://restpack.io/screenshot/docs#route_usage_GET).
+- [PDFShift credits usage](https://docs.pdfshift.io/api-reference/credits/credits-usage.md) and [OpenAPI authentication/schema](https://api.pdfshift.io/openapi.json).
+- [Kit V3 current account](https://developers.kit.com/api-reference/v3/account.md).
+- [Lemlist team request, authentication and schema](https://developer.lemlist.com/api-reference/endpoints/team/get-team.md).
+- [Squarespace website authorization and profile schema](https://developers.squarespace.com/commerce-apis/websites).
+- [Help Scout Docs authentication and page limits](https://developer.helpscout.com/docs-api/) and [collections envelope](https://developer.helpscout.com/docs-api/collections/list/).
+- [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
+- [SparkPost account schema](https://developers.sparkpost.com/api/account/).
+- [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).

@@ -719,7 +719,11 @@ func verifyBetterStack(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAiven(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.aiven.io/v1/project", "Authorization", "aivenv1 ")
+	return verifyIdentityGET(ctx, secret, "https://api.aiven.io/v1/project", "Authorization", "aivenv1 ", func(p identityPayload) bool {
+		return validIdentityCollection(p, "projects", func(project identityPayload) bool {
+			return !identityHasErrors(project) && identityStrings(project, "project_name")
+		})
+	})
 }
 
 func verifySourcegraphCody(ctx context.Context, secret string) VerificationResult {
@@ -1000,11 +1004,11 @@ func verifyPipedrive(ctx context.Context, secret string) VerificationResult {
 func verifyHelpScout(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://docsapi.helpscout.net/v1/collections", nil)
 	req.SetBasicAuth(secret, "X")
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusPaymentRequired {
-			return invalidCredentialResult(), true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		collections := identityObject(p, "collections")
+		return !identityHasErrors(collections) && validIdentityCollection(collections, "items", func(collection identityPayload) bool {
+			return !identityHasErrors(collection) && identityStrings(collection, "id", "siteId", "name")
+		})
 	})
 }
 
@@ -1539,7 +1543,7 @@ func verifyMeraki(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyMiro(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.miro.com/v1/oauth-token")
+	return verifyIdentityGET(ctx, secret, "https://api.miro.com/v1/oauth-token", "Authorization", "Bearer ", validMiroTokenContext)
 }
 
 func verifyRevAI(ctx context.Context, secret string) VerificationResult {
@@ -1817,15 +1821,7 @@ func verifyAlienVaultOTX(ctx context.Context, secret string) VerificationResult 
 func verifyLemlist(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.lemlist.com/api/team", nil)
 	req.SetBasicAuth("", secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusNotFound && containsAnyFold(string(body), "no user found") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode == http.StatusNotFound {
-			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-		}
-		return VerificationResult{}, false
-	})
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool { return identityStrings(p, "_id", "name") })
 }
 
 func verifyZeroTier(ctx context.Context, secret string) VerificationResult {
@@ -2580,9 +2576,9 @@ func verifyGumroad(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPDFShift(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pdfshift.io/v3/credits/usage", nil)
-	req.SetBasicAuth("api", secret)
-	return verifyHTTPRequest(ctx, req)
+	return verifyIdentityGET(ctx, secret, "https://api.pdfshift.io/v3/credits/usage", "X-API-Key", "", func(p identityPayload) bool {
+		return string(p["success"]) == "true" && identityNonnegativeIntegers(identityObject(p, "credits"), "base", "remaining", "total", "used")
+	})
 }
 
 func verifyTurso(ctx context.Context, secret string) VerificationResult {
@@ -3201,14 +3197,10 @@ func verifyPandaDoc(ctx context.Context, secret string) VerificationResult {
 
 func verifySparkPost(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api.sparkpost.com/api/v1/account", "https://api.eu.sparkpost.com/api/v1/account"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		req.Header.Set("Authorization", secret)
-		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-			if statusCode == http.StatusForbidden && containsAnyFold(string(body), "permission", "scope") {
-				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key with insufficient permission"}, true
-			}
-			return VerificationResult{}, false
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "", func(p identityPayload) bool {
+			account := identityObject(p, "results")
+			return !identityHasErrors(account) && identityID(account["customer_id"]) && identityStrings(account, "company_name", "status")
 		})
 	})
 }
@@ -4210,7 +4202,7 @@ func verifyBitBar(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyRestpack(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://restpack.io/api/html2pdf/usage", "X-Access-Token", "")
+	return verifyIdentityGET(ctx, secret, "https://restpack.io/api/html2pdf/usage", "X-Access-Token", "", validRestpackUsage)
 }
 
 func verifyTMetric(ctx context.Context, secret string) VerificationResult {
@@ -4916,22 +4908,7 @@ func verifyDiffbot(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyRestpackScreenshot(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://restpack.io/api/screenshot/usage", nil)
-	req.Header.Set("X-Access-Token", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		if containsAnyFold(string(body), "invalidaccesstoken", "access token is invalid") {
-			return unknownVerificationResult("authorization", "token validity and subscription status could not be distinguished"), true
-		}
-		if statusCode >= 200 && statusCode < 300 && jsonHasAnyField(body, "usage", "limit", "remaining") {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-	})
-	result.Response = ""
-	return result
+	return verifyIdentityGET(ctx, secret, "https://restpack.io/api/screenshot/usage", "X-Access-Token", "", validRestpackUsage)
 }
 
 func verifyBrowshot(ctx context.Context, secret string) VerificationResult {
@@ -6191,9 +6168,8 @@ func verifySlackWebhook(ctx context.Context, secret string) VerificationResult {
 
 func verifyConvertKit(ctx context.Context, secret string) VerificationResult {
 	endpoint := "https://api.convertkit.com/v3/account?api_secret=" + url.QueryEscape(secret)
-	result := verifyQueryAPI(ctx, endpoint, []string{"id"}, "authorization failed", "api key not valid")
-	result.Response = ""
-	return result
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool { return identityStrings(p, "name", "primary_email_address") })
 }
 
 func verifyScrutinizer(ctx context.Context, secret string) VerificationResult {
@@ -7105,9 +7081,7 @@ func verifySquarespace(ctx context.Context, secret string) VerificationResult {
 	req.Header.Set("Authorization", "Bearer "+secret)
 	req.Header.Set("User-Agent", "secret-sniffer credential verifier")
 	req.Header.Set("Content-Type", "application/json")
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id", "siteId"}, "authorization_error", "not authorized to do that"))
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool { return identityStrings(p, "id", "siteId", "title") })
 }
 
 func verifyAppFollow(ctx context.Context, secret string) VerificationResult {
