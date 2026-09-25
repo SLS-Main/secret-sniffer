@@ -678,7 +678,38 @@ func verifyVercel(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyRunpod(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.runpod.io/v2/pods")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://rest.runpod.io/v1/pods", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusOK && validRunpodPods(body) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(statusCode, body)
+	})
+	result.Response = ""
+	return result
+}
+
+func validRunpodPods(body []byte) bool {
+	var pods []struct {
+		ID            string `json:"id"`
+		DesiredStatus string `json:"desiredStatus"`
+	}
+	if json.Unmarshal(body, &pods) != nil || pods == nil {
+		return false
+	}
+	for _, pod := range pods {
+		if strings.TrimSpace(pod.ID) == "" {
+			return false
+		}
+		switch pod.DesiredStatus {
+		case "RUNNING", "EXITED", "TERMINATED":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func verifyBetterStack(ctx context.Context, secret string) VerificationResult {
@@ -2909,22 +2940,53 @@ func verifyAI21(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyNovita(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.novita.ai/openai/v1/models", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.novita.ai/openapi/v1/billing/balance/detail", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode != http.StatusForbidden {
-			return VerificationResult{}, false
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusOK && validNovitaBalance(body) {
+			return VerificationResult{Status: VerificationVerified}, true
 		}
-		response := string(body)
-		switch {
-		case containsAnyFold(response, "INVALID_API_KEY"):
-			return invalidCredentialResult(), true
-		case containsAnyFold(response, "NOT_ENOUGH_BALANCE", "ACCESS_DENY"):
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a restricted or exhausted key"}, true
-		default:
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
+		// Inference error strings are not a documented billing rejection
+		// contract. Permission, balance and authentication ambiguity stay unknown.
+		return verifyJSONReadClassification(statusCode, body)
 	})
+	result.Response = ""
+	return result
+}
+
+func validNovitaBalance(body []byte) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil || fields == nil {
+		return false
+	}
+	if _, ok := fields["error"]; ok {
+		return false
+	}
+	if _, ok := fields["errors"]; ok {
+		return false
+	}
+	for _, field := range []string{"availableBalance", "cashBalance", "creditLimit", "pendingCharges", "outstandingInvoices"} {
+		raw, exists := fields[field]
+		if !exists && field != "availableBalance" && field != "cashBalance" {
+			continue
+		}
+		var amount string
+		if json.Unmarshal(raw, &amount) != nil {
+			return false
+		}
+		amount = strings.TrimPrefix(amount, "-")
+		if amount == "" {
+			return false
+		}
+		for _, digit := range amount {
+			if digit < '0' || digit > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func verifyZilliz(ctx context.Context, secret string) VerificationResult {

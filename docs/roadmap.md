@@ -29,6 +29,7 @@ Implemented:
 - Raw secrets in output by default for remediation workflows.
 - In-memory archive scanning for `zip`, `tar`, `tar.gz`, `tgz`, and `gz` with recursion and decompression limits.
 - Safety assessments for every built-in provider verifier, with unreviewed and unsafe hooks gated behind separate opt-ins.
+- Structured JSON/YAML credential decoding and provider detection with source provenance and generic-finding consolidation; see [detection accuracy](detection-accuracy.md).
 
 Partially implemented:
 
@@ -40,7 +41,7 @@ Partially implemented:
 
 ## Near-Term Priorities
 
-1. Harden the remaining audited provider verification contracts.
+1. Harden the remaining audited provider verification contracts. See [verifier hardening](verifier-hardening.md) for the batch workflow, current backlog, and next provider groups.
 2. Improve GitHub scanning resilience.
 3. Improve git history performance.
 4. Add container and package-artifact expansion.
