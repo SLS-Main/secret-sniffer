@@ -371,7 +371,8 @@ func TestZillizVerifierUsesApplicationCode(t *testing.T) {
 		status VerificationStatus
 	}{
 		{body: `{"code":0,"data":[]}`, status: VerificationVerified},
-		{body: `{"code":80001}`, status: VerificationUnverified},
+		{body: `{"code":80001}`, status: VerificationUnknown},
+		{body: `{"data":[]}`, status: VerificationUnknown},
 		{body: `not-json`, status: VerificationUnknown},
 	} {
 		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -2288,8 +2289,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 225,
-		VerificationSafetyReadOnly:   172,
+		VerificationSafetyUnreviewed: 219,
+		VerificationSafetyReadOnly:   178,
 		VerificationSafetyAuthOnly:   71,
 		VerificationSafetyUnsafe:     99,
 	}
@@ -2302,7 +2303,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 342 || report.RequiresHardening != 169 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 348 || report.RequiresHardening != 163 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

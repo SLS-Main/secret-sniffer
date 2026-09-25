@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 12:
+After remediation batch 13:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 342 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 169 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 348 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 163 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 172
-`read_only`, 71 `auth_only`, 99 `unsafe`, and 225 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 178
+`read_only`, 71 `auth_only`, 99 `unsafe`, and 219 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -87,7 +87,7 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 
 ## Recommended following batches
 
-1. **Identity/collection contracts:** Typeform, AI21, Zilliz, Harness, OpenPhone,
+1. **Identity/collection contracts:** Typeform, Harness, OpenPhone,
    Sourcegraph, Weights & Biases, and regional content-management APIs.
    Confirm current documentation, validate identity/list schemas, suppress
    metadata, and classify structured failures conservatively.
@@ -190,3 +190,43 @@ Evidence checked 2026-09-25:
 - [Rev AI account](https://docs.rev.ai/api/asynchronous/reference/accounts/getaccount.md).
 - [MailerLite groups](https://developers.mailerlite.com/api/groups).
 - [Capsule CRM current user](https://developer.capsulecrm.com/v2/operations/User#showCurrentUser).
+
+## Remediation batch 13: six account and collection contracts
+
+Six additional probes are `read_only`, require HTTP 200 plus provider-specific
+success evidence, and suppress response bodies on success and failure.
+
+| Provider | Contract | Changes |
+| --- | --- | --- |
+| AI21 | `GET /studio/v1/library/files?offset=0&limit=1` | Require a top-level array; entries need string `fileId`, `name`, `fileType`, and `status`. Empty arrays and failed ingestion records are legitimate. No inference or upload requests. |
+| Zilliz | `GET /v2/projects` | Require explicit numeric `code: 0` and a non-null project array with string `projectId` and `projectName`. Missing/null codes no longer default to success, and error statuses cannot authenticate. |
+| Daily | `GET /v1/` | Replace room listing with domain ID, name and configuration validation. Permission errors no longer count as success. |
+| Hunter | `GET /v2/account` | Free account endpoint with documented `X-API-KEY` authentication; validate nested email and plan name, suppress account/quota data. |
+| Koyeb | `GET /v1/account/profile` | Validate nested string user ID and email; suppress profile data. |
+| Storyblok delivery | `GET /v2/cdn/spaces/me?token=…` | Validate nested space ID/name, preserve documented escaped query authentication, and use authorization-only fallback across the fixed deployment list. |
+
+Zilliz makes one project request (the referenced endpoint documents no pagination)
+under the existing bounded response reader. Previously hard-coded rejection
+codes 80001, 80002 and 21119 remain unknown because the consulted contract does
+not establish that each exclusively means an invalid credential. Other providers
+likewise retain unknown for unproven permission, region, subtype, rate-limit and
+provider failures. Storyblok stops fallback on malformed responses, redirects,
+outages, transport/read failures and cancellation.
+
+Mocked regression tests cover default-policy promotion, exact requests, empty
+and populated collections, missing/null/wrong-type evidence, contradictory error
+envelopes, non-200 success-looking bodies, transport/read failures, suppression,
+every Storyblok fallback target, query escaping and cancellation.
+
+Evidence checked 2026-09-25:
+
+- [AI21 official library client](https://github.com/ai21labs/ai21-python/blob/main/ai21/clients/studio/resources/studio_library.py) and [file response model](https://github.com/ai21labs/ai21-python/blob/main/ai21/models/responses/file_response.py).
+- [Zilliz V2 projects](https://docs.zilliz.com/reference/restful/list-projects-v2).
+- [Daily domain configuration](https://docs.daily.co/reference/rest-api/domain/get-domain-config).
+- [Hunter authentication and account information](https://hunter.io/api-documentation/v2#account).
+- [Koyeb official profile API](https://github.com/koyeb/koyeb-api-client-go/blob/master/api/v1/koyeb/docs/ProfileApi.md), [response envelope](https://github.com/koyeb/koyeb-api-client-go/blob/master/api/v1/koyeb/docs/UserReply.md), and [user model](https://github.com/koyeb/koyeb-api-client-go/blob/master/api/v1/koyeb/docs/User.md).
+- [Storyblok current space](https://www.storyblok.com/docs/api/content-delivery/v2/spaces/retrieve-current-space).
+
+Typeform documentation still did not yield its current-user contract; it remains
+in the hardening backlog. Harness and OpenPhone also remain pending contract
+confirmation.

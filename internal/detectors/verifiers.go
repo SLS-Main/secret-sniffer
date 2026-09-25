@@ -2770,10 +2770,13 @@ func verifyStoryblokPersonal(ctx context.Context, secret string) VerificationRes
 
 func verifyStoryblokAccess(ctx context.Context, secret string) VerificationResult {
 	hosts := []string{"api.storyblok.com", "api-us.storyblok.com", "api-ca.storyblok.com", "api-ap.storyblok.com", "app.storyblokchina.cn"}
-	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
+	return verifyIdentityEndpoints(ctx, hosts, func(host string) VerificationResult {
 		endpoint := "https://" + host + "/v2/cdn/spaces/me?token=" + url.QueryEscape(secret)
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		return verifyHTTPRequest(ctx, req)
+		return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+			space := identityObject(p, "space")
+			return identityID(space["id"]) && identityStrings(space, "name")
+		})
 	})
 }
 
@@ -2914,7 +2917,19 @@ func verifyPerplexity(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAI21(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.ai21.com/studio/v1/library/files?offset=0&limit=1")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ai21.com/studio/v1/library/files?offset=0&limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(status int, body []byte) (VerificationResult, bool) {
+		if status == http.StatusOK && validIdentityCollection(identityPayload{"files": body}, "files", func(file identityPayload) bool {
+			return identityStrings(file, "fileId", "name", "fileType", "status")
+		}) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(status, body)
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyNovita(ctx context.Context, secret string) VerificationResult {
@@ -2970,27 +2985,11 @@ func validNovitaBalance(body []byte) bool {
 func verifyZilliz(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.cloud.zilliz.com/v2/projects", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		var response struct {
-			Code int `json:"code"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			if statusCode >= 200 && statusCode < 300 {
-				return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-			}
-			return VerificationResult{}, false
-		}
-		switch response.Code {
-		case 0:
-			return VerificationResult{Status: VerificationVerified}, true
-		case 80001, 80002, 21119:
-			return invalidCredentialResult(), true
-		default:
-			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-		}
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		var code *int
+		return json.Unmarshal(p["code"], &code) == nil && code != nil && *code == 0 && validIdentityCollection(p, "data", func(project identityPayload) bool {
+			return identityStrings(project, "projectId", "projectName")
+		})
 	})
 }
 
@@ -3065,16 +3064,10 @@ func verifyPaperform(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyDaily(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.daily.co/v1/rooms?limit=1", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.daily.co/v1/", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "forbidden-error") {
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key with insufficient permission"}, true
-		}
-		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "authentication-error") {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		return identityStrings(p, "domain_id", "domain_name") && identityObject(p, "config") != nil
 	})
 }
 
@@ -3258,7 +3251,9 @@ func verifyMailerLite(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyKoyeb(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://app.koyeb.com/v1/account/profile")
+	return verifyIdentityGET(ctx, secret, "https://app.koyeb.com/v1/account/profile", "Authorization", "Bearer ", func(p identityPayload) bool {
+		return identityStrings(identityObject(p, "user"), "id", "email")
+	})
 }
 
 func verifyRebrandly(ctx context.Context, secret string) VerificationResult {
@@ -3800,7 +3795,9 @@ func verifySemaphore(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyHunter(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.hunter.io/v2/account", "X-API-KEY", "")
+	return verifyIdentityGET(ctx, secret, "https://api.hunter.io/v2/account", "X-API-KEY", "", func(p identityPayload) bool {
+		return identityStrings(identityObject(p, "data"), "email", "plan_name")
+	})
 }
 
 func verifyRocketReach(ctx context.Context, secret string) VerificationResult {
