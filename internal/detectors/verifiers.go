@@ -1143,21 +1143,11 @@ func verifyDeepgram(ctx context.Context, secret string) VerificationResult {
 
 func verifyContentful(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api.contentful.com/spaces?limit=1", "https://api.eu.contentful.com/spaces?limit=1"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.Header.Set("Authorization", "Bearer "+secret)
 		req.Header.Set("Content-Type", "application/vnd.contentful.management.v1+json")
-		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-			response := string(body)
-			switch {
-			case statusCode == http.StatusForbidden && containsAnyFold(response, "AccessDenied"):
-				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
-			case statusCode == http.StatusUnauthorized && !containsAnyFold(response, "AccessTokenInvalid"):
-				return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-			default:
-				return VerificationResult{}, false
-			}
-		})
+		return verifyIdentityRequest(ctx, req, validContentfulSpaces)
 	})
 }
 
@@ -1329,8 +1319,11 @@ func verifyClockify(ctx context.Context, secret string) VerificationResult {
 
 func verifySmartsheet(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api.smartsheet.com/2.0/users/me", "https://api.smartsheet.eu/2.0/users/me", "https://api.smartsheet.au/2.0/users/me"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyBearerGET(ctx, secret, endpoint)
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", func(p identityPayload) bool {
+			_, hasError := p["errorCode"]
+			return !hasError && identityID(p["id"]) && identityStrings(p, "email")
+		})
 	})
 }
 
@@ -1556,7 +1549,7 @@ func verifyMiro(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyRevAI(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.rev.ai/speechtotext/v1/account")
+	return verifyIdentityGET(ctx, secret, "https://api.rev.ai/speechtotext/v1/account", "Authorization", "Bearer ", validRevAIAccount)
 }
 
 func verifyTwist(ctx context.Context, secret string) VerificationResult {
@@ -1667,8 +1660,8 @@ func verifyVultr(ctx context.Context, secret string) VerificationResult {
 
 func verifyAssemblyAI(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api.assemblyai.com/v2/transcript?limit=1", "https://api.eu.assemblyai.com/v2/transcript?limit=1"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyHeaderGET(ctx, secret, endpoint, "Authorization", "")
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "", validAssemblyAITranscripts)
 	})
 }
 
@@ -2768,8 +2761,10 @@ func verifyStoryblokPersonal(ctx context.Context, secret string) VerificationRes
 		"https://api-ap.storyblok.com/v1/spaces?per_page=1",
 		"https://app.storyblokchina.cn/v1/spaces?per_page=1",
 	}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyHeaderGET(ctx, secret, endpoint, "Authorization", "")
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "", func(p identityPayload) bool {
+			return validIdentityCollection(p, "spaces", func(space identityPayload) bool { return identityID(space["id"]) && identityStrings(space, "name") })
+		})
 	})
 }
 
@@ -2809,11 +2804,9 @@ func verifyPivotalTracker(ctx context.Context, secret string) VerificationResult
 func verifyCloudConvert(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.cloudconvert.com/v2/users/me", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "user.read", "scope") {
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		user := identityObject(p, "data")
+		return identityID(user["id"]) && identityStrings(user, "email", "username")
 	})
 }
 
@@ -3219,11 +3212,9 @@ func verifyNylas(ctx context.Context, secret string) VerificationResult {
 func verifyCapsuleCRM(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.capsulecrm.com/api/v2/users/current", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden {
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		user := identityObject(p, "user")
+		return identityID(user["id"]) && identityStrings(user, "username")
 	})
 }
 
@@ -3261,7 +3252,9 @@ func verifyGetResponse(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyMailerLite(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://connect.mailerlite.com/api/timezones")
+	return verifyIdentityGET(ctx, secret, "https://connect.mailerlite.com/api/groups?limit=1", "Authorization", "Bearer ", func(p identityPayload) bool {
+		return validIdentityCollection(p, "data", func(group identityPayload) bool { return identityStrings(group, "id", "name") })
+	})
 }
 
 func verifyKoyeb(ctx context.Context, secret string) VerificationResult {

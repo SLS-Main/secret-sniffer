@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 11:
+After remediation batch 12:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 334 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 177 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 342 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 169 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 164
-`read_only`, 71 `auth_only`, 99 `unsafe`, and 233 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 172
+`read_only`, 71 `auth_only`, 99 `unsafe`, and 225 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -147,3 +147,46 @@ Sources consulted 2026-09-25 (official API references or official SDKs):
 - [Vultr official SDK account schema](https://github.com/vultr/govultr/blob/master/account.go)
 - [Eventbrite official SDK current-user example](https://github.com/eventbrite/eventbrite-sdk-python/blob/master/README.rst)
 - [Paystack balance](https://paystack.com/docs/api/transfer-control/#balance)
+
+## Remediation batch 12: eight collection and account contracts
+
+All eight probes are now `read_only`. They require HTTP 200 and validated
+provider-specific evidence, suppress response bodies, and preserve unknown for
+unproven authorization, scope, region, sandbox, or credential-version failures.
+Contentful, CloudConvert, and Capsule CRM no longer accept permission errors as
+authentication proof. CloudConvert uses its production endpoint; sandbox-only
+credentials remain unknown on rejection.
+
+| Provider | Read-only request | Required evidence |
+| --- | --- | --- |
+| Contentful | `/spaces?limit=1` | `sys.type=Array`, non-null `items`; each space has `sys.type=Space`, string ID and name. |
+| AssemblyAI | `/v2/transcript?limit=1` | Non-null transcript collection, string IDs, documented statuses, and matching page result count. A failed transcription is still legitimate account data. |
+| Storyblok | `/v1/spaces?per_page=1` | Non-null spaces collection with IDs and names. |
+| CloudConvert | `/v2/users/me` | Nested user ID, username and email; accepts documented string IDs and numeric example IDs. |
+| Smartsheet | `/2.0/users/me` | User ID and email, with no `errorCode` field. |
+| Rev AI | `/speechtotext/v1/account` | Account email and numeric free, purchased and total balances, including zero. |
+| MailerLite | `/api/groups?limit=1` | Non-null groups collection with string IDs and names; replaces static timezone lookup with account-specific evidence. |
+| Capsule CRM | `/api/v2/users/current` | Nested user ID and username. |
+
+Collection probes request one item and never follow pagination links. Empty
+collections are accepted, while absent/null collections and malformed entries
+are not. Contentful, AssemblyAI, Storyblok and Smartsheet retain fixed regional
+allowlists with authorization-only fallback. Throttling, outages, redirects,
+malformed success responses, transport/read errors, and cancellation stop further
+attempts. Returned profile, financial and transcription metadata are suppressed.
+
+Mocked tests cover exact methods, paths, queries and authentication headers;
+default-policy promotion; every regional fallback target; malformed, wrong-type,
+contradictory and non-200 responses; metadata suppression; transport/read failure;
+and cancellation between deployments. No live credentials are used.
+
+Evidence checked 2026-09-25:
+
+- [Contentful official SDK space schema](https://github.com/contentful/contentful-management.js/blob/master/lib/entities/space.ts) and [collection types](https://github.com/contentful/contentful-management.js/blob/master/lib/common-types.ts) (API reference returned HTTP 429).
+- [AssemblyAI list transcripts, authentication, pagination and regional endpoint](https://www.assemblyai.com/docs/api-reference/transcripts/list).
+- [Storyblok list spaces](https://www.storyblok.com/docs/api/management/spaces/retrieve-multiple-spaces) and [management authentication, regions and pagination](https://www.storyblok.com/docs/api/management).
+- [CloudConvert current user](https://cloudconvert.com/api/v2/users).
+- [Smartsheet current user](https://developers.smartsheet.com/api/smartsheet/openapi/users/get-current-user).
+- [Rev AI account](https://docs.rev.ai/api/asynchronous/reference/accounts/getaccount.md).
+- [MailerLite groups](https://developers.mailerlite.com/api/groups).
+- [Capsule CRM current user](https://developer.capsulecrm.com/v2/operations/User#showCurrentUser).
