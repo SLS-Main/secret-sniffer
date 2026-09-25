@@ -297,7 +297,7 @@ func TestWeightsAndBiasesVerifierRejectsNullViewer(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":{"viewer":null}}`)), Header: make(http.Header)}, nil
 	})}
 	result := verifyWeightsAndBiases(WithVerificationHTTPClient(context.Background(), client), "secret")
-	if result.Status != VerificationUnverified {
+	if result.Status != VerificationUnknown {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -2289,8 +2289,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 219,
-		VerificationSafetyReadOnly:   178,
+		VerificationSafetyUnreviewed: 209,
+		VerificationSafetyReadOnly:   188,
 		VerificationSafetyAuthOnly:   71,
 		VerificationSafetyUnsafe:     99,
 	}
@@ -2303,7 +2303,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 348 || report.RequiresHardening != 163 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 358 || report.RequiresHardening != 153 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

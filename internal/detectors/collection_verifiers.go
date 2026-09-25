@@ -63,3 +63,33 @@ func validRevAIAccount(p identityPayload) bool {
 	}
 	return true
 }
+
+func validLocationIQBalance(p identityPayload) bool {
+	if !identityStringEquals(p, "status", "ok") {
+		return false
+	}
+	balance := identityObject(p, "balance")
+	for _, field := range []string{"day", "bonus"} {
+		var value *int64
+		if json.Unmarshal(balance[field], &value) != nil || value == nil || *value < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func validChromaIdentity(p identityPayload) bool {
+	if !identityStrings(p, "user_id", "tenant") {
+		return false
+	}
+	var databases []json.RawMessage
+	if json.Unmarshal(p["databases"], &databases) != nil || databases == nil {
+		return false
+	}
+	for _, database := range databases {
+		if !identityStrings(identityPayload{"name": database}, "name") {
+			return false
+		}
+	}
+	return true
+}

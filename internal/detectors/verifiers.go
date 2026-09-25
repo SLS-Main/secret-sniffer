@@ -513,14 +513,8 @@ func verifyBuildkite(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPostHog(ctx context.Context, secret string) VerificationResult {
-	return verifyEndpoints(ctx, []string{"https://us.posthog.com/api/users/@me/", "https://eu.posthog.com/api/users/@me/"}, func(endpoint string) VerificationResult {
-		result := verifyBearerGET(ctx, secret, endpoint)
-		if result.Status == VerificationUnverified {
-			result.Status = VerificationUnknown
-			result.ErrorCategory = "endpoint_context"
-			result.Message = "token may belong to another PostHog deployment"
-		}
-		return result
+	return verifyIdentityEndpoints(ctx, []string{"https://us.posthog.com/api/users/@me/", "https://eu.posthog.com/api/users/@me/"}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", func(p identityPayload) bool { return identityStrings(p, "uuid", "email") })
 	})
 }
 
@@ -2237,28 +2231,7 @@ func verifyWeightsAndBiases(ctx context.Context, secret string) VerificationResu
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.wandb.ai/graphql", strings.NewReader(`{"query":"query { viewer { id } }"}`))
 	req.SetBasicAuth("api", secret)
 	req.Header.Set("Content-Type", "application/json")
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode < 200 || statusCode >= 300 {
-			return VerificationResult{}, false
-		}
-		var response struct {
-			Data struct {
-				Viewer *struct {
-					ID string `json:"id"`
-				} `json:"viewer"`
-			} `json:"data"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-		}
-		if response.Data.Viewer == nil {
-			return invalidCredentialResult(), true
-		}
-		if response.Data.Viewer.ID == "" {
-			return unknownVerificationResult("provider_response", "provider response did not contain an authenticated identity"), true
-		}
-		return VerificationResult{Status: VerificationVerified}, true
-	})
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool { return identityStrings(identityObject(p, "data", "viewer"), "id") })
 }
 
 func verifyPipedream(ctx context.Context, secret string) VerificationResult {
@@ -2697,7 +2670,11 @@ func verifyEasyPost(ctx context.Context, secret string) VerificationResult {
 func verifyLob(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.lob.com/v1/addresses?limit=1", nil)
 	req.SetBasicAuth(secret, "")
-	return verifyHTTPRequest(ctx, req)
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		return identityStringEquals(p, "object", "list") && validIdentityCollection(p, "data", func(address identityPayload) bool {
+			return identityStringEquals(address, "object", "address") && identityStrings(address, "id")
+		})
+	})
 }
 
 func verifyMapbox(ctx context.Context, secret string) VerificationResult {
@@ -2735,7 +2712,11 @@ func verifyMapbox(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyQase(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.qase.io/v1/project?limit=1&offset=0", "Token", "")
+	return verifyIdentityGET(ctx, secret, "https://api.qase.io/v1/project?limit=1&offset=0", "Token", "", func(p identityPayload) bool {
+		var status bool
+		_, hasError := p["errorMessage"]
+		return !hasError && json.Unmarshal(p["status"], &status) == nil && status && validIdentityCollection(identityObject(p, "result"), "entities", func(project identityPayload) bool { return identityStrings(project, "code", "title") })
+	})
 }
 
 func verifyProductboard(ctx context.Context, secret string) VerificationResult {
@@ -2782,8 +2763,11 @@ func verifyStoryblokAccess(ctx context.Context, secret string) VerificationResul
 
 func verifyOANDA(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api-fxpractice.oanda.com/v3/accounts", "https://api-fxtrade.oanda.com/v3/accounts"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyBearerGET(ctx, secret, endpoint)
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", func(p identityPayload) bool {
+			_, hasError := p["errorCode"]
+			return !hasError && validIdentityCollection(p, "accounts", func(account identityPayload) bool { return identityStrings(account, "id") })
+		})
 	})
 }
 
@@ -3032,10 +3016,10 @@ func verifyDatoCMS(ctx context.Context, secret string) VerificationResult {
 
 func verifyLocationIQ(ctx context.Context, secret string) VerificationResult {
 	hosts := []string{"us1.locationiq.com", "eu1.locationiq.com"}
-	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
+	return verifyIdentityEndpoints(ctx, hosts, func(host string) VerificationResult {
 		endpoint := "https://" + host + "/v1/balance?key=" + url.QueryEscape(secret) + "&format=json"
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		return verifyHTTPRequest(ctx, req)
+		return verifyIdentityRequest(ctx, req, validLocationIQBalance)
 	})
 }
 
@@ -3095,8 +3079,8 @@ func verifyAffinity(ctx context.Context, secret string) VerificationResult {
 
 func verifyWise(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api.wise.com/2026Q3/me", "https://api.wise-sandbox.com/2026Q3/me"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyBearerGET(ctx, secret, endpoint)
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", func(p identityPayload) bool { return identityID(p["id"]) && identityStrings(p, "email") })
 	})
 }
 
@@ -3367,14 +3351,19 @@ func verifyBraintree(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyImageKit(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.imagekit.io/v1/files?limit=1", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.imagekit.io/v1/files?limit=1&type=file", nil)
 	req.SetBasicAuth(secret, "")
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if (statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden) && containsAnyFold(string(body), "your account cannot be authenticated") {
-			return invalidCredentialResult(), true
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		if statusCode == http.StatusOK && validIdentityCollection(identityPayload{"files": body}, "files", func(file identityPayload) bool {
+			return !identityHasErrors(file) && identityStrings(file, "fileId", "name")
+		}) {
+			return VerificationResult{Status: VerificationVerified}, true
 		}
-		return VerificationResult{}, false
+		return verifyJSONReadClassification(statusCode, body)
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyAirbrakeUser(ctx context.Context, secret string) VerificationResult {
@@ -3639,7 +3628,7 @@ func verifySingleStore(ctx context.Context, secret string) VerificationResult {
 	if len(secret) != 64 || !isHex(secret) {
 		return VerificationResult{Status: VerificationUnsupported, Message: "credential is not a documented SingleStore management API key"}
 	}
-	return verifyBearerGET(ctx, secret, "https://api.singlestore.com/v2/organizations/current")
+	return verifyIdentityGET(ctx, secret, "https://api.singlestore.com/v2/organizations/current", "Authorization", "Bearer ", func(p identityPayload) bool { return identityStrings(p, "orgID", "name") })
 }
 
 func verifyPagarMe(ctx context.Context, secret string) VerificationResult {
@@ -6066,10 +6055,10 @@ func verifyFalAI(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyChromaCloud(ctx context.Context, secret string) VerificationResult {
-	result := verifyEndpoints(ctx, []string{"https://api.trychroma.com/api/v2/auth/identity", "https://europe-west1.gcp.trychroma.com/api/v2/auth/identity"}, func(endpoint string) VerificationResult {
+	result := verifyIdentityEndpoints(ctx, []string{"https://api.trychroma.com/api/v2/auth/identity", "https://europe-west1.gcp.trychroma.com/api/v2/auth/identity"}, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.Header.Set("X-Chroma-Token", secret)
-		return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"user_id"}, "permission denied"))
+		return verifyIdentityRequest(ctx, req, validChromaIdentity)
 	})
 	result.Response = ""
 	return result

@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 13:
+After remediation batch 14:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 348 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 163 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 358 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 153 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 178
-`read_only`, 71 `auth_only`, 99 `unsafe`, and 219 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 188
+`read_only`, 71 `auth_only`, 99 `unsafe`, and 209 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -88,7 +88,7 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 ## Recommended following batches
 
 1. **Identity/collection contracts:** Typeform, Harness, OpenPhone,
-   Sourcegraph, Weights & Biases, and regional content-management APIs.
+   Sourcegraph, and regional content-management APIs.
    Confirm current documentation, validate identity/list schemas, suppress
    metadata, and classify structured failures conservatively.
 2. **Credential-subtype routing:** PagerDuty, Buildkite, Postmark. Different
@@ -230,3 +230,52 @@ Evidence checked 2026-09-25:
 Typeform documentation still did not yield its current-user contract; it remains
 in the hardening backlog. Harness and OpenPhone also remain pending contract
 confirmation.
+
+## Remediation batch 14: ten identity and collection verifiers
+
+All ten probes are now `read_only` and require HTTP 200 plus provider-specific
+evidence. Returned profile, organization, file, address, account and quota data
+are suppressed. Unproven permission, region, self-hosted deployment, account
+allowlist and credential-subtype failures remain unknown.
+
+| Provider | Request | Required evidence |
+| --- | --- | --- |
+| Weights & Biases | GraphQL `query { viewer { id } }` using existing Basic auth | String `data.viewer.id`, no GraphQL errors; null viewer is unknown rather than invalid. |
+| PostHog | `/api/users/@me/` | String UUID and email; fixed US/EU deployments, self-hosted credentials remain ambiguous on rejection. |
+| Chroma Cloud | `/api/v2/auth/identity` | String user and tenant plus a non-null list of string database names; permission-error text no longer authenticates. |
+| SingleStore | `/v2/organizations/current` | String `orgID` and name; existing 64-hex management-key gate makes no request for unsupported formats. |
+| LocationIQ | `/v1/balance?key=…&format=json` | `status=ok` and nonnegative integer day/bonus balances, including zero. |
+| OANDA | `/v3/accounts` | Non-null accounts array with string IDs, no `errorCode`; practice/live environments. |
+| Wise | `/2026Q3/me` | User ID and email; production/sandbox environments. |
+| ImageKit | `/v1/files?limit=1&type=file` | Top-level array with file IDs and names; explicit file filter avoids folder-schema ambiguity. |
+| Lob | `/v1/addresses?limit=1` | List envelope and address resource types plus address IDs; PII suppressed. |
+| Qase | `/v1/project?limit=1&offset=0` | `status=true`, no `errorMessage`, non-null project entities with code/title; Enterprise-host failures stay unknown. |
+
+PostHog, Chroma, LocationIQ, OANDA and Wise use authorization-only fallback.
+Malformed success, throttling, outages, redirects, transport/read errors and
+cancellation stop further attempts. Collection probes accept legitimate empty
+arrays but reject null/missing collections and malformed entries. Pagination URLs
+are never followed. OANDA documents no pagination for its authorized-account
+list; it makes one request per attempted environment under the bounded reader.
+
+LocationIQ documents a `balance:read` account-token scope requirement beginning
+2026-10-19. Unsupported existing tokens will remain unknown on scope rejection;
+this batch does not infer validity from permission errors.
+
+Mocked tests cover all ten exact requests and default-policy promotions, valid
+empty/zero values, malformed and contradictory payloads, GraphQL partial errors,
+non-200 success-looking bodies, response suppression, fallback order and success,
+transport/read failure, cancellation and SingleStore's no-request gate.
+
+Evidence checked 2026-09-25:
+
+- [Weights & Biases official viewer query](https://github.com/wandb/wandb/blob/main/core/api/graphql/query_viewer.graphql).
+- [PostHog users and `@me` identity](https://posthog.com/docs/api/users).
+- [Chroma official identity response](https://github.com/chroma-core/chroma/blob/main/rust/api-types/src/user_identity.rs) and [client identity request](https://github.com/chroma-core/chroma/blob/main/chromadb/api/fastapi.py).
+- [SingleStore official organization schema](https://github.com/singlestore-labs/singlestoredb-python/blob/main/singlestoredb/management/organization.py) and [V2 route support](https://github.com/singlestore-labs/singlestoredb-python/blob/main/singlestoredb/management/v2/organization.py).
+- [LocationIQ balance and scope transition](https://docs.locationiq.com/docs/balance-api).
+- [OANDA authorized accounts](https://developer.oanda.com/rest-live-v20/account-ep/).
+- [Wise user schema](https://docs.wise.com/api-reference/user).
+- [ImageKit official list request](https://github.com/imagekit-developer/imagekit-python/blob/master/src/imagekitio/resources/assets.py), [array response](https://github.com/imagekit-developer/imagekit-python/blob/master/src/imagekitio/types/asset_list_response.py), and [file model](https://github.com/imagekit-developer/imagekit-python/blob/master/src/imagekitio/types/file.py).
+- [Lob authentication and address list](https://docs.lob.com/#tag/Addresses/operation/addresses_list).
+- [Qase project list](https://developers.qase.io/reference/get-projects).
