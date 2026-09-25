@@ -533,8 +533,8 @@ func verifyLaunchDarkly(ctx context.Context, secret string) VerificationResult {
 		"https://app.eu.launchdarkly.com/api/v2/caller-identity",
 		"https://app.launchdarkly.us/api/v2/caller-identity",
 	}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyHeaderGET(ctx, secret, endpoint, "Authorization", "")
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "", func(p identityPayload) bool { return identityStrings(p, "accountId", "authKind") })
 	})
 }
 
@@ -597,7 +597,7 @@ func verifyMonday(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.monday.com/v2", strings.NewReader(`{"query":"query { me { id } }"}`))
 	req.Header.Set("Authorization", secret)
 	req.Header.Set("Content-Type", "application/json")
-	return verifyHTTPRequestWithClassifier(ctx, req, classifyGraphQLIdentity("id"))
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool { return identityID(identityObject(p, "data", "me")["id"]) })
 }
 
 func verifyURLScan(ctx context.Context, secret string) VerificationResult {
@@ -1069,16 +1069,8 @@ func verifySecurityTrails(ctx context.Context, secret string) VerificationResult
 }
 
 func verifyWebflow(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.webflow.com/v2/token/authorized_by", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden {
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
-		}
-		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "invalid_credentials", "invalid credential") {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityGET(ctx, secret, "https://api.webflow.com/v2/token/introspect", "Authorization", "Bearer ", func(p identityPayload) bool {
+		return identityStrings(identityObject(p, "authorization"), "id", "grantType") && identityStrings(identityObject(p, "application"), "id")
 	})
 }
 
@@ -1332,7 +1324,7 @@ func verifyCloudsmith(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyClockify(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.clockify.me/api/v1/user", "X-Api-Key", "")
+	return verifyIdentityGET(ctx, secret, "https://api.clockify.me/api/v1/user", "X-Api-Key", "", func(p identityPayload) bool { return identityStrings(p, "id", "email") })
 }
 
 func verifySmartsheet(ctx context.Context, secret string) VerificationResult {
@@ -1670,7 +1662,7 @@ func verifyThousandEyes(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyVultr(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.vultr.com/v2/account")
+	return verifyIdentityGET(ctx, secret, "https://api.vultr.com/v2/account", "Authorization", "Bearer ", func(p identityPayload) bool { return identityStrings(identityObject(p, "account"), "name", "email") })
 }
 
 func verifyAssemblyAI(ctx context.Context, secret string) VerificationResult {
@@ -2192,14 +2184,7 @@ func verifyPolar(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPaystack(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.paystack.co/balance", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "invalid key", "invalid_Key") {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
-	})
+	return verifyIdentityGET(ctx, secret, "https://api.paystack.co/balance", "Authorization", "Bearer ", validPaystackBalance)
 }
 
 func verifyFlutterwave(ctx context.Context, secret string) VerificationResult {
@@ -2292,7 +2277,7 @@ func verifyCrowdin(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyEventbrite(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://www.eventbriteapi.com/v3/users/me/")
+	return verifyIdentityGET(ctx, secret, "https://www.eventbriteapi.com/v3/users/me/", "Authorization", "Bearer ", func(p identityPayload) bool { return identityID(p["id"]) && identityStrings(p, "name") })
 }
 
 func verifyLINEMessaging(ctx context.Context, secret string) VerificationResult {
@@ -2897,7 +2882,7 @@ func verifyIPInfo(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyBaremetrics(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.baremetrics.com/v1/account")
+	return verifyIdentityGET(ctx, secret, "https://api.baremetrics.com/v1/account", "Authorization", "Bearer ", func(p identityPayload) bool { return identityStrings(identityObject(p, "account"), "id", "company") })
 }
 
 func verifyScrapingBee(ctx context.Context, secret string) VerificationResult {
@@ -3945,8 +3930,8 @@ func verifyTatum(ctx context.Context, secret string) VerificationResult {
 
 func verifyDialpad(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://dialpad.com/api/v2/company", "https://sandbox.dialpad.com/api/v2/company"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyBearerGET(ctx, secret, endpoint)
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", func(p identityPayload) bool { return identityID(p["id"]) && identityStrings(p, "name") })
 	})
 }
 
@@ -8099,26 +8084,18 @@ func verifyPostmark(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAtlassian(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.atlassian.com/admin/v1/orgs")
+	return verifyIdentityGET(ctx, secret, "https://api.atlassian.com/admin/v1/orgs", "Authorization", "Bearer ", validAtlassianOrganizations)
 }
 
 func verifyIntercom(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api.intercom.io/me", "https://api.eu.intercom.io/me", "https://api.au.intercom.io/me"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.Header.Set("Authorization", "Bearer "+secret)
 		req.Header.Set("Intercom-Version", "2.16")
-		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-			if statusCode != http.StatusUnauthorized {
-				return VerificationResult{}, false
-			}
-			response := strings.ToLower(string(body))
-			for _, code := range []string{"token_revoked", "token_blocked", "token_not_found", "token_expired"} {
-				if strings.Contains(response, code) {
-					return invalidCredentialResult(), true
-				}
-			}
-			return unknownVerificationResult("authorization", "token region or authorization could not be confirmed"), true
+		return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+			var kind string
+			return identityStrings(p, "id") && json.Unmarshal(p["type"], &kind) == nil && kind == "admin"
 		})
 	})
 }
