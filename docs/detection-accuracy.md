@@ -38,15 +38,33 @@ YAML child key for its parent's value.
   fingerprint deduplication. Base64 views use their decoded spans before source
   location remapping, preserving decoder provenance.
 
+## Provider detection after structured decoding
+
+Provider rules also run against decoded JSON/YAML scalar values. Each mapping
+gets a separate detection view containing its own fields and ancestor keys.
+Explicit `provider` and `service` selectors contribute local context regardless
+of field order. Adjacent mappings, array entries, and YAML documents are not
+combined into a decoded credential record.
+
+This supports escaped provider signatures, escaped field/provider names, YAML
+block values, and multipart credentials stored together in one mapping. Verifiers
+receive decoded credential values and parts through the existing verification
+policy. Literal newlines inside a value are not removed to assemble a token;
+trailing block line breaks can delimit a provider token as in ordinary source.
+
+Decoded findings map back to the original scalar span. Their decoder provenance
+records `json` or `yaml`, following `base64` when decoding a Base64-wrapped
+document. Raw token prefixes from transformed records are replaced by detection
+on decoded values. Equivalent generic findings, including a block scalar with a
+trailing newline, are consolidated with the provider finding.
+
 No blanket entropy threshold is used: low-entropy passwords and readable
 passphrases are valid findings. Verification status remains separate from these
 local detection decisions.
 
 Source-code fragments still use conservative text-scanning rules rather than a
 full language parser. Language-specific escaping and arbitrary expression syntax
-remain areas for additional format-specific extraction work. Provider-specific
-regex rules still inspect source bytes; escaped or folded provider tokens may
-therefore be reported as generic credentials rather than provider findings.
+remain areas for additional format-specific extraction work.
 
 ## Regression corpus
 

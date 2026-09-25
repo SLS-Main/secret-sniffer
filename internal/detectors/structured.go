@@ -19,15 +19,40 @@ func sensitiveField(name string) bool {
 	return false
 }
 
-// Decode nodes rather than Go objects: nodes preserve scalar style and source
-// positions, and aliases are not expanded. YAML also accepts JSON strings and
-// applies their escaping rules. Non-structured source falls back to extraction.
+// StructuredValue associates a decoded scalar with its original byte span and
+// mapping scope. Record IDs are local to a single call to StructuredValues.
+type StructuredValue struct {
+	Key, Parent, Value string
+	Start, End, Record int
+	Context            []string
+	Literal            bool
+	Format             string
+}
+
 func (d AssignedSecretDetector) detectStructuredAssignments(b []byte) ([]Candidate, bool) {
 	if !assignedKey.Match(b) && !bytes.Contains(b, []byte(`\u`)) && !bytes.Contains(b, []byte(`\U`)) && !bytes.Contains(b, []byte(`\x`)) {
 		return nil, false
 	}
+	values, ok := StructuredValues(b)
+	if !ok {
+		return nil, false
+	}
+	var out []Candidate
+	for _, value := range values {
+		secret := value.Value
+		if sensitiveField(value.Key) && len(secret) >= 16 && plausibleSecret(secret) && !looksLikeNamedResourceReference(secret) && !assignedNonSecret(secret) && !(resourceName.MatchString(secret) && referenceContainer(value.Parent)) && (value.Literal || !structuredExpression(secret)) {
+			info := d.Info()
+			out = append(out, Candidate{DetectorID: info.ID, Name: info.Name, Severity: info.Severity, Secret: secret, Start: value.Start, End: value.End})
+		}
+	}
+	return out, true
+}
+
+// StructuredValues decodes scalar nodes without expanding container aliases.
+// Separate mappings, array entries and documents never share a record ID.
+func StructuredValues(b []byte) ([]StructuredValue, bool) {
 	if json.Valid(b) {
-		return d.detectJSONAssignments(b), true
+		return jsonStructuredValues(b), true
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(b))
 	var documents []*yaml.Node
@@ -62,43 +87,58 @@ func (d AssignedSecretDetector) detectStructuredAssignments(b []byte) ([]Candida
 			lineStarts = append(lineStarts, i+1)
 		}
 	}
-	var out []Candidate
+	var out []StructuredValue
 	type entry struct {
-		node   *yaml.Node
-		parent string
+		node    *yaml.Node
+		parent  string
+		context []string
 	}
 	var stack []entry
 	for _, doc := range documents {
 		stack = append(stack, entry{node: doc})
 	}
+	record := 0
 	for len(stack) > 0 {
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		node := current.node
 		switch node.Kind {
 		case yaml.MappingNode:
+			record++
 			for i := 0; i+1 < len(node.Content); i += 2 {
 				key, value := node.Content[i], node.Content[i+1]
 				if key.Kind != yaml.ScalarNode {
 					continue
 				}
-				if sensitiveField(key.Value) && value.Kind == yaml.AliasNode && value.Alias != nil && value.Alias.Kind == yaml.ScalarNode {
+				if value.Kind == yaml.AliasNode && value.Alias != nil && value.Alias.Kind == yaml.ScalarNode {
 					value = value.Alias
 				}
-				if sensitiveField(key.Value) && value.Kind == yaml.ScalarNode && (value.Tag == "!!str" || value.Tag == "!!int" || value.Tag == "!!float") {
+				if value.Kind == yaml.ScalarNode && (value.Tag == "!!str" || value.Tag == "!!int" || value.Tag == "!!float") {
 					start, end := scalarSpan(content, lineStarts, value)
 					secret := value.Value
 					literal := value.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) != 0
-					if start >= 0 && len(secret) >= 16 && plausibleSecret(secret) && !looksLikeNamedResourceReference(secret) && !assignedNonSecret(secret) && !(resourceName.MatchString(secret) && referenceContainer(current.parent)) && (literal || !structuredExpression(secret)) {
-						info := d.Info()
-						out = append(out, Candidate{DetectorID: info.ID, Name: info.Name, Severity: info.Severity, Secret: secret, Start: start, End: end})
+					if start >= 0 {
+						out = append(out, StructuredValue{Key: key.Value, Parent: current.parent, Value: secret, Start: start, End: end, Record: record, Context: current.context, Literal: literal, Format: "yaml"})
 					}
 				}
-				stack = append(stack, entry{node: value, parent: key.Value})
+				if value.Kind == yaml.ScalarNode {
+					continue
+				}
+				context := append(append([]string(nil), current.context...), key.Value)
+				stack = append(stack, entry{node: value, parent: key.Value, context: context})
 			}
 		case yaml.SequenceNode:
 			for _, child := range node.Content {
-				stack = append(stack, entry{node: child, parent: current.parent})
+				stack = append(stack, entry{node: child, parent: current.parent, context: current.context})
+			}
+		case yaml.ScalarNode:
+			if node.Tag != "!!str" && node.Tag != "!!int" && node.Tag != "!!float" {
+				continue
+			}
+			start, end := scalarSpan(content, lineStarts, node)
+			if start >= 0 {
+				record++
+				out = append(out, StructuredValue{Value: node.Value, Start: start, End: end, Record: record, Context: current.context, Literal: true, Format: "yaml"})
 			}
 		}
 	}
@@ -108,16 +148,19 @@ func (d AssignedSecretDetector) detectStructuredAssignments(b []byte) ([]Candida
 
 // JSON has its own decoder because surrogate-pair escapes are valid JSON but
 // are not accepted by every YAML parser. Token offsets retain the original span.
-func (d AssignedSecretDetector) detectJSONAssignments(b []byte) []Candidate {
+func jsonStructuredValues(b []byte) []StructuredValue {
 	decoder := json.NewDecoder(bytes.NewReader(b))
 	decoder.UseNumber()
 	type frame struct {
 		object      bool
 		key, parent string
 		wantKey     bool
+		record      int
+		context     []string
 	}
 	var stack []frame
-	var out []Candidate
+	var out []StructuredValue
+	record := 0
 	for {
 		before := int(decoder.InputOffset())
 		token, err := decoder.Token()
@@ -126,8 +169,11 @@ func (d AssignedSecretDetector) detectJSONAssignments(b []byte) []Candidate {
 		}
 		end := int(decoder.InputOffset())
 		key, parent := "", ""
+		var context []string
+		currentRecord := 0
 		if len(stack) > 0 {
 			top := &stack[len(stack)-1]
+			context, currentRecord = top.context, top.record
 			if top.object {
 				if text, ok := token.(string); ok && top.wantKey {
 					top.key, top.wantKey = text, false
@@ -143,9 +189,13 @@ func (d AssignedSecretDetector) detectJSONAssignments(b []byte) []Candidate {
 			}
 			switch delimiter {
 			case '{':
-				stack = append(stack, frame{object: true, parent: key, wantKey: true})
+				record++
+				if key != "" {
+					context = append(append([]string(nil), context...), key)
+				}
+				stack = append(stack, frame{object: true, parent: key, wantKey: true, record: record, context: context})
 			case '[':
-				stack = append(stack, frame{parent: key})
+				stack = append(stack, frame{parent: key, context: context})
 			case '}', ']':
 				if len(stack) > 0 {
 					stack = stack[:len(stack)-1]
@@ -157,8 +207,12 @@ func (d AssignedSecretDetector) detectJSONAssignments(b []byte) []Candidate {
 		if number, ok := token.(json.Number); ok {
 			secret = number.String()
 		}
-		if !sensitiveField(key) || len(secret) < 16 || !plausibleSecret(secret) || looksLikeNamedResourceReference(secret) || assignedNonSecret(secret) || (resourceName.MatchString(secret) && referenceContainer(parent)) {
+		if secret == "" {
 			continue
+		}
+		if len(stack) == 0 || !stack[len(stack)-1].object {
+			record++
+			currentRecord = record
 		}
 		start := before
 		if quoted {
@@ -170,8 +224,7 @@ func (d AssignedSecretDetector) detectJSONAssignments(b []byte) []Candidate {
 		} else {
 			start = end - len(secret)
 		}
-		info := d.Info()
-		out = append(out, Candidate{DetectorID: info.ID, Name: info.Name, Severity: info.Severity, Secret: secret, Start: start, End: end})
+		out = append(out, StructuredValue{Key: key, Parent: parent, Value: secret, Start: start, End: end, Record: currentRecord, Context: context, Literal: quoted, Format: "json"})
 	}
 	return out
 }

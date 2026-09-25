@@ -88,6 +88,7 @@ type Candidate struct {
 	End                int
 	Verifier           Verifier
 	CompositeVerifier  CompositeVerifier
+	DecoderChain       []string
 }
 
 type Verifier func(context.Context, string) VerificationResult
@@ -1522,6 +1523,7 @@ func ToFindingAt(c Candidate, file, commit string, line, col int, verify bool) F
 		f.LegacyFingerprint = legacy
 	}
 	f.Provenance = baseProvenance(file, commit)
+	f.Provenance.DecoderChain = append([]string(nil), c.DecoderChain...)
 	if verify && !c.Verifiable() {
 		f.Verification.Status = VerificationUnsupported
 	} else if verify {

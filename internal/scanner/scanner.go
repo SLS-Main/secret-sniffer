@@ -836,22 +836,34 @@ func (s *Scanner) scanByteView(ctx context.Context, file, commit string, view []
 // still identify individual occurrences in this exact (possibly decoded) view.
 func (s *Scanner) detectCandidates(view []byte) []detectors.Candidate {
 	var candidates []detectors.Candidate
+	structured, replaced := s.detectStructuredCandidates(view)
 	type occurrence struct {
 		start, end int
 		secret     string
 	}
 	specific := make(map[occurrence]bool)
+	structuredSpecific := make(map[occurrence]bool)
 	for _, d := range s.plan.selectDetectors(view) {
 		for _, c := range detectPlanned(d, view) {
+			if c.DetectorID != "generic-assigned-secret" && withinStructuredReplacement(c, replaced) {
+				continue
+			}
 			candidates = append(candidates, c)
-			if c.DetectorID != "generic-assigned-secret" && c.DetectorID != "jwt" && c.DetectorID != "basic-auth-url" {
-				specific[occurrence{c.Start, c.End, c.Secret}] = true
+		}
+	}
+	candidates = append(candidates, structured...)
+	for _, c := range candidates {
+		if c.DetectorID != "generic-assigned-secret" && c.DetectorID != "jwt" && c.DetectorID != "basic-auth-url" {
+			key := occurrence{c.Start, c.End, c.Secret}
+			specific[key] = true
+			if len(c.DecoderChain) > 0 {
+				structuredSpecific[key] = true
 			}
 		}
 	}
 	out := candidates[:0]
 	for _, c := range candidates {
-		if c.DetectorID == "generic-assigned-secret" && specific[occurrence{c.Start, c.End, c.Secret}] {
+		if c.DetectorID == "generic-assigned-secret" && (specific[occurrence{c.Start, c.End, c.Secret}] || structuredSpecific[occurrence{c.Start, c.End, strings.TrimSpace(c.Secret)}]) {
 			continue
 		}
 		out = append(out, c)
@@ -891,7 +903,7 @@ func (s *Scanner) scanDecodedBase64(ctx context.Context, file, commit string, b 
 			f := detectors.ToFindingAt(c, file, commit, line, col, false)
 			s.enrichFindingSource(&f)
 			if f.Provenance != nil {
-				f.Provenance.DecoderChain = append(f.Provenance.DecoderChain, "base64")
+				f.Provenance.DecoderChain = append([]string{"base64"}, f.Provenance.DecoderChain...)
 			}
 			if s.cfg.Verify {
 				f.Verification = s.verification.verifyWithPolicy(ctx, c, detectors.VerificationPolicy{AllowUnreviewed: s.cfg.AllowUnreviewedVerification, AllowUnsafe: s.cfg.AllowUnsafeVerification})
