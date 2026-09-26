@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 15:
+After remediation batch 16:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 368 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 143 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 378 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 133 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 197
-`read_only`, 72 `auth_only`, 99 `unsafe`, and 199 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 207
+`read_only`, 72 `auth_only`, 99 `unsafe`, and 189 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -324,3 +324,51 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 16: ten collection and account verifiers
+
+All ten probes are now `read_only`. Success requires HTTP 200 and the documented
+provider-specific evidence below. Returned PII, file names, account settings,
+linked social identities, financial statistics and mailing-list metadata are
+suppressed. Ambiguous permission, subscription, token-family, deployment and
+provider failures remain unknown.
+
+| Provider | Request | Required evidence and changes |
+| --- | --- | --- |
+| Signaturit | Bearer `GET /v3/signatures.json?limit=1` | Top-level signature array, string id/created_at, typed documents with id/status; failed documents still establish authenticated access. Production/sandbox fallback is authorization-only. |
+| Shippo | `ShippoToken` `GET /addresses/?results=1`, API version `2018-02-08` | Non-null results array with string object_id/object_owner; incomplete addresses may still authenticate. Pagination links are never followed. |
+| ShipEngine | `API-Key` `GET /v1/account/settings` | Documented default_label_layout enum (`4x6` or `Letter`); fixed US/EU authorization-only fallback. |
+| Easyship | Bearer `GET /2024-09/account` | Nested account easyship_company_id/name; optional billing address, credit and payment-source scopes are not required for success. |
+| Jotform | `APIKEY` `GET /user` | Explicit numeric responseCode=200 plus content username/email; fixed global/EU/HIPAA authorization-only fallback. Custom-host rejection stays unknown. |
+| Klipfolio | `kf-api-key` `GET /api/1.0/profile` | Replaces user enumeration with current-profile data id/email. Optional meta must indicate success if present. |
+| Moosend | `GET /v3/lists/1/1.json?apikey=…` | Replaces an unsupported query-based limit with SDK-documented path pagination. Explicit Code=0, absent/null/empty Error and a non-null Context.MailingLists collection with ID/Name are required. |
+| Ayrshare | Bearer `GET /api/user` | Primary-profile refId/email, without application-error code/status fields; linked social accounts need not exist. Profile keys requiring additional primary-account context remain unknown. |
+| Dynalist | JSON-token `POST /api/v1/file/list` | Read-only POST requires _code=OK, root_file_id, and non-null files with id and document/folder types. Exact InvalidToken is unverified only on HTTP 200 without contradictory success fields; TooManyRequests stays unknown/rate_limited. |
+| Ticket Tailor | Basic-auth `GET /v1/overview` | Replaces customer-order retrieval with box_office_name/period/currency evidence; financial statistics are suppressed. |
+
+Regional/environment probes stop on malformed success, redirects, throttling,
+outages, transport/read errors and cancellation. Legitimate empty collections are
+accepted; missing/null collections and malformed entries are not. Dynalist's
+documented file-list API has no pagination, so it performs one request under the
+shared bounded response reader. It does not fetch document contents. Ordinary
+provider request limits still apply to these account reads.
+
+Mocked tests cover all ten exact requests and default-policy promotions, empty
+collections, optional scopes, failed/incomplete resource records, typed
+application codes, contradictory errors, response suppression, non-200
+success-looking bodies, transport/read failure, fallback order, final-region
+success and cancellation. Earlier Dynalist and Signaturit tests now use complete
+documented success fixtures.
+
+Official evidence checked 2026-09-25:
+
+- [Signaturit signature lists, authentication and environments](https://docs.signaturit.com/api).
+- [Shippo address list, pagination, version and object schema](https://docs.goshippo.com/api-reference/addresses/list-all-addresses.md).
+- [ShipEngine official OpenAPI account-settings enum](https://github.com/ShipEngine/shipengine-openapi/blob/master/openapi.yaml).
+- [Easyship account and scope-specific examples](https://developers.easyship.com/reference/account_show.md).
+- [Jotform current-user response and API-key authentication](https://api.jotform.com/docs/).
+- [Klipfolio current-user profile](https://apidocs.klipfolio.com/reference/profile.md) and [authentication and error ambiguity](https://apidocs.klipfolio.com/reference/getting-started.md).
+- [Moosend official SDK paging contract](https://github.com/moosend/api-wrappers-go/blob/master/docs/MailingListsApi.md), [request implementation](https://github.com/moosend/api-wrappers-go/blob/master/mailing_lists_api.go), [response envelope](https://github.com/moosend/api-wrappers-go/blob/master/getting_all_active_mailing_lists_with_paging_response.go), [context](https://github.com/moosend/api-wrappers-go/blob/master/context.go), and [list schema](https://github.com/moosend/api-wrappers-go/blob/master/mailing_list.go). Direct documentation had a certificate-chain failure; the official SDK supplied the contract. USER_NOT_FOUND is conservatively unknown.
+- [Ayrshare primary/profile context and optional social links](https://www.ayrshare.com/docs/apis/user/profile-details.md).
+- [Dynalist file-list schema and exact application-error meanings](https://apidocs.dynalist.io/).
+- [Ticket Tailor overview](https://developers.tickettailor.com/docs/api/get-overview) and [authentication](https://developers.tickettailor.com/docs/intro). The overview schema is embedded in the documentation's generated page bundle.

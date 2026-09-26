@@ -193,6 +193,9 @@ func TestDynalistVerifierUsesProviderResultCode(t *testing.T) {
 					t.Fatalf("request body=%q err=%v", string(body), err)
 				}
 				response := `{"_code":"` + test.code + `"}`
+				if test.code == "OK" {
+					response = `{"_code":"OK","root_file_id":"root","files":[]}`
+				}
 				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(response)), Header: make(http.Header)}, nil
 			})}
 			result := verifyDynalist(WithVerificationHTTPClient(context.Background(), client), "secret")
@@ -1069,7 +1072,7 @@ func TestSignaturitVerifierTriesSandbox(t *testing.T) {
 			body := `{"error":"invalid_grant","error_message":"The access token provided is invalid."}`
 			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"signatures":[]}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`[]`)), Header: make(http.Header)}, nil
 	})}
 	result := verifySignaturit(WithVerificationHTTPClient(context.Background(), client), "secret")
 	if result.Status != VerificationVerified || result.Response != "" || requests != 2 {
@@ -2289,8 +2292,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 199,
-		VerificationSafetyReadOnly:   197,
+		VerificationSafetyUnreviewed: 189,
+		VerificationSafetyReadOnly:   207,
 		VerificationSafetyAuthOnly:   72,
 		VerificationSafetyUnsafe:     99,
 	}
@@ -2303,7 +2306,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 368 || report.RequiresHardening != 143 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 378 || report.RequiresHardening != 133 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

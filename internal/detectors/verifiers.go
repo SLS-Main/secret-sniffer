@@ -1417,7 +1417,11 @@ func verifyShippo(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.goshippo.com/addresses/?results=1", nil)
 	req.Header.Set("Authorization", "ShippoToken "+secret)
 	req.Header.Set("Shippo-API-Version", "2018-02-08")
-	return verifyHTTPRequest(ctx, req)
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		return validIdentityCollection(p, "results", func(address identityPayload) bool {
+			return !identityHasErrors(address) && identityStrings(address, "object_id", "object_owner")
+		})
+	})
 }
 
 func verifyTaxJar(ctx context.Context, secret string) VerificationResult {
@@ -1476,25 +1480,10 @@ func verifyDynalist(ctx context.Context, secret string) VerificationResult {
 	body, _ := json.Marshal(map[string]string{"token": secret})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://dynalist.io/api/v1/file/list", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 || statusCode >= 300 && statusCode < 400 {
-			return VerificationResult{}, false
-		}
-		var response struct {
-			Code string `json:"_code"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-		}
-		switch response.Code {
-		case "OK":
-			return VerificationResult{Status: VerificationVerified}, true
-		case "InvalidToken":
-			return invalidCredentialResult(), true
-		default:
-			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-		}
-	})
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyDynalistFiles)
+	result.Response = ""
+	return result
 }
 
 func verifyGyazo(ctx context.Context, secret string) VerificationResult {
@@ -3211,8 +3200,10 @@ func verifyAirbyte(ctx context.Context, secret string) VerificationResult {
 
 func verifyShipEngine(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api.shipengine.com/v1/account/settings", "https://api.eu.shipengine.com/v1/account/settings"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyHeaderGET(ctx, secret, endpoint, "API-Key", "")
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "API-Key", "", func(p identityPayload) bool {
+			return identityStringEquals(p, "default_label_layout", "4x6") || identityStringEquals(p, "default_label_layout", "Letter")
+		})
 	})
 }
 
@@ -3285,8 +3276,11 @@ func verifyTheOddsAPI(ctx context.Context, secret string) VerificationResult {
 
 func verifyJotform(ctx context.Context, secret string) VerificationResult {
 	hosts := []string{"api.jotform.com", "eu-api.jotform.com", "hipaa-api.jotform.com"}
-	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
-		return verifyHeaderGET(ctx, secret, "https://"+host+"/user", "APIKEY", "")
+	return verifyIdentityEndpoints(ctx, hosts, func(host string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, "https://"+host+"/user", "APIKEY", "", func(p identityPayload) bool {
+			user := identityObject(p, "content")
+			return string(p["responseCode"]) == "200" && !identityHasErrors(user) && identityStrings(user, "username", "email")
+		})
 	})
 }
 
@@ -3980,7 +3974,10 @@ func verifyOmnisend(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyEasyship(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://public-api.easyship.com/2024-09/account")
+	return verifyIdentityGET(ctx, secret, "https://public-api.easyship.com/2024-09/account", "Authorization", "Bearer ", func(p identityPayload) bool {
+		account := identityObject(p, "account")
+		return !identityHasErrors(account) && identityStrings(account, "easyship_company_id", "name")
+	})
 }
 
 func verifyTemporalCloud(ctx context.Context, secret string) VerificationResult {
@@ -4187,11 +4184,10 @@ func verifySaladCloud(ctx context.Context, secret string) VerificationResult {
 func verifyAyrshare(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ayrshare.com/api/user", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden && containsAnyFold(string(body), `"code":102`, "api key not valid") {
-			return invalidCredentialResult(), true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		_, hasCode := p["code"]
+		_, hasStatus := p["status"]
+		return !hasCode && !hasStatus && identityStrings(p, "refId", "email")
 	})
 }
 
@@ -4985,11 +4981,7 @@ func verifyDetectLanguage(ctx context.Context, secret string) VerificationResult
 }
 
 func verifyKlipfolio(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.klipfolio.com/api/1.0/users?limit=1", nil)
-	req.Header.Set("kf-api-key", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"meta", "success"}, "auth_fail", "credentials you provided are invalid"))
-	result.Response = ""
-	return result
+	return verifyIdentityGET(ctx, secret, "https://app.klipfolio.com/api/1.0/profile", "kf-api-key", "", validKlipfolioProfile)
 }
 
 func verifyWhoxy(ctx context.Context, secret string) VerificationResult {
@@ -5099,30 +5091,9 @@ func verifySerpstack(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyMoosend(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://api.moosend.com/v3/lists.json?format=json&PageSize=1&apikey=" + url.QueryEscape(secret)
+	endpoint := "https://api.moosend.com/v3/lists/1/1.json?apikey=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		var response struct {
-			Code  int             `json:"Code"`
-			Error string          `json:"Error"`
-			Data  json.RawMessage `json:"Context"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-		}
-		if response.Code == 0 && len(response.Data) > 0 && string(response.Data) != "null" {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		if response.Code == 100 && response.Error == "USER_NOT_FOUND" {
-			return invalidCredentialResult(), true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-	})
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, validMoosendLists)
 }
 
 func verifyCanny(ctx context.Context, secret string) VerificationResult {
@@ -5572,10 +5543,13 @@ func verifyAutoklose(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyTicketTailor(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.tickettailor.com/v1/orders?limit=1", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.tickettailor.com/v1/overview", nil)
 	req.SetBasicAuth(secret, "")
 	req.Header.Set("Accept", "application/json")
-	return verifyPrivateCollection(ctx, req)
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		currency := identityObject(p, "currency")
+		return identityStrings(p, "box_office_name", "period") && !identityHasErrors(currency) && identityStrings(currency, "code", "symbol")
+	})
 }
 
 func verifyNightfall(ctx context.Context, secret string) VerificationResult {
@@ -5686,10 +5660,18 @@ func verifyShipday(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySignaturit(ctx context.Context, secret string) VerificationResult {
-	result := verifyEndpoints(ctx, []string{"https://api.signaturit.com/v3/signatures.json?limit=1", "https://api.sandbox.signaturit.com/v3/signatures.json?limit=1"}, func(endpoint string) VerificationResult {
+	result := verifyIdentityEndpoints(ctx, []string{"https://api.signaturit.com/v3/signatures.json?limit=1", "https://api.sandbox.signaturit.com/v3/signatures.json?limit=1"}, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.Header.Set("Authorization", "Bearer "+secret)
-		return verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("invalid_grant", "access token provided is invalid"))
+		req.Header.Set("Accept", "application/json")
+		result := verifyHTTPRequestWithClassifier(ctx, req, func(status int, body []byte) (VerificationResult, bool) {
+			if status == http.StatusOK && validIdentityCollection(identityPayload{"signatures": body}, "signatures", validSignaturitSignature) {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			return verifyJSONReadClassification(status, body)
+		})
+		result.Response = ""
+		return result
 	})
 	result.Response = ""
 	return result
