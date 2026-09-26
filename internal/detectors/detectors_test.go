@@ -988,7 +988,7 @@ func TestShotstackVerifierTriesBothEnvironments(t *testing.T) {
 			body := `{"detail":"Invalid or disabled API key for the Sandbox API"}`
 			return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 		}
-		body := `{"success":true,"response":{"templates":[]}}`
+		body := `{"success":true,"response":{"owner":"user1","templates":[]}}`
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
 	result := verifyShotstack(WithVerificationHTTPClient(context.Background(), client), "secret")
@@ -2292,9 +2292,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 189,
-		VerificationSafetyReadOnly:   207,
-		VerificationSafetyAuthOnly:   72,
+		VerificationSafetyUnreviewed: 179,
+		VerificationSafetyReadOnly:   215,
+		VerificationSafetyAuthOnly:   74,
 		VerificationSafetyUnsafe:     99,
 	}
 	for safety, want := range expected {
@@ -2306,7 +2306,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 378 || report.RequiresHardening != 133 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 388 || report.RequiresHardening != 123 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

@@ -633,8 +633,8 @@ func verifySnyk(ctx context.Context, secret string) VerificationResult {
 		"https://api.eu.snyk.io/rest/self?version=2024-10-15",
 		"https://api.au.snyk.io/rest/self?version=2024-10-15",
 	}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyHeaderGET(ctx, secret, endpoint, "Authorization", "token ")
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "token ", validSnykPrincipal)
 	})
 }
 
@@ -1528,7 +1528,9 @@ func verifyLunchMoney(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyMeraki(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.meraki.com/api/v1/organizations")
+	return verifyIdentityGET(ctx, secret, "https://api.meraki.com/api/v1/administered/identities/me", "Authorization", "Bearer ", func(p identityPayload) bool {
+		return identityStrings(p, "name", "email")
+	})
 }
 
 func verifyMiro(ctx context.Context, secret string) VerificationResult {
@@ -2707,12 +2709,7 @@ func verifyQase(ctx context.Context, secret string) VerificationResult {
 func verifyProductboard(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.productboard.com/v2/members", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "auth.invalid") {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
-	})
+	return verifyIdentityRequest(ctx, req, validProductboardMembers)
 }
 
 func verifySanity(ctx context.Context, secret string) VerificationResult {
@@ -3070,7 +3067,10 @@ func verifyWise(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyWistia(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.wistia.com/v1/account.json")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.wistia.com/modern/token", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("X-Wistia-API-Version", "2026-07")
+	return verifyIdentityRequest(ctx, req, validWistiaToken)
 }
 
 func verifyFlickr(ctx context.Context, secret string) VerificationResult {
@@ -3421,7 +3421,7 @@ func verifyRailway(ctx context.Context, secret string) VerificationResult {
 func verifyTwelveData(ctx context.Context, secret string) VerificationResult {
 	endpoint := "https://api.twelvedata.com/api_usage?apikey=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequestWithClassifier(ctx, req, classifyAPIlayerKey)
+	return verifyIdentityRequest(ctx, req, validTwelveDataUsage)
 }
 
 func verifyExchangeRateAPI(ctx context.Context, secret string) VerificationResult {
@@ -3453,36 +3453,16 @@ func verifyExchangeRateAPI(ctx context.Context, secret string) VerificationResul
 func verifyGuardian(ctx context.Context, secret string) VerificationResult {
 	endpoint := "https://content.guardianapis.com/search?page-size=1&api-key=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequest(ctx, req)
+	return verifyIdentityRequest(ctx, req, validGuardianSearch)
 }
 
 func verifyNewsAPI(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://newsapi.org/v2/top-headlines?country=us&pageSize=1", nil)
 	req.Header.Set("X-Api-Key", secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		var response struct {
-			Status string `json:"status"`
-			Code   string `json:"code"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			if statusCode >= 200 && statusCode < 300 {
-				return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-			}
-			return VerificationResult{}, false
-		}
-		if response.Status == "ok" {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		switch response.Code {
-		case "apiKeyInvalid", "apiKeyDisabled":
-			return invalidCredentialResult(), true
-		default:
-			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-		}
-	})
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyNewsAPIHeadlines)
+	result.Response = ""
+	return result
 }
 
 func classifyAPIlayerKey(statusCode int, body []byte) (VerificationResult, bool) {
@@ -3997,7 +3977,7 @@ func verifyPendo(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyNorthflank(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.northflank.com/v1/projects")
+	return verifyIdentityGET(ctx, secret, "https://api.northflank.com/v1/auth", "Authorization", "Bearer ", validNorthflankAuth)
 }
 
 func verifyFlagsmith(ctx context.Context, secret string) VerificationResult {
@@ -5459,10 +5439,10 @@ func verifyUClassify(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyShotstack(ctx context.Context, secret string) VerificationResult {
-	result := verifyEndpoints(ctx, []string{"https://api.shotstack.io/edit/stage/templates", "https://api.shotstack.io/edit/v1/templates"}, func(endpoint string) VerificationResult {
+	result := verifyIdentityEndpoints(ctx, []string{"https://api.shotstack.io/edit/stage/templates", "https://api.shotstack.io/edit/v1/templates"}, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.Header.Set("x-api-key", secret)
-		return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"success", "response", "templates"}, "invalid or disabled api key"))
+		return verifyIdentityRequest(ctx, req, validShotstackTemplates)
 	})
 	result.Response = ""
 	return result
@@ -7080,9 +7060,11 @@ func verifyAppFollow(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyOptimizely(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.optimizely.com/v2/projects", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyPrivateCollection(ctx, req, "invalid_credentials", "malformed or invalid authorization header")
+	return verifyIdentityGET(ctx, secret, "https://api.optimizely.com/v2/me", "Authorization", "Bearer ", func(p identityPayload) bool {
+		profile := identityObject(p, "profile")
+		_, hasCode := p["code"]
+		return !hasCode && identityStrings(p, "id") && !identityHasErrors(profile) && identityStrings(profile, "email")
+	})
 }
 
 func verifyCliengo(ctx context.Context, secret string) VerificationResult {

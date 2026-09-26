@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 16:
+After remediation batch 17:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 378 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 133 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 388 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 123 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 207
-`read_only`, 72 `auth_only`, 99 `unsafe`, and 189 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 215
+`read_only`, 74 `auth_only`, 99 `unsafe`, and 179 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -324,6 +324,52 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 17: ten principal, token and bounded-read verifiers
+
+Eight probes are promoted to `read_only`; Wistia and Northflank are `auth_only`.
+All require HTTP 200 and provider-specific structured evidence. Response bodies
+are suppressed on success and failure. Permissions, subscription restrictions,
+regions, unsupported token families, throttling and provider outages remain
+unknown. No response-supplied links are followed.
+
+| Provider | Contract and evidence required |
+| --- | --- |
+| Snyk | Token-authenticated `GET /rest/self?version=2024-10-15`; data id/type and user email or service-account/app-instance name. Fixed legacy-US, US, EU and AU hosts; fallback only on authorization ambiguity. The existing UUID detector/authentication is retained; app OAuth and newer PAT formats are not inferred from it. API plan restrictions remain unknown. |
+| Meraki | Bearer `GET /api/v1/administered/identities/me` replaces organization enumeration; name/email required. Regional redirects are not followed and remain unknown. |
+| Productboard | Bearer `GET /v2/members`, first page only; non-null data array, member id/type and fields.role. Redacted PII is accepted without requesting additional scopes. The endpoint documents cursors but no caller-controlled page size. |
+| Wistia | Bearer `GET /modern/token`, `X-Wistia-API-Version: 2026-07`; permanent/expiring/oauth type, non-null string scopes, nullable name and matching application context. Empty scopes are legitimate. Account-inactive and scope failures remain unknown. |
+| Twelve Data | Escaped query-authenticated `GET /api_usage`; timestamp/plan category, nonnegative integer current_usage/plan_limit and optional daily counters. Usage can exceed a limit without making the credential invalid. This verification consumes **one API credit** per request. |
+| The Guardian | Escaped query-authenticated `GET /search?page-size=1`; nested ok status, user tier, nonnegative total and typed article id/type/webUrl. Article metadata suppressed. |
+| NewsAPI | `X-Api-Key` `GET /v2/top-headlines?country=us&pageSize=1`; ok status, nonnegative totalResults and non-null articles with url/publishedAt. Exact apiKeyInvalid/apiKeyDisabled codes are unverified only with HTTP 401, error status and no contradictory success fields. Exhaustion and rate limits remain unknown. |
+| Northflank | Bearer `GET /v1/auth` replaces projects; data tokenKind and entityType enums, token id, entityId/entityUid and createdAt. Role and permissions are optional. |
+| Shotstack | `x-api-key` `GET /edit/{stage,v1}/templates`; explicit success=true, response owner and typed template id/name. Only authorization ambiguity permits trying the other environment. No renders are submitted. |
+| Optimizely | Bearer `GET /v2/me` replaces projects; string id and profile.email, no expansion requested. Application error codes invalidate success evidence. |
+
+Collections may be empty, but missing/null collections and malformed entries are
+unknown. Productboard's first page and Shotstack's unpaginated template metadata
+use the shared bounded response reader. News and usage reads remain subject to
+provider quotas. Snyk/Shotstack fallback stops on malformed success, redirects,
+throttling, outages, transport/read failures and cancellation.
+
+Mocked regression tests cover all ten exact requests, authentication encoding,
+runtime safety/default-policy access, valid credential variants, redacted PII,
+empty scopes and collections, contradictory errors, malformed schemas, non-200
+success-like responses, response suppression, fallback order and cancellation.
+The older Shotstack fallback fixture now includes the documented owner field.
+
+Official evidence checked 2026-09-26:
+
+- [Snyk self API and linked OpenAPI principal schemas](https://docs.snyk.io/developer-tools/snyk-api/reference/users.md), [authentication and subscription restrictions](https://docs.snyk.io/developer-tools/snyk-api/authentication-for-api.md).
+- [Meraki current identity](https://developer.cisco.com/meraki/api-v1/get-administered-identities-me/) and [official OpenAPI including Bearer security](https://github.com/meraki/openapi/blob/master/openapi/spec3.json).
+- [Productboard members, cursor pagination and PII scope](https://developer.productboard.com/reference/listmembers.md).
+- [Wistia versioned current-token schema and error codes](https://docs.wistia.com/reference/gettokendetails.md).
+- [Twelve Data usage schema and one-credit cost](https://twelvedata.com/docs#api-usage).
+- [Guardian search schema and page-size bounds](https://open-platform.theguardian.com/documentation/md/content_search.md), [authentication](https://open-platform.theguardian.com/documentation/md/common.md).
+- [NewsAPI top headlines](https://newsapi.org/docs/endpoints/top-headlines) and [structured errors](https://newsapi.org/docs/errors).
+- [Northflank current authentication](https://northflank.com/docs/v1/api/miscellaneous/auth/get-current-authentication-info.md).
+- [Shotstack list templates, schema and environment authentication](https://shotstack.io/docs/api/).
+- [Optimizely current user and unexpanded profile](https://docs.developers.optimizely.com/web-experimentation/reference/get_me.md).
 
 ## Remediation batch 16: ten collection and account verifiers
 
