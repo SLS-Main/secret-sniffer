@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 19:
+After remediation batch 20:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 408 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 103 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 418 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 93 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 234
-`read_only`, 75 `auth_only`, 99 `unsafe`, and 159 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 244
+`read_only`, 75 `auth_only`, 99 `unsafe`, and 149 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -324,6 +324,53 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 20: ten bounded identity and metadata verifiers
+
+All ten probes are now `read_only`. Success requires HTTP 200 and the structured
+provider evidence below. Responses are suppressed on success and failure; scope,
+credential-family, environment, quota and provider failures remain unknown.
+Figma scope errors, LINE forbidden responses and Bannerbear payment errors no
+longer count as successful authentication.
+
+| Provider | Contract and evidence required |
+| --- | --- |
+| Figma | `X-Figma-Token` `GET /v1/me`; id/email/handle and no err envelope. Only `figd_` personal tokens are submitted. Other detected Figma families remain findings but return unknown without a request or token exchange. Missing current_user:read scope remains unknown. |
+| Clerk | Bearer `GET /v1/users/count` replaces deprecated clients listing; object=total_count and a nonnegative integer total_count, including zero. Retrieves no user records. Test/live secret-key detection retained with whole-token boundaries. |
+| Zeplin | Bearer `GET /v1/users/me`; id/username/email required. Aliased emails and absent optional avatar/emotar metadata are legitimate. Supported opaque personal tokens retain their existing format; JWT OAuth/refresh tokens are not truncated into that format. |
+| Adafruit IO | `X-AIO-Key` `GET /api/v2/user`; positive integer id, username and created_at. Modern aio_ and legacy key forms use the same authentication; optional name/color/timezone are not required. |
+| Pipedream | Bearer `GET /v1/users/me`; nested data id/username/email. Both free and paid account schemas work without requiring plan-specific quota fields. This endpoint supports user API keys, not workspace OAuth clients; subtype rejection remains unknown. |
+| LINE Messaging | Bearer `GET /v2/bot/info`; userId/basicId/displayName and documented chatMode/markAsReadMode enums. Supported opaque channel credentials preserve base64 padding and slash characters. No messages are sent and no tokens are issued or refreshed. Other token lengths/formats are outside this detector's supported family. |
+| Bannerbear | Bearer `GET /v2/account`; uid/created_at and nonnegative integer api_usage/api_quota. Zero quotas, over-quota usage and nullable plan/project metadata are legitimate success data. The supported V2 format is retained; V5 incompatibility and payment rejection remain unknown. |
+| Elastic Email | `X-ElasticEmail-ApiKey` `GET /v4/lists?limit=1&offset=0` replaces sensitive API-key enumeration. Array entries require ListName/DateAdded and boolean AllowUnsubscribe; nullable PublicListID is legitimate. Missing ViewContacts permission remains unknown. |
+| Tradier | Bearer `GET /v1/user/profile`; nested profile id/name. Fixed production/sandbox fallback only after authorization ambiguity. Account associations, including closed accounts, are not required for identity; financial metadata is suppressed. Supported token boundaries prevent partial captures. |
+| Trigger.dev | Bearer `GET /api/v1/runs?page[size]=10`; non-null data and pagination objects with typed optional cursors, run identity/status/timestamps/isTest and environment id/name. Ten is the documented minimum page size. Failed/cancelled runs and empty collections authenticate; no jobs are triggered. Environment-key prefixes are now detected standalone, including staging and preview. |
+
+All probes use the shared response-size cap and do not follow response-supplied
+links or redirects. Tradier fallback stops on throttling, outages, malformed
+success, transport/read failures and cancellation. Trigger.dev branch context is
+not guessed; self-hosted, branch-restricted and scoped-key failures remain unknown.
+Read requests remain subject to provider request quotas.
+
+Mocked regressions cover all ten exact requests, authentication, runtime safety
+and default-policy access, valid empty/nullable data, schema errors, contradictory
+error envelopes, non-200 success-like bodies, response suppression and transport
+failures. Additional tests cover Tradier fallback/cancellation, Figma no-request
+credential families, environment-key detection, legacy/modern Adafruit keys,
+padded LINE tokens and oversized-token truncation prevention.
+
+Official evidence checked 2026-09-27:
+
+- [Figma current user and required scope](https://developers.figma.com/docs/rest-api/users-endpoints/), [user fields](https://developers.figma.com/docs/rest-api/users-types/), [personal-token authentication](https://developers.figma.com/docs/rest-api/personal-access-tokens/).
+- [Clerk official OpenAPI: /users/count, TotalCount and Bearer security](https://github.com/clerk/openapi-specs/blob/main/bapi/2021-02-05.yml).
+- [Zeplin current user](https://docs.zeplin.dev/reference/getcurrentuser.md), [user schema and alias emails](https://docs.zeplin.dev/reference/user.md), [OAuth authentication and distinct JWT credentials](https://docs.zeplin.dev/reference/authentication.md).
+- [Adafruit IO user schema, header authentication and rate limits](https://io.adafruit.com/api/docs/http.html).
+- [Pipedream current-user schemas](https://pipedream.com/docs/rest-api/api-reference/users/get-current-user-info.md), [user-only endpoint restriction](https://pipedream.com/docs/rest-api/api-reference/users), [authentication families](https://pipedream.com/docs/rest-api/auth.md).
+- [LINE official OpenAPI bot-info schema](https://github.com/line/line-openapi/blob/main/messaging-api.yml), [channel-token families](https://developers.line.biz/en/docs/basics/channel-access-token/).
+- [Bannerbear V2 account and error contract](https://developers.bannerbear.com/v2/), [V5/V2 key incompatibility](https://developers.bannerbear.com/).
+- [Elastic Email official V4 OpenAPI: /lists, ContactsList and ViewContacts scope](https://api.elasticemail.com/public/v4/swagger).
+- [Tradier profile schema](https://docs.tradier.com/reference/brokerage-api-user-get-profile.md), [production and sandbox hosts](https://docs.tradier.com/docs/endpoints), [token environments](https://docs.tradier.com/docs/getting-started.md).
+- [Trigger.dev run schema and minimum page size](https://trigger.dev/docs/management/runs/list.md), [key families, scopes, branch and self-host context](https://trigger.dev/docs/apikeys.md).
 
 ## Remediation batch 19: ten account-context and authentication verifiers
 

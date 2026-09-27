@@ -796,21 +796,13 @@ func verifyDropbox(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyFigma(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.figma.com/v1/me", nil)
-	req.Header.Set("X-Figma-Token", secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode != http.StatusForbidden {
-			return VerificationResult{}, false
-		}
-		response := strings.ToLower(string(body))
-		switch {
-		case strings.Contains(response, "invalid scope"):
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
-		case strings.Contains(response, "invalid token"):
-			return invalidCredentialResult(), true
-		default:
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
+	// OAuth and refresh credentials must not be submitted as personal tokens.
+	if !strings.HasPrefix(secret, "figd_") {
+		return unknownVerificationResult("credential_type", "credential is not a supported personal access token")
+	}
+	return verifyIdentityGET(ctx, secret, "https://api.figma.com/v1/me", "X-Figma-Token", "", func(p identityPayload) bool {
+		_, hasError := p["err"]
+		return !hasError && identityStrings(p, "id", "email", "handle")
 	})
 }
 
@@ -1697,16 +1689,8 @@ func verifyLiveblocks(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyClerk(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.clerk.com/v1/clients?limit=1", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "clerk_key_invalid") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode == http.StatusUnauthorized {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityGET(ctx, secret, "https://api.clerk.com/v1/users/count", "Authorization", "Bearer ", func(p identityPayload) bool {
+		return identityStringEquals(p, "object", "total_count") && identityNonnegativeIntegers(p, "total_count")
 	})
 }
 
@@ -1870,11 +1854,15 @@ func verifyPushbullet(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyZeplin(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.zeplin.dev/v1/users/me")
+	return verifyIdentityGET(ctx, secret, "https://api.zeplin.dev/v1/users/me", "Authorization", "Bearer ", func(p identityPayload) bool {
+		return identityStrings(p, "id", "username", "email")
+	})
 }
 
 func verifyAdafruitIO(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://io.adafruit.com/api/v2/user", "X-AIO-Key", "")
+	return verifyIdentityGET(ctx, secret, "https://io.adafruit.com/api/v2/user", "X-AIO-Key", "", func(p identityPayload) bool {
+		return collectionPositiveInteger(p["id"]) && identityStrings(p, "username", "created_at")
+	})
 }
 
 func verifyAtera(ctx context.Context, secret string) VerificationResult {
@@ -2223,7 +2211,10 @@ func verifyWeightsAndBiases(ctx context.Context, secret string) VerificationResu
 }
 
 func verifyPipedream(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.pipedream.com/v1/users/me")
+	return verifyIdentityGET(ctx, secret, "https://api.pipedream.com/v1/users/me", "Authorization", "Bearer ", func(p identityPayload) bool {
+		user := identityObject(p, "data")
+		return !identityHasErrors(user) && identityStrings(user, "id", "username", "email")
+	})
 }
 
 func verifyCrowdin(ctx context.Context, secret string) VerificationResult {
@@ -2235,14 +2226,7 @@ func verifyEventbrite(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyLINEMessaging(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.line.me/v2/bot/info", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden {
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a restricted channel token"}, true
-		}
-		return VerificationResult{}, false
-	})
+	return verifyIdentityGET(ctx, secret, "https://api.line.me/v2/bot/info", "Authorization", "Bearer ", validLINEBot)
 }
 
 func verifyMessageBird(ctx context.Context, secret string) VerificationResult {
@@ -2781,13 +2765,8 @@ func verifyCloudConvert(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyBannerbear(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.bannerbear.com/v2/account", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusPaymentRequired {
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a key with exhausted quota"}, true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityGET(ctx, secret, "https://api.bannerbear.com/v2/account", "Authorization", "Bearer ", func(p identityPayload) bool {
+		return identityStrings(p, "uid", "created_at") && identityNonnegativeIntegers(p, "api_usage", "api_quota")
 	})
 }
 
@@ -3501,17 +3480,20 @@ func jsonObject(body []byte) bool {
 }
 
 func verifyElasticEmail(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.elasticemail.com/v4/security/apikeys", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.elasticemail.com/v4/lists?limit=1&offset=0", nil)
 	req.Header.Set("X-ElasticEmail-ApiKey", secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusBadRequest && containsAnyFold(string(body), "apikey expired", "invalid api key") {
-			return invalidCredentialResult(), true
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(status int, body []byte) (VerificationResult, bool) {
+		if status == http.StatusOK && validIdentityCollection(identityPayload{"lists": body}, "lists", func(list identityPayload) bool {
+			var allow *bool
+			return !identityHasErrors(list) && identityStrings(list, "ListName", "DateAdded") && json.Unmarshal(list["AllowUnsubscribe"], &allow) == nil && allow != nil
+		}) {
+			return VerificationResult{Status: VerificationVerified}, true
 		}
-		if statusCode == http.StatusBadRequest {
-			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-		}
-		return VerificationResult{}, false
+		return verifyJSONReadClassification(status, body)
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyImgix(ctx context.Context, secret string) VerificationResult {
@@ -4569,10 +4551,12 @@ func verifyFinnhub(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyTradier(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.tradier.com/v1/user/profile", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	req.Header.Set("Accept", "application/json")
-	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"profile"}, "invalid access token", "keymanagement.service.invalid_access_token"))
+	return verifyIdentityEndpoints(ctx, []string{"https://api.tradier.com/v1/user/profile", "https://sandbox.tradier.com/v1/user/profile"}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", func(p identityPayload) bool {
+			profile := identityObject(p, "profile")
+			return !identityHasErrors(profile) && identityStrings(profile, "id", "name")
+		})
+	})
 }
 
 func verifyGeocodio(ctx context.Context, secret string) VerificationResult {
@@ -6030,11 +6014,12 @@ func verifyOpticOdds(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyTriggerDev(ctx context.Context, secret string) VerificationResult {
+	if !strings.HasPrefix(secret, "tr_dev_") && !strings.HasPrefix(secret, "tr_prod_") && !strings.HasPrefix(secret, "tr_stg_") && !strings.HasPrefix(secret, "tr_preview_") {
+		return unknownVerificationResult("credential_type", "credential is not a supported environment key")
+	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.trigger.dev/api/v1/runs?page%5Bsize%5D=10", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"data", "pagination"}, "invalid api key"))
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, validTriggerRuns)
 }
 
 func verifyTrayIO(ctx context.Context, secret string) VerificationResult {
