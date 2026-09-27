@@ -516,7 +516,10 @@ func verifyTailscale(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyBuildkite(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.buildkite.com/v2/access-token")
+	if !strings.HasPrefix(secret, "bkua_") {
+		return unknownVerificationResult("credential_type", "credential is not a supported user API token")
+	}
+	return verifyIdentityGET(ctx, secret, "https://api.buildkite.com/v2/access-token", "Authorization", "Bearer ", validBuildkiteToken)
 }
 
 func verifyPostHog(ctx context.Context, secret string) VerificationResult {
@@ -2116,15 +2119,10 @@ func verifyWrike(ctx context.Context, secret string) VerificationResult {
 		"https://app-eu.wrike.com/api/v4/contacts?me=true",
 		"https://app-us2.wrike.com/api/v4/contacts?me=true",
 	}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.Header.Set("Authorization", "Bearer "+secret)
-		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-			if statusCode == http.StatusForbidden && containsAnyFold(string(body), "access_forbidden") {
-				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
-			}
-			return VerificationResult{}, false
-		})
+		return verifyIdentityRequest(ctx, req, validWrikeContacts)
 	})
 }
 
@@ -2135,16 +2133,8 @@ func verifyPrefect(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPolar(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.polar.sh/v1/organizations/?page=1&limit=1", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "organizations:read", "insufficient scope") {
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
-		}
-		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "invalid_token") {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityEndpoints(ctx, []string{"https://api.polar.sh/v1/organizations/?page=1&limit=1", "https://sandbox-api.polar.sh/v1/organizations/?page=1&limit=1"}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", validPolarOrganizations)
 	})
 }
 
@@ -2234,15 +2224,7 @@ func verifyLINEMessaging(ctx context.Context, secret string) VerificationResult 
 func verifyMessageBird(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://rest.messagebird.com/balance", nil)
 	req.Header.Set("Authorization", "AccessKey "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), `"code":2`, "incorrect access_key") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode == http.StatusUnauthorized {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
-	})
+	return verifyIdentityRequest(ctx, req, validMessageBirdBalance)
 }
 
 func verifyTelnyx(ctx context.Context, secret string) VerificationResult {
@@ -3502,15 +3484,10 @@ func verifyElasticEmail(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyImgix(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.imgix.com/api/v1/sources?page[limit]=1", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.imgix.com/api/v1/sources?page%5Bnumber%5D=0&page%5Bsize%5D=1&fields%5Bsources%5D=name", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequest(ctx, req)
-	if result.Status == VerificationUnverified {
-		result.Status = VerificationUnknown
-		result.ErrorCategory = "credential_type"
-		result.Message = "credential may be an imgix secure URL token"
-	}
-	return result
+	req.Header.Set("Accept", "application/vnd.api+json")
+	return verifyIdentityRequest(ctx, req, validImgixSources)
 }
 
 func verifyKeyCDN(ctx context.Context, secret string) VerificationResult {
@@ -3568,13 +3545,7 @@ func verifyCockroachCloud(ctx context.Context, secret string) VerificationResult
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://cockroachlabs.cloud/api/v1/clusters?pagination.limit=1", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
 	req.Header.Set("Cc-Version", "2024-09-16")
-	result := verifyHTTPRequest(ctx, req)
-	if result.Status == VerificationUnverified {
-		result.Status = VerificationUnknown
-		result.ErrorCategory = "credential_type"
-		result.Message = "credential subtype could not be confirmed"
-	}
-	return result
+	return verifyIdentityRequest(ctx, req, validCockroachClusters)
 }
 
 func verifySingleStore(ctx context.Context, secret string) VerificationResult {
@@ -3779,37 +3750,24 @@ func verifyRocketReach(ctx context.Context, secret string) VerificationResult {
 func verifyZeroBounce(ctx context.Context, secret string) VerificationResult {
 	endpoint := "https://api.zerobounce.net/v2/getcredits?api_key=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
+		var p identityPayload
+		if statusCode == http.StatusOK && json.Unmarshal(body, &p) == nil && p != nil && !identityHasErrors(p) {
+			var credits *int64
+			if json.Unmarshal(p["Credits"], &credits) == nil && credits != nil {
+				if *credits >= 0 {
+					return VerificationResult{Status: VerificationVerified}, true
+				}
+				if *credits == -1 {
+					return invalidCredentialResult(), true
+				}
+			}
 		}
-		var response map[string]any
-		decoder := json.NewDecoder(bytes.NewReader(body))
-		decoder.UseNumber()
-		if decoder.Decode(&response) != nil {
-			return VerificationResult{}, false
-		}
-		var credits int64
-		var err error
-		switch value := response["Credits"].(type) {
-		case json.Number:
-			credits, err = value.Int64()
-		case string:
-			credits, err = strconv.ParseInt(value, 10, 64)
-		default:
-			err = errors.New("missing credits")
-		}
-		if err != nil {
-			return unknownVerificationResult("provider_response", "provider returned an unexpected response"), true
-		}
-		if credits >= 0 {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		if credits == -1 {
-			return invalidCredentialResult(), true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		return verifyJSONReadClassification(statusCode, body)
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyDetectify(ctx context.Context, secret string) VerificationResult {
@@ -3958,7 +3916,9 @@ func verifyTemporalCloud(ctx context.Context, secret string) VerificationResult 
 }
 
 func verifyCircle(ctx context.Context, secret string) VerificationResult {
-	return positiveOnlyVerification(verifyBearerGET(ctx, secret, "https://api.circle.com/v1/configuration"), "credential may be a Circle webhook secret")
+	return verifyIdentityEndpoints(ctx, []string{"https://api.circle.com/v1/configuration", "https://api-sandbox.circle.com/v1/configuration"}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", validCircleConfiguration)
+	})
 }
 
 func verifyHightouch(ctx context.Context, secret string) VerificationResult {
@@ -4046,13 +4006,13 @@ func verifyGrowthBook(ctx context.Context, secret string) VerificationResult {
 
 func verifyPersona(ctx context.Context, secret string) VerificationResult {
 	endpoint := "https://api.withpersona.com/api/v1/inquiries?page%5Bsize%5D=1&fields%5Binquiry%5D=status"
-	return positiveOnlyVerification(verifyBearerGET(ctx, secret, endpoint), "credential may be a Persona webhook secret")
+	return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", validPersonaInquiries)
 }
 
 func verifyIncrease(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api.increase.com/programs?limit=1", "https://sandbox.increase.com/programs?limit=1"}
-	result := verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyBearerGET(ctx, secret, endpoint)
+	result := verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", validIncreasePrograms)
 	})
 	return positiveOnlyVerification(result, "credential may be an Increase webhook or OAuth client secret")
 }

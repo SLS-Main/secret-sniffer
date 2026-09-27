@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 21:
+After remediation batch 22:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 428 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 83 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 438 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 73 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 252
-`read_only`, 77 `auth_only`, 99 `unsafe`, and 139 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 261
+`read_only`, 78 `auth_only`, 99 `unsafe`, and 129 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -91,7 +91,7 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
    Sourcegraph, and regional content-management APIs.
    Confirm current documentation, validate identity/list schemas, suppress
    metadata, and classify structured failures conservatively.
-2. **Credential-subtype routing:** Buildkite, Increase, Persona, Circle. Different
+2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
    key families require different verification operations; a rejection by the
    wrong API must not label the key invalid.
 3. **Region and endpoint context:** Grafana, Zoho, Nylas, Insightly.
@@ -324,6 +324,57 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 22: ten token and bounded collection verifiers
+
+Buildkite is now `auth_only`; the other nine are `read_only`. All require HTTP
+200 and provider-specific schemas, suppress response bodies on every outcome,
+and preserve unknown results for permission, region and credential-family
+ambiguity. Collection probes read only one page and never follow returned links.
+Fixed-host fallback occurs only after authorization ambiguity, stopping on
+redirects, malformed responses, throttling, outages, transport/read failures and
+cancellation. All responses retain the shared byte limit.
+
+| Provider | Contract and supported scope |
+| --- | --- |
+| Buildkite | Bearer `GET /v2/access-token`; UUID, creation date and string scopes array required. Empty scopes and absent user metadata are legitimate. Only `bkua_` API tokens are submitted; existing `bkpa_`/`bkca_` detections return unknown without requests. No agent registration or token revocation. This does not add detection for every newer Buildkite token prefix. |
+| Increase | Bearer `GET /programs?limit=1`; data array with program type/id/name, including empty lists. Authorization-only production/sandbox fallback. Detected webhook/OAuth secrets are not declared invalid if the API rejects them. |
+| Persona | Bearer `GET /api/v1/inquiries?page[size]=1&fields[inquiry]=status`; inquiry id/type/status, including empty lists. Sparse fieldset limits inquiry metadata; all response data is suppressed. Status values are extensible. Webhook-secret, permission and quota failures remain unknown. |
+| Circle | Bearer `GET /v1/configuration`; nested data.payments.masterWalletId string, without an error code. Fixed production/sandbox fallback on authorization ambiguity. This verifies supported Circle Mint configuration credentials; other product keys and webhook secrets remain unknown on rejection. |
+| Cockroach Cloud | Bearer `GET /api/v1/clusters?pagination.limit=1` with existing Cc-Version; typed id/name/state per cluster, including empty lists. Optional infrastructure fields and cluster readiness are not required. Non-API secret and role ambiguity stays unknown. |
+| Polar | Bearer `GET /v1/organizations/?page=1&limit=1`; id/name/slug and integer pagination, including empty lists. Adds documented sandbox host with authorization-only fallback. Insufficient organizations:read scope no longer proves authentication. |
+| Wrike | Bearer `GET /api/v4/contacts?me=true`; kind=contacts and typed id/type/me=true entries. Empty collections and robot contacts accepted; optional names/profile metadata not required. Fixed US/EU/US2 authorization-only fallback; access_forbidden no longer proves authentication. Existing supported JWT length retained with whole-token boundaries. |
+| MessageBird | AccessKey `GET /balance`; prepaid/postpaid payment, type and numeric amount. Zero/postpaid and negative balances accepted. Adds unprefixed live-key detection while preserving test/legacy live-prefixed detections. Broad code-2 substring invalidation removed: authorization ambiguity is unknown. |
+| imgix | Bearer `GET /api/v1/sources?page[number]=0&page[size]=1&fields[sources]=name` with JSON:API Accept; sources id/type/name, including empty arrays. Corrects the old undocumented page[limit] parameter. Sparse fields avoid source deployment, signing tokens and origin configuration. Secure URL token rejection stays unknown. |
+| ZeroBounce | Documented `GET /v2/getcredits?api_key=...` retained; only HTTP 200 integer Credits authenticates, including zero. Exact -1 is invalid only in a well-formed, error-free HTTP 200 response. Strings, nulls, fractional/overflow values, trailing JSON and non-200 responses are unknown. Uses the existing global endpoint without regional fanout; query authentication is required by this documented GET contract. |
+
+The existing broad mixed-secret detectors remain useful findings even when their
+subtype cannot be verified. All ten patterns now reject truncated suffix matches.
+These probes may consume provider request quotas; no email validation, payments,
+messages, deployments or other resource creation occurs. ZeroBounce documents
+temporary blocking after repeated invalid-key requests; the verifier performs
+one request without retries.
+
+Mocked tests cover all ten exact methods/URLs/authentication headers, sparse and
+pagination parameters, ordinary verification policy, nonempty and empty success
+schemas, null/wrong-type fields, contradictory error envelopes, response
+suppression, non-200 success-like payloads, transport/read errors, authorization
+fallback ordering and cancellation. Additional tests cover ZeroBounce's exact
+invalid sentinel, Buildkite no-request subtypes, unprefixed MessageBird keys and
+whole-token detection boundaries.
+
+Official evidence checked 2026-09-27:
+
+- [Buildkite current-token introspection](https://buildkite.com/docs/apis/rest-api/access-token.md), [token families](https://buildkite.com/docs/platform/security/tokens.md).
+- [Increase program list, schema and limit](https://increase.com/documentation/api/programs).
+- [Persona inquiry list, sparse fields, pagination and permissions](https://docs.withpersona.com/api-reference/inquiries/list-all-inquiries.md).
+- [Circle Mint configuration schema, Bearer authentication and sandbox](https://developers.circle.com/api-reference/circle-mint/general/get-account-config.md).
+- [Cockroach Cloud official OpenAPI cluster list and roles](https://cockroachlabs.cloud/assets/docs/api/latest/openapi.json).
+- [Polar organization list and pagination](https://polar.sh/docs/api-reference/organizations/list.md), [sandbox API host and separate keys](https://polar.sh/docs/integrate/sandbox.md).
+- [Wrike current-user filter, contact schemas, hosts and Bearer auth](https://developers.wrike.com/reference/getcontactsempty.md).
+- [MessageBird balance schema](https://developers.messagebird.com/api/balance/), [unprefixed live keys and test authentication](https://developers.messagebird.com/api/#authentication).
+- [imgix sparse fields, JSON:API and pagination](https://docs.imgix.com/en-US/apis/management/general-usage), [source schema](https://docs.imgix.com/en-US/apis/management/sources).
+- [ZeroBounce credit balance GET, integer sentinel, regional hosts and quotas](https://www.zerobounce.net/docs/email-validation-api-quickstart/v2-credit-balance).
 
 ## Remediation batch 21: ten regional metadata and key-context verifiers
 

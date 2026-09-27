@@ -2293,9 +2293,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 139,
-		VerificationSafetyReadOnly:   252,
-		VerificationSafetyAuthOnly:   77,
+		VerificationSafetyUnreviewed: 129,
+		VerificationSafetyReadOnly:   261,
+		VerificationSafetyAuthOnly:   78,
 		VerificationSafetyUnsafe:     99,
 	}
 	for safety, want := range expected {
@@ -2307,7 +2307,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 428 || report.RequiresHardening != 83 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 438 || report.RequiresHardening != 73 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

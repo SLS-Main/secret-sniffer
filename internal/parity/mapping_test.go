@@ -39,7 +39,7 @@ func TestCurrentReportCountsMappings(t *testing.T) {
 		t.Fatalf("verification accounting mismatch: %#v", r.Verification)
 	}
 	classified := r.Verification.UnreviewedPatterns + r.Verification.ReadOnlyPatterns + r.Verification.AuthOnlyPatterns + r.Verification.UnsafePatterns
-	if classified != r.Verification.SecretSnifferVerifiablePatterns || r.Verification.UnreviewedPatterns != 139 || r.Verification.ReadOnlyPatterns != 252 || r.Verification.AuthOnlyPatterns != 77 || r.Verification.UnsafePatterns != 99 {
+	if classified != r.Verification.SecretSnifferVerifiablePatterns || r.Verification.UnreviewedPatterns != 129 || r.Verification.ReadOnlyPatterns != 261 || r.Verification.AuthOnlyPatterns != 78 || r.Verification.UnsafePatterns != 99 {
 		t.Fatalf("verification safety accounting mismatch: %#v", r.Verification)
 	}
 }
