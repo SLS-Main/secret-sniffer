@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 24:
+After remediation batch 25:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 458 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 53 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 468 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 43 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 280
-`read_only`, 79 `auth_only`, 99 `unsafe`, and 109 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 290
+`read_only`, 79 `auth_only`, 99 `unsafe`, and 99 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -94,7 +94,7 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
    key families require different verification operations; a rejection by the
    wrong API must not label the key invalid.
-3. **Region and endpoint context:** Grafana, Insightly, Pendo, Fulcrum.
+3. **Region and endpoint context:** Grafana, Insightly, Fulcrum, Tray.io.
    Correlate endpoint context and use only documented bounded fallbacks. Preserve
    unknown results when the necessary region or self-hosted URL is missing.
 
@@ -324,6 +324,55 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 25: ten schema, identity and metadata verifiers
+
+All ten are now `read_only`. Success requires HTTP 200 and a provider-specific
+schema, except VirusTotal's documented structured sentinel miss. Response bodies
+are suppressed on every outcome. Regional and credential-header fallback retries
+only authorization ambiguity, stopping on malformed success, redirects, quota
+errors, outages, transport/read failures and cancellation. Every response is
+subject to the shared byte cap; no returned links or pagination are followed.
+
+| Provider | Contract and supported scope |
+| --- | --- |
+| BitBar | Basic API key with empty password, `GET https://cloud.bitbar.com/api/me`. Numeric id and email from the official APIUser model; optional enabled/name/account metadata ignored. Entire identity response, including any apiKey echo, is suppressed. Private/on-premise and disabled-account rejection remain unknown. OAuth password grant is not attempted. |
+| BlazeMeter | API Monitoring/Runscope Bearer `GET /account`, requiring data.uuid/name and meta.status=success. Email requires the separate account:email scope and is not required. Teams can be empty. Existing UUID-shaped detection retained; other BlazeMeter product credentials are not claimed as compatible and rejection remains unknown. |
+| Pendo | Integration-key `GET /api/v1/metadata/schema/account`. Requires built-in auto object and typed field-definition objects across groups. Empty groups and uninferred empty Type values are legitimate; samples and metadata suppressed. Fixed app.pendo.io, app.eu.pendo.io, us1.app.pendo.io, app.jpn.pendo.io and app.au.pendo.io authorization-only fallback. Public subscription keys and Track Event secrets are distinct families; ambiguous rejection stays unknown. One byte-capped schema request per attempted region. |
+| SmartRecruiters | Migrates to `GET /user-api/v201804/users/me`. Requires id/firstName/lastName and systemRole.id, ignoring optional active/email metadata. Uses X-SmartToken first, with Bearer only on authorization ambiguity; never mixes headers. Missing OAuth scope/context remains unknown. |
+| Nitro/Alconost | Migrates to canonical `https://api.nitrotranslate.com/v1/account` with Basic API-key authentication. Requires integer or decimal-string account id and numeric balance/reserved. Zero balances and negative overdraft balances accepted. Existing Alconost detection retained; account and funds metadata suppressed. No translation or payment request. |
+| Airbrake | User key in documented query parameter, `GET /api/v4/projects?limit=1&key=...`. Requires projects array with numeric id/name entries, including empty lists. Optional deployment metadata is ignored. Top-level code errors rejected; project-key/user-token ambiguity unknown. |
+| SSLMate | Basic certificate API `GET /api/v2/certs/example.com`. Requires boolean exists and exact cn=example.com; false is legitimate for absent certificates. Structured reason errors never authenticate. Production/sandbox authorization-only fallback, other SSLMate product credential rejection unknown. No certificate creation, testing, purchase or expansion. |
+| SurveySparrow | Replaces legacy contacts retrieval with `GET /v3/roles?limit=1&page=1`, Bearer auth. Requires numeric id/name role entries and boolean has_next_page; empty lists accepted. Fixed documented US/EU/AP/ME/UK/Sydney/Canada regional hosts, authorization-only fallback. Missing role-read permission remains unknown. Published contacts schema is incomplete (string[]), so role metadata supplies the reviewed contract. |
+| protocols.io | Bearer `GET /api/v3/session/profile`, supporting documented client/OAuth access context. Requires explicit numeric status_code=0 and user.username/email. Missing/null status no longer defaults to success. Optional empty display name and expiry warnings accepted; response PII suppressed. Nonzero/provider errors remain conservatively unknown. |
+| VirusTotal | Retains read-only all-zero SHA-256 file sentinel, avoiding identity retrieval that can return an API key. HTTP 404 requires exact nested error.code=NotFoundError, not a substring; HTTP 200 requires matching file id/type and an attributes object. Exact HTTP 401 WrongCredentialsError is invalid; inactive accounts, permission errors and quota responses remain unknown. Conflicting success/error envelopes rejected. The lookup may consume request quota; it does not upload or rescan a file. |
+
+All ten patterns enforce trailing token boundaries. SmartRecruiters and
+SurveySparrow keyword prefilters now cover their existing regex variants.
+Supported-family hardening does not imply detection of every newer format.
+SSLMate certificate API credentials remain distinct from Cert Spotter/CT Search
+and SaaS products; BlazeMeter load-testing credentials remain distinct from
+Runscope API Monitoring tokens.
+
+Mocked regression tests cover exact URLs, methods and authentication, ordinary
+verification policy, typed success/error schemas, empty collections, optional
+and inactive metadata, regional/header ordering, stop conditions, cancellation,
+transport/read failures, response suppression, sentinel error-code spoofing,
+and whole-token boundaries. The protocols.io regression now uses its documented
+username/email profile rather than an unproven numeric user ID.
+
+Official evidence checked 2026-09-27:
+
+- [BitBar API-key authentication and /api/me](https://support.smartbear.com/bitbar/docs/en/use-rest-apis-with-bitbar/authentication.html), [official APIUser model](https://github.com/bitbar/testdroid-api/blob/master/src/main/java/com/testdroid/api/model/APIUser.java).
+- [BlazeMeter API Monitoring account schema and optional email scope](https://help.blazemeter.com/apidocs/api-monitoring/account.htm).
+- [Pendo official API collection, regional hosts and metadata-schema example](https://engageapi.pendo.io/) ([published collection data](https://documenter.gw.postman.com/api/collections/16265887/Tzm6jvKG?segregateAuth=true&versionTag=latest)).
+- [SmartRecruiters versioned current-user OpenAPI](https://developers.smartrecruiters.com/reference/usersme-2.md), [API-key authentication](https://developers.smartrecruiters.com/docs/authentication-api-key.md).
+- [Nitro account schema and canonical host](https://docs.nitrotranslate.com/api-reference/account/get.md), [Basic API-key authentication](https://docs.nitrotranslate.com/authentication.md).
+- [Airbrake user keys, project schema and pagination](https://docs.airbrake.io/docs/devops-tools/api/).
+- [SSLMate certificate retrieval, exists=false, errors and sandbox](https://sslmate.com/help/reference/apiv2).
+- [SurveySparrow V3 role schema and bounds](https://developers.surveysparrow.com/rest-apis/get-v-3-roles), [regional hosts and authentication](https://developers.surveysparrow.com/rest-apis/Introduction).
+- [protocols.io client/OAuth authentication and V3 profile schema](https://apidoc.protocols.io/).
+- [VirusTotal file retrieval](https://docs.virustotal.com/reference/file-info), [structured error codes](https://docs.virustotal.com/reference/errors), [identity response includes API-key metadata](https://docs.virustotal.com/reference/user-object).
 
 ## Remediation batch 24: ten regional account and token-context verifiers
 

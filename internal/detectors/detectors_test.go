@@ -254,9 +254,9 @@ func TestProtocolsIOVerifierRequiresAuthenticatedUser(t *testing.T) {
 		body   string
 		status VerificationStatus
 	}{
-		{body: `{"status_code":0,"user":{"id":1}}`, status: VerificationVerified},
+		{body: `{"status_code":0,"user":{"username":"user","email":"mail"}}`, status: VerificationVerified},
 		{body: `{"status_code":0}`, status: VerificationUnknown},
-		{body: `{"status_code":1218}`, status: VerificationUnverified},
+		{body: `{"status_code":1218}`, status: VerificationUnknown},
 	} {
 		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
@@ -2293,8 +2293,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 109,
-		VerificationSafetyReadOnly:   280,
+		VerificationSafetyUnreviewed: 99,
+		VerificationSafetyReadOnly:   290,
 		VerificationSafetyAuthOnly:   79,
 		VerificationSafetyUnsafe:     99,
 	}
@@ -2307,7 +2307,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 458 || report.RequiresHardening != 53 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 468 || report.RequiresHardening != 43 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

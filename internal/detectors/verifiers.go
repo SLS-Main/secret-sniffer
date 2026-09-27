@@ -2009,28 +2009,11 @@ func verifyMeisterTask(ctx context.Context, secret string) VerificationResult {
 func verifyProtocolsIO(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.protocols.io/api/v3/session/profile", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		var response struct {
-			StatusCode int            `json:"status_code"`
-			User       map[string]any `json:"user"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-		}
-		switch response.StatusCode {
-		case 0:
-			if len(response.User) > 0 {
-				return VerificationResult{Status: VerificationVerified}, true
-			}
-			return unknownVerificationResult("provider_response", "provider response did not contain an authenticated user"), true
-		case 1218, 1219:
-			return invalidCredentialResult(), true
-		default:
-			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-		}
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		var code *int
+		user := identityObject(p, "user")
+		_, hasErrorMessage := p["error_message"]
+		return !hasErrorMessage && json.Unmarshal(p["status_code"], &code) == nil && code != nil && *code == 0 && !identityHasErrors(user) && identityStrings(user, "username", "email")
 	})
 }
 
@@ -2138,19 +2121,10 @@ func verifyVirusTotal(ctx context.Context, secret string) VerificationResult {
 	endpoint := "https://www.virustotal.com/api/v3/files/" + strings.Repeat("0", 64)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	req.Header.Set("x-apikey", secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		response := string(body)
-		switch {
-		case statusCode == http.StatusNotFound && containsAnyFold(response, "NotFoundError"):
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated the sentinel lookup"}, true
-		case statusCode == http.StatusUnauthorized && containsAnyFold(response, "WrongCredentialsError"):
-			return invalidCredentialResult(), true
-		case statusCode == http.StatusUnauthorized || statusCode == http.StatusNotFound:
-			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-		default:
-			return VerificationResult{}, false
-		}
-	})
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, classifyVirusTotalSentinel)
+	result.Response = ""
+	return result
 }
 
 func verifyStatuspage(ctx context.Context, secret string) VerificationResult {
@@ -3307,7 +3281,12 @@ func verifyImageKit(ctx context.Context, secret string) VerificationResult {
 func verifyAirbrakeUser(ctx context.Context, secret string) VerificationResult {
 	endpoint := "https://api.airbrake.io/api/v4/projects?limit=1&key=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequest(ctx, req)
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		_, hasCode := p["code"]
+		return !hasCode && validIdentityCollection(p, "projects", func(project identityPayload) bool {
+			return !identityHasErrors(project) && identityNonnegativeIntegers(project, "id") && identityStrings(project, "name")
+		})
+	})
 }
 
 func verifyBitGo(ctx context.Context, secret string) VerificationResult {
@@ -3650,14 +3629,17 @@ func verifyAshby(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySmartRecruiters(ctx context.Context, secret string) VerificationResult {
-	return verifyEndpoints(ctx, []string{"smart-token", "bearer"}, func(kind string) VerificationResult {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.smartrecruiters.com/users/me", nil)
+	return verifyIdentityEndpoints(ctx, []string{"smart-token", "bearer"}, func(kind string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.smartrecruiters.com/user-api/v201804/users/me", nil)
 		if kind == "smart-token" {
 			req.Header.Set("X-SmartToken", secret)
 		} else {
 			req.Header.Set("Authorization", "Bearer "+secret)
 		}
-		return verifyHTTPRequest(ctx, req)
+		return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+			role := identityObject(p, "systemRole")
+			return identityStrings(p, "id", "firstName", "lastName") && !identityHasErrors(role) && identityStrings(role, "id")
+		})
 	})
 }
 
@@ -3908,7 +3890,9 @@ func verifyHightouch(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPendo(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://app.pendo.io/api/v1/metadata/schema/account", "x-pendo-integration-key", "")
+	return verifyIdentityEndpoints(ctx, []string{"app.pendo.io", "app.eu.pendo.io", "us1.app.pendo.io", "app.jpn.pendo.io", "app.au.pendo.io"}, func(host string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, "https://"+host+"/api/v1/metadata/schema/account", "x-pendo-integration-key", "", validPendoSchema)
+	})
 }
 
 func verifyNorthflank(ctx context.Context, secret string) VerificationResult {
@@ -4109,7 +4093,9 @@ func verifyAyrshare(ctx context.Context, secret string) VerificationResult {
 func verifyBitBar(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://cloud.bitbar.com/api/me", nil)
 	req.SetBasicAuth(secret, "")
-	return verifyHTTPRequest(ctx, req)
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		return identityNonnegativeIntegers(p, "id") && identityStrings(p, "email")
+	})
 }
 
 func verifyRestpack(ctx context.Context, secret string) VerificationResult {
@@ -6226,16 +6212,9 @@ func verifyAvaza(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAlconost(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.nitrotranslate.com/api/v1/account", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.nitrotranslate.com/v1/account", nil)
 	req.SetBasicAuth(secret, "")
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized {
-			return invalidCredentialResult(), true
-		}
-		return classifyReadOnlyAPI([]string{"id"})(statusCode, body)
-	})
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, validNitroAccount)
 }
 
 func verifyAxonaut(ctx context.Context, secret string) VerificationResult {
@@ -6606,9 +6585,10 @@ func verifyReachMail(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySurveySparrow(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.surveysparrow.com/v1/contacts?limit=1", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyPrivateCollection(ctx, req, "bad_token")
+	hosts := []string{"api.surveysparrow.com", "eu-api.surveysparrow.com", "ap-api.surveysparrow.com", "me-api.surveysparrow.com", "eu-ln-api.surveysparrow.com", "ap-sy-app.surveysparrow.com", "ca-api.surveysparrow.com"}
+	return verifyIdentityEndpoints(ctx, hosts, func(host string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, "https://"+host+"/v3/roles?limit=1&page=1", "Authorization", "Bearer ", validSurveySparrowRoles)
+	})
 }
 
 func verifySurvicate(ctx context.Context, secret string) VerificationResult {
@@ -6700,19 +6680,24 @@ func verifyCronitor(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySSLMate(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://sslmate.com/api/v2/certs/example.com", nil)
-	req.SetBasicAuth(secret, "")
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"exists"}, "bad_credentials", "not recognized"))
-	result.Response = ""
-	return result
+	return verifyIdentityEndpoints(ctx, []string{"sslmate.com", "sandbox.sslmate.com"}, func(host string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/api/v2/certs/example.com", nil)
+		req.SetBasicAuth(secret, "")
+		return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+			var exists *bool
+			_, hasReason := p["reason"]
+			return !hasReason && json.Unmarshal(p["exists"], &exists) == nil && exists != nil && identityStringEquals(p, "cn", "example.com")
+		})
+	})
 }
 
 func verifyBlazeMeter(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.runscope.com/account", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"data"}, "provide a valid authorization header"))
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		data, meta := identityObject(p, "data"), identityObject(p, "meta")
+		return !identityHasErrors(data) && !identityHasErrors(meta) && identityStrings(data, "uuid", "name") && identityStringEquals(meta, "status", "success")
+	})
 }
 
 func verifyCloudflareCA(ctx context.Context, secret string) VerificationResult {
