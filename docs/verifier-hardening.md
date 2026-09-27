@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 23:
+After remediation batch 24:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 448 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 63 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 458 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 53 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 271
-`read_only`, 78 `auth_only`, 99 `unsafe`, and 119 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 280
+`read_only`, 79 `auth_only`, 99 `unsafe`, and 109 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -94,7 +94,7 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
    key families require different verification operations; a rejection by the
    wrong API must not label the key invalid.
-3. **Region and endpoint context:** Grafana, Zoho, Nylas, Insightly.
+3. **Region and endpoint context:** Grafana, Insightly, Pendo, Fulcrum.
    Correlate endpoint context and use only documented bounded fallbacks. Preserve
    unknown results when the necessary region or self-hosted URL is missing.
 
@@ -324,6 +324,59 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 24: ten regional account and token-context verifiers
+
+Gusto is now `auth_only`; the other nine are `read_only`. All require HTTP 200
+and explicit provider schemas and suppress response bodies on every outcome.
+Zoho scope errors, Phrase permission errors and ThousandEyes forbidden responses
+no longer prove authentication. Rejections remain unknown when region,
+credential family, tenant, scope or account-lockout context is ambiguous.
+
+| Provider | Contract and supported scope |
+| --- | --- |
+| Iterable | Api-Key `GET /api/users/getFields`; non-null fields object, including an empty schema. The official API supports Server-side and Read-only keys; mobile/browser key rejection remains unknown. US/EU authorization-only fallback. Field definitions are metadata, not user records, and are suppressed. |
+| Zoho CRM | Zoho-oauthtoken `GET /crm/v8/users?type=CurrentUser`; typed id/email entries, including empty collections. Optional names/status are ignored. Existing fixed US/EU/IN/AU/JP/CA/SA hosts now retry only authorization ambiguity. Other deployments remain unknown. OAUTH_SCOPE_MISMATCH is never successful authentication. |
+| Nylas | Bearer `GET /v3/grants?limit=1&offset=0`; grant id/provider/created_at required, including empty arrays. Invalid/blocked grants and missing optional email are legitimate. API-key/legacy-client-secret ambiguity remains unknown; US/EU fallback only after authorization ambiguity. |
+| Phrase | Legacy Strings OAuth `Authorization: token` `GET /v2/user`; id/username/email required. EU/US authorization-only fallback. The supported 40-character token detector remains distinct from newer Platform JWT workflows; no exchange is attempted. |
+| Gusto | Bearer `GET /v1/token_info` with version 2026-06-15; typed scope and nullable resource/resource_owner objects. Empty scopes, null resources and system-token null owners are legitimate. Present objects require type/uuid. Production/demo authorization-only fallback; OAuth client-secret rejection stays unknown. |
+| ThousandEyes | V7 Bearer `GET /account-groups`; typed string aid/accountGroupName array, including empty lists. Optional current/default flags are ignored. Legacy credentials, account lockout and insufficient permission remain unknown. One metadata collection under the shared byte cap; no response links followed. |
+| Envoy | Migrates to current Core REST `GET /rest/v1/locations?page=1&perPage=1`, X-API-Key and application/json. Requires data array with id/name/companyId, including empty arrays. Optional enabled/address fields are ignored. Existing supported 220-character pattern retained; no claim of all token-format coverage. |
+| Frame.io | V2 Bearer `GET /v2/me`; id/account_id/email required, optional profile metadata ignored and entire response suppressed. Supports the existing V2 developer/OAuth probe. Incompatible Adobe IMS/V4 token rejection remains unknown; no login or token exchange. |
+| Codacy | api-token `GET /api/v3/user`; nested numeric nonnegative id and mainEmail. Optional active/admin metadata is ignored. Repository-token and self-hosted ambiguity remains unknown; personal identity and returned support hashes are suppressed. |
+| JumpCloud | x-api-key `GET /api/systemusers?limit=1&skip=0&fields=_id`; totalCount and sparse user _id entries, including empty arrays. Fixed US/EU/IN authorization-only fallback; missing tenant/scope context remains unknown. Existing legacy 40-character detection retained; jca_ format coverage remains a follow-up rather than guessed expansion. |
+
+Fallback stops on malformed success, redirects, throttling, outages, transport or
+read failures, and cancellation. All responses use the shared byte cap. No
+pagination or server-supplied links are followed. Iterable and ThousandEyes
+metadata operations have no requested pagination; the other collection probes
+select the current user or one resource where supported. Requests remain subject
+to provider quotas; Iterable documents three field-schema requests/second/project.
+
+All ten credential patterns now enforce trailing boundaries. Gusto and
+ThousandEyes keyword variants now match their regex contexts. Supported-family
+verification hardening does not imply detection of every modern credential
+format, particularly JumpCloud jca_, Phrase Platform JWT and Adobe IMS tokens.
+
+Mocked tests cover exact requests and headers, ordinary verification policy,
+nullable/system-token metadata, inactive accounts and invalid grants, empty
+collections, typed malformed/error envelopes, non-200 success-like responses,
+response suppression, transport/read failures, regional ordering, cancellation
+and whole-token boundaries. Existing Nylas and Envoy regressions are updated to
+the conservative authorization category and current REST response schema.
+
+Official evidence checked 2026-09-27:
+
+- [Iterable official OpenAPI: getFields schema, supported key types and rate limit](https://api.iterable.com/api-docs), [US/EU API explorer](https://api.iterable.com/api/docs).
+- [Zoho V8 users and CurrentUser filter](https://www.zoho.com/crm/developer/docs/api/v8/get-users.html), [multi-data-center context](https://www.zoho.com/crm/developer/docs/api/v8/multi-dc.html).
+- [Nylas grant list, pagination, regional hosts and schema](https://developer.nylas.com/docs/reference/api/manage-grants/get-all-grants/).
+- [Phrase current user and regional hosts](https://developers.phrase.com/en/api/strings/users/show-current-user), [legacy token and Platform authentication distinction](https://developers.phrase.com/en/api/strings/authentication.md).
+- [Gusto token-info schema, nullable resource/owner and version](https://docs.gusto.com/app-integrations/reference/get-v1-token-info.md).
+- [ThousandEyes V7 account groups, Bearer auth and permission errors](https://developer.cisco.com/docs/thousandeyes/list-account-groups/).
+- [Envoy current locations OpenAPI: Core REST, API key and pagination](https://developers.envoy.com/hub/reference/locations-1.md), [client API key authentication](https://developers.envoy.com/hub/docs/getting-an-access-and-refresh.md).
+- [Frame.io V2 current-user schema and credential types](https://developer.frame.io/api/reference/operation/getMe/).
+- [Codacy current-user schema and account authentication](https://api.codacy.com/api/api-docs).
+- [JumpCloud official V1 OpenAPI: regions, sparse fields, limits, totalCount and user schema](https://docs.jumpcloud.com/api/1.0/index.yaml).
 
 ## Remediation batch 23: ten identity and observation verifiers
 

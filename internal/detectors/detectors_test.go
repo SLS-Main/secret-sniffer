@@ -420,7 +420,7 @@ func TestNylasRejectionRemainsUnknownForBroadCredentialDetector(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"error":"unauthorized"}`)), Header: make(http.Header)}, nil
 	})}
 	result := verifyNylas(WithVerificationHTTPClient(context.Background(), client), "secret")
-	if result.Status != VerificationUnknown || result.ErrorCategory != "credential_type" {
+	if result.Status != VerificationUnknown || result.ErrorCategory != "authorization" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -1487,7 +1487,7 @@ func TestEnvoyVerifierSuppressesLocationResponse(t *testing.T) {
 		if req.Header.Get("X-Api-Key") != "secret" {
 			t.Fatalf("X-Api-Key=%q", req.Header.Get("X-Api-Key"))
 		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"locations":[{"name":"Private Office"}]}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"1","name":"Private Office","companyId":"2"}]}`)), Header: make(http.Header)}, nil
 	})}
 	result := verifyEnvoy(WithVerificationHTTPClient(context.Background(), client), "secret")
 	if result.Status != VerificationVerified || result.Response != "" {
@@ -2293,9 +2293,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 119,
-		VerificationSafetyReadOnly:   271,
-		VerificationSafetyAuthOnly:   78,
+		VerificationSafetyUnreviewed: 109,
+		VerificationSafetyReadOnly:   280,
+		VerificationSafetyAuthOnly:   79,
 		VerificationSafetyUnsafe:     99,
 	}
 	for safety, want := range expected {
@@ -2307,7 +2307,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 448 || report.RequiresHardening != 63 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 458 || report.RequiresHardening != 53 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

@@ -1625,20 +1625,7 @@ func verifySemgrep(ctx context.Context, secret string) VerificationResult {
 func verifyThousandEyes(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.thousandeyes.com/v7/account-groups", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden {
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
-		}
-		if statusCode >= 200 && statusCode < 300 && jsonHasTopLevelArray(body, "accountGroups") {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		if statusCode == http.StatusUnauthorized {
-			return invalidCredentialResult(), true
-		}
-		return verifyJSONReadClassification(statusCode, body)
-	})
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, validThousandEyesGroups)
 }
 
 func verifyVultr(ctx context.Context, secret string) VerificationResult {
@@ -1937,7 +1924,9 @@ func verifyEverhour(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyFrameIO(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.frame.io/v2/me")
+	return verifyIdentityGET(ctx, secret, "https://api.frame.io/v2/me", "Authorization", "Bearer ", func(p identityPayload) bool {
+		return identityStrings(p, "id", "account_id", "email")
+	})
 }
 
 func verifyLoyverse(ctx context.Context, secret string) VerificationResult {
@@ -2104,13 +2093,10 @@ func verifyMandrill(ctx context.Context, secret string) VerificationResult {
 func verifyCodacy(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.codacy.com/api/v3/user", nil)
 	req.Header.Set("api-token", secret)
-	result := verifyHTTPRequest(ctx, req)
-	if result.Status == VerificationUnverified {
-		result.Status = VerificationUnknown
-		result.ErrorCategory = "credential_type"
-		result.Message = "credential may be a repository-scoped Codacy token"
-	}
-	return result
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		user := identityObject(p, "data")
+		return !identityHasErrors(user) && identityNonnegativeIntegers(user, "id") && identityStrings(user, "mainEmail")
+	})
 }
 
 func verifyWrike(ctx context.Context, secret string) VerificationResult {
@@ -2313,14 +2299,11 @@ func verifyFlyIO(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPhrase(ctx context.Context, secret string) VerificationResult {
-	return verifyEndpoints(ctx, []string{"https://api.phrase.com/v2/user", "https://api.us.app.phrase.com/v2/user"}, func(endpoint string) VerificationResult {
+	return verifyIdentityEndpoints(ctx, []string{"https://api.phrase.com/v2/user", "https://api.us.app.phrase.com/v2/user"}, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.Header.Set("Authorization", "token "+secret)
-		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-			if statusCode == http.StatusForbidden && containsAnyFold(string(body), "scope", "permission") {
-				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
-			}
-			return VerificationResult{}, false
+		return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+			return identityStrings(p, "id", "username", "email")
 		})
 	})
 }
@@ -3135,14 +3118,8 @@ func verifyOnfido(ctx context.Context, secret string) VerificationResult {
 
 func verifyNylas(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api.us.nylas.com/v3/grants?limit=1&offset=0", "https://api.eu.nylas.com/v3/grants?limit=1&offset=0"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		result := verifyBearerGET(ctx, secret, endpoint)
-		if result.Status == VerificationUnverified {
-			result.Status = VerificationUnknown
-			result.ErrorCategory = "credential_type"
-			result.Message = "credential may be a Nylas OAuth client secret"
-		}
-		return result
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", validNylasGrants)
 	})
 }
 
@@ -3686,8 +3663,8 @@ func verifySmartRecruiters(ctx context.Context, secret string) VerificationResul
 
 func verifyJumpCloud(ctx context.Context, secret string) VerificationResult {
 	hosts := []string{"console.jumpcloud.com", "console.eu.jumpcloud.com", "console.in.jumpcloud.com"}
-	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
-		return verifyHeaderGET(ctx, secret, "https://"+host+"/api/systemusers?limit=1&skip=0", "x-api-key", "")
+	return verifyIdentityEndpoints(ctx, hosts, func(host string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, "https://"+host+"/api/systemusers?limit=1&skip=0&fields=_id", "x-api-key", "", validJumpCloudUsers)
 	})
 }
 
@@ -3809,18 +3786,10 @@ func verifyUbidots(ctx context.Context, secret string) VerificationResult {
 
 func verifyZohoCRM(ctx context.Context, secret string) VerificationResult {
 	hosts := []string{"www.zohoapis.com", "www.zohoapis.eu", "www.zohoapis.in", "www.zohoapis.com.au", "www.zohoapis.jp", "www.zohoapis.ca", "www.zohoapis.sa"}
-	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
+	return verifyIdentityEndpoints(ctx, hosts, func(host string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/crm/v8/users?type=CurrentUser", nil)
 		req.Header.Set("Authorization", "Zoho-oauthtoken "+secret)
-		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-			if containsAnyFold(string(body), "OAUTH_SCOPE_MISMATCH") {
-				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient scope"}, true
-			}
-			if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "INVALID_TOKEN") {
-				return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-			}
-			return VerificationResult{}, false
-		})
+		return verifyIdentityRequest(ctx, req, validZohoCurrentUser)
 	})
 }
 
@@ -4360,11 +4329,11 @@ func verifySalesforce(ctx context.Context, secret string) VerificationResult {
 
 func verifyGusto(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://api.gusto.com/v1/token_info", "https://api.gusto-demo.com/v1/token_info"}
-	result := verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+	result := verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.Header.Set("Authorization", "Bearer "+secret)
 		req.Header.Set("X-Gusto-API-Version", "2026-06-15")
-		return verifyHTTPRequest(ctx, req)
+		return verifyIdentityRequest(ctx, req, validGustoToken)
 	})
 	return positiveOnlyVerification(result, "credential may be a Gusto OAuth client secret")
 }
@@ -6958,17 +6927,13 @@ func verifyWebScraper(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyEnvoy(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.envoy.com/v1/locations", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.envoy.com/rest/v1/locations?page=1&perPage=1", nil)
 	req.Header.Set("X-Api-Key", secret)
-	req.Header.Set("Accept", "application/vnd.envoy+json; version=3")
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "unauthenticated", "status code 401") {
-			return invalidCredentialResult(), true
-		}
-		return classifyCollectionResponse()(statusCode, body)
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		return validIdentityCollection(p, "data", func(location identityPayload) bool {
+			return !identityHasErrors(location) && identityStrings(location, "id", "name", "companyId")
+		})
 	})
-	result.Response = ""
-	return result
 }
 
 func verifyDocparser(ctx context.Context, secret string) VerificationResult {
@@ -7769,14 +7734,10 @@ func verifyMailchimp(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyIterable(ctx context.Context, secret string) VerificationResult {
-	return verifyEndpoints(ctx, []string{"https://api.iterable.com/api/users/getFields", "https://api.eu.iterable.com/api/users/getFields"}, func(endpoint string) VerificationResult {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		req.Header.Set("Api-Key", secret)
-		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, _ []byte) (VerificationResult, bool) {
-			if statusCode == http.StatusUnauthorized {
-				return unknownVerificationResult("authorization", "key type, region, or privileges could not be confirmed"), true
-			}
-			return VerificationResult{}, false
+	return verifyIdentityEndpoints(ctx, []string{"https://api.iterable.com/api/users/getFields", "https://api.eu.iterable.com/api/users/getFields"}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Api-Key", "", func(p identityPayload) bool {
+			_, hasCode := p["code"]
+			return !hasCode && identityObject(p, "fields") != nil
 		})
 	})
 }
