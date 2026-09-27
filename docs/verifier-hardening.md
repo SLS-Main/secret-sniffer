@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 20:
+After remediation batch 21:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 418 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 93 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 428 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 83 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 244
-`read_only`, 75 `auth_only`, 99 `unsafe`, and 149 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 252
+`read_only`, 77 `auth_only`, 99 `unsafe`, and 139 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -87,14 +87,14 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 
 ## Recommended following batches
 
-1. **Identity/collection contracts:** Typeform, Harness, OpenPhone,
+1. **Identity/collection contracts:** Typeform, Harness, BitGo,
    Sourcegraph, and regional content-management APIs.
    Confirm current documentation, validate identity/list schemas, suppress
    metadata, and classify structured failures conservatively.
-2. **Credential-subtype routing:** PagerDuty, Buildkite, Postmark. Different
+2. **Credential-subtype routing:** Buildkite, Increase, Persona, Circle. Different
    key families require different verification operations; a rejection by the
    wrong API must not label the key invalid.
-3. **Region and endpoint context:** Honeycomb, Opsgenie, Grafana, Zoho, PostHog.
+3. **Region and endpoint context:** Grafana, Zoho, Nylas, Insightly.
    Correlate endpoint context and use only documented bounded fallbacks. Preserve
    unknown results when the necessary region or self-hosted URL is missing.
 
@@ -324,6 +324,54 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 21: ten regional metadata and key-context verifiers
+
+Eight probes are now `read_only`; Honeycomb and Flickr are `auth_only`.
+All require HTTP 200 and provider-specific evidence and suppress responses on
+success and failure. Permission, subtype, region and provider ambiguity remains
+unknown. Fixed-host fallback occurs only after authorization ambiguity and stops
+on malformed success, redirects, throttling, outages, transport/read failures or
+cancellation. Pagination links are never followed.
+
+| Provider | Contract and evidence required |
+| --- | --- |
+| PagerDuty | `Token token=` `GET /abilities` replaces user listing; non-null array of string ability names, including an empty array. Ambiguous 32-hex integration/routing keys make no REST request and remain findings. Unsupported REST key types/scopes remain unknown; no events are submitted. |
+| Honeycomb | `X-Honeycomb-Team` `GET /1/auth`; key id/type, team name/slug, typed environment strings and boolean permission map. Classic empty environment values and empty permissions are legitimate. Supported 22-character configuration/32-hex Classic formats retained with whole-key boundaries; management key IDs/secrets are not treated as configuration tokens. Fixed US/EU authorization-only fallback. |
+| Opsgenie | `GenieKey` `GET /v2/account`; nested account name and nonnegative integer userCount. Optional plan/limits are not required. Restricted integration/configuration permissions remain unknown; fixed global/EU authorization-only fallback. |
+| Postmark | Server-token `GET /stats/outbound` replaces `/server`, which returns API tokens. Requires integer Sent/Bounced/SMTPApiErrors. Authorization-only fallback tries account-token `GET /senders?count=1&offset=0`, requiring TotalCount and typed ID/EmailAddress/Confirmed entries. Empty collections and unconfirmed senders are legitimate. ErrorCode envelopes cannot prove success. |
+| Cloudinary | Basic-auth `GET /v1_1/{cloud}/config`; response cloud_name must match the parsed credential cloud, plus created_at. Optional settings are not requested. Fixed US/EU/AP hosts with authorization-only fallback; configuration and credentials suppressed. |
+| KeyCDN | Basic-auth `GET /reports/creditbalance.json` replaces zone listing; status=success and finite numeric string data.amount. Zero and negative balances authenticate; financial metadata is suppressed. |
+| Flickr | App-key `flickr.test.echo` requires stat=ok and matching echoed method/key. The documented test validates the application key, not a user OAuth session. Only supported 32-hex application keys are submitted; other detected formats remain unknown without requests. Exact numeric code 100 is unverified only with HTTP 200, stat=fail and no echoed success fields. Echoed key material is suppressed. |
+| Storecove | Bearer `GET /api/v2/discovery/identifiers`; CountrySpecifications countries array with string country entries replaces generic collection detection. Optional regional and identifier metadata is not required. Experimental endpoint access restrictions and region/subtype rejection remain unknown. |
+| Twist | Bearer `GET /api/v3/users/get_session_user`; integer id/name/email, without an application code envelope. The complete response, including returned user token and session information, is suppressed. No login, refresh, logout or presence calls. |
+| Web Scraper | Bearer `GET /api/v1/sitemaps?page=1` replaces query credentials. Requires success=true, integer pagination and typed sitemap id/name. One provider-sized page is requested; the documented endpoint offers no per-page parameter. No scraping jobs are created or fetched. |
+
+All requests use the shared response-size cap and remain subject to provider
+quotas. Unpaginated country/ability metadata is read only once. Existing
+credential families are retained with trailing boundaries to prevent partial
+captures; Storecove trailing hyphens and Web Scraper context variants now work.
+
+Mocked regressions cover all ten exact requests, auth headers/Basic/query
+encoding, ordinary verification policy, empty and nullable metadata, malformed
+schemas, contradictory errors, non-200 success-like bodies, response suppression,
+transport/read failures, fallback order and cancellation. Postmark tests cover
+both token headers and account schemas; Flickr tests constrain code 100 to its
+documented success-status envelope. Detection tests cover whole credential
+capture and no-request behavior for ambiguous PagerDuty/Flickr families.
+
+Official evidence checked 2026-09-27:
+
+- [PagerDuty REST abilities, authentication and scope](https://github.com/PagerDuty/api-schema/blob/main/reference/REST/openapiv3.json), [Events integration/routing-key distinction and examples](https://github.com/PagerDuty/api-schema/blob/main/reference/events-v2/openapiv3.json).
+- [Honeycomb auth schema, regions and Classic empty environment](https://docs.honeycomb.io/api/auth/list-authorizations.md), [key types and authentication](https://docs.honeycomb.io/api/authentication.md).
+- [Opsgenie account API, schema and configuration restrictions](https://docs.opsgenie.com/docs/account-api.md).
+- [Postmark server statistics](https://postmarkapp.com/developer/api/stats-api), [account sender signatures](https://postmarkapp.com/developer/api/signatures-api), [token-bearing server response being replaced](https://postmarkapp.com/developer/api/server-api).
+- [Cloudinary Admin API config response, Basic auth and regional hosts](https://cloudinary.com/documentation/admin_api).
+- [KeyCDN credit balance, string amount and Basic authentication](https://www.keycdn.com/api).
+- [Flickr echo, required application key and error 100](https://www.flickr.com/services/api/flickr.test.echo.html).
+- [Storecove experimental identifiers and CountrySpecifications schema](https://www.storecove.com/docs/).
+- [Twist current-user endpoint, token-bearing user object and Bearer authentication](https://developer.twist.com/v3/).
+- [Web Scraper official OpenAPI: Bearer auth, sitemap pagination and schema](https://webscraper.io/openapi.yaml).
 
 ## Remediation batch 20: ten bounded identity and metadata verifiers
 

@@ -389,13 +389,14 @@ func TestZillizVerifierUsesApplicationCode(t *testing.T) {
 }
 
 func TestFlickrVerifierRejectsInvalidKeyCode(t *testing.T) {
+	secret := strings.Repeat("a", 32)
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Query().Get("method") != "flickr.test.echo" || req.URL.Query().Get("api_key") != "secret" {
+		if req.URL.Query().Get("method") != "flickr.test.echo" || req.URL.Query().Get("api_key") != secret {
 			t.Fatalf("unexpected query: %q", req.URL.RawQuery)
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"stat":"fail","code":100}`)), Header: make(http.Header)}, nil
 	})}
-	result := verifyFlickr(WithVerificationHTTPClient(context.Background(), client), "secret")
+	result := verifyFlickr(WithVerificationHTTPClient(context.Background(), client), secret)
 	if result.Status != VerificationUnverified {
 		t.Fatalf("unexpected result: %#v", result)
 	}
@@ -479,7 +480,7 @@ func TestCloudinaryVerifierUsesSelfContainedCredentials(t *testing.T) {
 		if !ok || username != "123456789012345" || password != "abcdefghijklmnopqrstuvwxyz1" || req.URL.Path != "/v1_1/cloud/config" {
 			t.Fatalf("unexpected request: %s username=%q password=%q ok=%v", req.URL, username, password, ok)
 		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"cloud_name":"cloud"}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"cloud_name":"cloud","created_at":"2023-05-08T08:20:11Z"}`)), Header: make(http.Header)}, nil
 	})}
 	result := verifyCloudinary(WithVerificationHTTPClient(context.Background(), client), "cloudinary://123456789012345:abcdefghijklmnopqrstuvwxyz1@cloud")
 	if result.Status != VerificationVerified {
@@ -2292,9 +2293,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 149,
-		VerificationSafetyReadOnly:   244,
-		VerificationSafetyAuthOnly:   75,
+		VerificationSafetyUnreviewed: 139,
+		VerificationSafetyReadOnly:   252,
+		VerificationSafetyAuthOnly:   77,
 		VerificationSafetyUnsafe:     99,
 	}
 	for safety, want := range expected {
@@ -2306,7 +2307,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 418 || report.RequiresHardening != 93 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 428 || report.RequiresHardening != 83 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

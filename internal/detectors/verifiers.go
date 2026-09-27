@@ -442,10 +442,17 @@ func verifyCensysCredentials(ctx context.Context, candidate Candidate) Verificat
 }
 
 func verifyPagerDuty(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pagerduty.com/users?limit=1", nil)
+	// Routing/integration keys are not REST API credentials. Preserve ambiguous
+	// 32-hex findings without submitting them to the REST API.
+	if len(secret) == 32 {
+		if _, err := hex.DecodeString(secret); err == nil {
+			return unknownVerificationResult("credential_type", "credential may be an integration or routing key")
+		}
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pagerduty.com/abilities", nil)
 	req.Header.Set("Authorization", "Token token="+secret)
 	req.Header.Set("Accept", "application/vnd.pagerduty+json;version=2")
-	return verifyHTTPRequest(ctx, req)
+	return verifyIdentityRequest(ctx, req, validPagerDutyAbilities)
 }
 
 func verifyNgrok(ctx context.Context, secret string) VerificationResult {
@@ -1535,14 +1542,9 @@ func verifyRevAI(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyTwist(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.twist.com/api/v3/users/get_session_user", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		response := string(body)
-		if statusCode == http.StatusForbidden && containsAnyFold(response, "invalid token") && containsAnyFold(response, `"code":200`, `"code": 200`) {
-			return invalidCredentialResult(), true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityGET(ctx, secret, "https://api.twist.com/api/v3/users/get_session_user", "Authorization", "Bearer ", func(p identityPayload) bool {
+		_, hasCode := p["code"]
+		return !hasCode && collectionPositiveInteger(p["id"]) && identityStrings(p, "email", "name")
 	})
 }
 
@@ -3054,27 +3056,30 @@ func verifyWistia(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyFlickr(ctx context.Context, secret string) VerificationResult {
+	if _, err := hex.DecodeString(secret); len(secret) != 32 || err != nil {
+		return unknownVerificationResult("credential_type", "credential is not a supported application key")
+	}
 	endpoint := "https://www.flickr.com/services/rest/?method=flickr.test.echo&api_key=" + url.QueryEscape(secret) + "&format=json&nojsoncallback=1"
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(status int, body []byte) (VerificationResult, bool) {
+		var p identityPayload
+		if status == http.StatusOK && json.Unmarshal(body, &p) == nil && p != nil && !identityHasErrors(p) {
+			_, hasCode := p["code"]
+			if !hasCode && identityStringEquals(p, "stat", "ok") && identityStringEquals(identityObject(p, "method"), "_content", "flickr.test.echo") && identityStringEquals(identityObject(p, "api_key"), "_content", secret) {
+				return VerificationResult{Status: VerificationVerified}, true
+			}
+			_, hasKey := p["api_key"]
+			_, hasMethod := p["method"]
+			var code int
+			if !hasKey && !hasMethod && identityStringEquals(p, "stat", "fail") && json.Unmarshal(p["code"], &code) == nil && code == 100 {
+				return invalidCredentialResult(), true
+			}
 		}
-		var response struct {
-			Stat string `json:"stat"`
-			Code int    `json:"code"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-		}
-		if response.Stat == "ok" {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		if response.Stat == "fail" && response.Code == 100 {
-			return invalidCredentialResult(), true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		return verifyJSONReadClassification(status, body)
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyHelloSign(ctx context.Context, secret string) VerificationResult {
@@ -3509,9 +3514,9 @@ func verifyImgix(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyKeyCDN(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.keycdn.com/zones.json", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.keycdn.com/reports/creditbalance.json", nil)
 	req.SetBasicAuth(secret, "")
-	return verifyHTTPRequest(ctx, req)
+	return verifyIdentityRequest(ctx, req, validKeyCDNBalance)
 }
 
 func verifyHarvest(ctx context.Context, secret string) VerificationResult {
@@ -3904,11 +3909,13 @@ func verifyCloudinary(ctx context.Context, secret string) VerificationResult {
 		return VerificationResult{Status: VerificationUnsupported, Message: "Cloudinary cloud name is invalid"}
 	}
 	hosts := []string{"api.cloudinary.com", "api-eu.cloudinary.com", "api-ap.cloudinary.com"}
-	return verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
+	return verifyIdentityEndpoints(ctx, hosts, func(host string) VerificationResult {
 		endpoint := "https://" + host + "/v1_1/" + url.PathEscape(cloudName) + "/config"
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		req.SetBasicAuth(parsed.User.Username(), apiSecret)
-		return verifyHTTPRequest(ctx, req)
+		return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+			return identityStringEquals(p, "cloud_name", cloudName) && identityStrings(p, "created_at")
+		})
 	})
 }
 
@@ -6669,16 +6676,11 @@ func verifyVyte(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyStorecove(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.storecove.com/api/v2/discovery/identifiers", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized {
-			return invalidCredentialResult(), true
-		}
-		return classifyCollectionResponse()(statusCode, body)
+	return verifyIdentityGET(ctx, secret, "https://api.storecove.com/api/v2/discovery/identifiers", "Authorization", "Bearer ", func(p identityPayload) bool {
+		return validIdentityCollection(p, "countries", func(country identityPayload) bool {
+			return !identityHasErrors(country) && identityStrings(country, "country")
+		})
 	})
-	result.Response = ""
-	return result
 }
 
 func verifyCourier(ctx context.Context, secret string) VerificationResult {
@@ -6972,11 +6974,7 @@ func verifyTLY(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyWebScraper(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://api.webscraper.io/api/v1/sitemaps?api_token=" + url.QueryEscape(secret)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("invalid api_token", "unauthorized"))
-	result.Response = ""
-	return result
+	return verifyIdentityGET(ctx, secret, "https://api.webscraper.io/api/v1/sitemaps?page=1", "Authorization", "Bearer ", validWebScraperSitemaps)
 }
 
 func verifyEnvoy(ctx context.Context, secret string) VerificationResult {
@@ -7870,14 +7868,17 @@ func verifySentry(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyHoneycomb(ctx context.Context, secret string) VerificationResult {
-	return verifyEndpoints(ctx, []string{"https://api.honeycomb.io/1/auth", "https://api.eu1.honeycomb.io/1/auth"}, func(endpoint string) VerificationResult {
-		return verifyHeaderGET(ctx, secret, endpoint, "X-Honeycomb-Team", "")
+	return verifyIdentityEndpoints(ctx, []string{"https://api.honeycomb.io/1/auth", "https://api.eu1.honeycomb.io/1/auth"}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "X-Honeycomb-Team", "", validHoneycombAuth)
 	})
 }
 
 func verifyOpsgenie(ctx context.Context, secret string) VerificationResult {
-	return verifyEndpoints(ctx, []string{"https://api.opsgenie.com/v2/account", "https://api.eu.opsgenie.com/v2/account"}, func(endpoint string) VerificationResult {
-		return verifyHeaderGET(ctx, secret, endpoint, "Authorization", "GenieKey ")
+	return verifyIdentityEndpoints(ctx, []string{"https://api.opsgenie.com/v2/account", "https://api.eu.opsgenie.com/v2/account"}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "GenieKey ", func(p identityPayload) bool {
+			account := identityObject(p, "data")
+			return !identityHasErrors(account) && identityStrings(account, "name") && identityNonnegativeIntegers(account, "userCount")
+		})
 	})
 }
 
@@ -7985,7 +7986,13 @@ func verifyKlaviyo(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPostmark(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.postmarkapp.com/server", "X-Postmark-Server-Token", "")
+	return verifyIdentityEndpoints(ctx, []string{"https://api.postmarkapp.com/stats/outbound", "https://api.postmarkapp.com/senders?count=1&offset=0"}, func(endpoint string) VerificationResult {
+		header, valid := "X-Postmark-Server-Token", validPostmarkStats
+		if strings.Contains(endpoint, "/senders?") {
+			header, valid = "X-Postmark-Account-Token", validPostmarkSenders
+		}
+		return verifyIdentityGET(ctx, secret, endpoint, header, "", valid)
+	})
 }
 
 func verifyAtlassian(ctx context.Context, secret string) VerificationResult {
