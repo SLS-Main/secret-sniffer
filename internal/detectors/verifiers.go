@@ -1793,16 +1793,9 @@ func verifyLemlist(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyZeroTier(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.zerotier.com/api/v1/network", nil)
-	req.Header.Set("Authorization", "token "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "access denied") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode == http.StatusUnauthorized {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityGET(ctx, secret, "https://api.zerotier.com/api/v1/status", "Authorization", "token ", func(p identityPayload) bool {
+		user := identityObject(p, "user")
+		return identityStringEquals(p, "id", "central_status") && identityStringEquals(p, "type", "CentralStatus") && !identityHasErrors(user) && identityStrings(user, "id", "email")
 	})
 }
 
@@ -2648,7 +2641,10 @@ func verifyProductboard(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySanity(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.sanity.io/v2021-10-21/users/me")
+	return verifyIdentityGET(ctx, secret, "https://api.sanity.io/v2021-10-21/users/me", "Authorization", "Bearer ", func(p identityPayload) bool {
+		var name *string
+		return identityStrings(p, "id") && json.Unmarshal(p["name"], &name) == nil && name != nil
+	})
 }
 
 func verifyStoryblokPersonal(ctx context.Context, secret string) VerificationResult {
@@ -3590,7 +3586,12 @@ func verifyQovery(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyFulcrum(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.fulcrumapp.com/api/v2/users.json?page=1&per_page=1", "X-ApiToken", "")
+	return verifyIdentityEndpoints(ctx, []string{"api.fulcrumapp.com", "api.fulcrumapp-au.com", "api.fulcrumapp-ca.com", "api.fulcrumapp-eu.com"}, func(host string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, "https://"+host+"/api/v2/users.json", "X-ApiToken", "", func(p identityPayload) bool {
+			user := identityObject(p, "user")
+			return !identityHasErrors(user) && identityStrings(user, "id", "email")
+		})
+	})
 }
 
 func verifyMavenlink(ctx context.Context, secret string) VerificationResult {
@@ -3660,7 +3661,15 @@ func isHex(value string) bool {
 }
 
 func verifyHarness(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://app.harness.io/ng/api/user/currentUser", "x-api-key", "")
+	if !harnessPersonalToken.MatchString(secret) {
+		return unknownVerificationResult("credential_type", "credential does not provide a supported personal-token account hint")
+	}
+	account := strings.Split(secret, ".")[1]
+	return verifyIdentityGET(ctx, secret, "https://app.harness.io/ng/api/user/currentUser?accountIdentifier="+url.QueryEscape(account), "x-api-key", "", func(p identityPayload) bool {
+		user := identityObject(p, "data")
+		_, hasCode := p["code"]
+		return !hasCode && identityStringEquals(p, "status", "SUCCESS") && !identityHasErrors(user) && identityStrings(user, "uuid", "email")
+	})
 }
 
 func verifySourcegraphCloud(ctx context.Context, secret string) VerificationResult {
@@ -3751,15 +3760,9 @@ func verifyMixmax(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyBunny(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.bunny.net/user", nil)
-	req.Header.Set("AccessKey", secret)
-	result := verifyHTTPRequest(ctx, req)
-	if result.Status == VerificationUnverified {
-		result.Status = VerificationUnknown
-		result.ErrorCategory = "credential_type"
-		result.Message = "credential may be a Bunny storage password"
-	}
-	return result
+	end := time.Now().UTC().Truncate(24 * time.Hour)
+	query := url.Values{"dateFrom": {end.Add(-24 * time.Hour).Format(time.RFC3339)}, "dateTo": {end.Format(time.RFC3339)}}
+	return verifyIdentityGET(ctx, secret, "https://api.bunny.net/statistics?"+query.Encode(), "AccessKey", "", validBunnyStatistics)
 }
 
 func verifyUbidots(ctx context.Context, secret string) VerificationResult {
@@ -3876,7 +3879,10 @@ func verifyEasyship(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyTemporalCloud(ctx context.Context, secret string) VerificationResult {
-	return positiveOnlyVerification(verifyBearerGET(ctx, secret, "https://saas-api.tmprl.cloud/cloud/current-identity"), "credential may be a Temporal client secret")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://saas-api.tmprl.cloud/cloud/current-identity", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("temporal-cloud-api-version", "v0.22.0")
+	return verifyIdentityRequest(ctx, req, validTemporalIdentity)
 }
 
 func verifyCircle(ctx context.Context, secret string) VerificationResult {
@@ -4336,11 +4342,14 @@ func verifyIBMCloud(ctx context.Context, secret string) VerificationResult {
 
 func verifyPlatformSH(ctx context.Context, secret string) VerificationResult {
 	body := "grant_type=api_token&api_token=" + url.QueryEscape(secret)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://auth.api.platform.sh/oauth2/token", strings.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://auth.upsun.com/oauth2/token", strings.NewReader(body))
+	req.SetBasicAuth("platform-api-user", "")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyTokenExchange("invalid_grant", "invalid_token"))
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		var kind string
+		var expires *int64
+		return identityStrings(p, "access_token") && json.Unmarshal(p["token_type"], &kind) == nil && strings.EqualFold(kind, "bearer") && json.Unmarshal(p["expires_in"], &expires) == nil && expires != nil && *expires > 0
+	})
 }
 
 func verifyEtherscan(ctx context.Context, secret string) VerificationResult {
@@ -5503,9 +5512,9 @@ func verifyReplyIO(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPartnerStack(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.partnerstack.com/api/v2/partnerships", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.partnerstack.com/api/v2/partnerships?limit=1&include_offers=false", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyPrivateCollection(ctx, req, "token invalid or archived")
+	return verifyIdentityRequest(ctx, req, validPartnerStackPartnerships)
 }
 
 func verifyPepipost(ctx context.Context, secret string) VerificationResult {
@@ -6478,10 +6487,14 @@ func verifyChatBot(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyFeedier(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.feedier.com/v1/carriers", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.bx.feedier.com/v3/teams?page=1&limit=1", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
 	req.Header.Set("Accept", "application/json")
-	return verifyPrivateCollection(ctx, req, "api key provided does not exist")
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		return validIdentityCollection(p, "data", func(team identityPayload) bool {
+			return !identityHasErrors(team) && identityNonnegativeIntegers(team, "id") && identityStrings(team, "name")
+		})
+	})
 }
 
 func verifyFlexport(ctx context.Context, secret string) VerificationResult {
@@ -6673,10 +6686,15 @@ func verifyComplyAdvantage(ctx context.Context, secret string) VerificationResul
 }
 
 func verifyCronitor(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://cronitor.io/api/monitors", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://cronitor.io/api/groups?page=1&pageSize=1", nil)
 	req.SetBasicAuth(secret, "")
 	req.Header.Set("Cronitor-Version", "2025-11-28")
-	return verifyPrivateCollection(ctx, req, "invalid api key")
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		_, hasDetail := p["detail"]
+		return !hasDetail && identityNonnegativeIntegers(p, "count") && validIdentityCollection(p, "groups", func(group identityPayload) bool {
+			return !identityHasErrors(group) && identityStrings(group, "key", "name")
+		})
+	})
 }
 
 func verifySSLMate(ctx context.Context, secret string) VerificationResult {

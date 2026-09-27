@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 25:
+After remediation batch 26:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 468 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 43 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 478 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 33 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 290
-`read_only`, 79 `auth_only`, 99 `unsafe`, and 99 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 299
+`read_only`, 80 `auth_only`, 99 `unsafe`, and 89 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -87,14 +87,14 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 
 ## Recommended following batches
 
-1. **Identity/collection contracts:** Harness, Salesforce, CoinAPI,
+1. **Identity/collection contracts:** Salesforce, CoinAPI,
    API-Sports, and regional content-management APIs.
    Confirm current documentation, validate identity/list schemas, suppress
    metadata, and classify structured failures conservatively.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
    key families require different verification operations; a rejection by the
    wrong API must not label the key invalid.
-3. **Region and endpoint context:** Grafana, Insightly, Fulcrum, Tray.io.
+3. **Region and endpoint context:** Grafana, Insightly, Tray.io and self-hosted deployments.
    Correlate endpoint context and use only documented bounded fallbacks. Preserve
    unknown results when the necessary region or self-hosted URL is missing.
 
@@ -324,6 +324,51 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 26: ten control-plane identity and metadata verifiers
+
+Platform.sh is now `auth_only`; the other nine are `read_only`. Every success
+requires HTTP 200 and an explicit typed schema. Responses, including issued
+access tokens, identity fields and token metadata, are suppressed on all outcomes.
+Permission, deployment and credential-family rejection remains unknown.
+
+| Provider | Contract and supported scope |
+| --- | --- |
+| Harness | Personal-token `x-api-key` current-user request, supplying accountIdentifier from the existing pat token's account hint. Requires SUCCESS and data.uuid/email; error codes cannot authenticate. Other token formats make no request. Self-managed deployments remain ambiguous. |
+| Sanity | Bearer versioned `/users/me`, requiring id and a string name (including empty). Email and profile metadata are optional. Robot/project-token rejection remains unknown. |
+| Temporal Cloud | Bearer `/cloud/current-identity` with temporal-cloud-api-version=v0.22.0. Requires exactly one user or service-account principal, with id and spec.email or spec.name. Optional principalApiKey metadata is suppressed. Client-secret rejection remains unknown. |
+| Bunny.net | Replaces undocumented `/user` with `/statistics`, bounded to the previous completed UTC day. Requires typed bandwidth, origin traffic, response time, request count and cache-hit rate; zero usage accepted. Storage/Stream credential rejection remains unknown. |
+| Cronitor | Basic API-key `/api/groups?page=1&pageSize=1`, version 2025-11-28. Requires numeric count and group key/name entries, including empty collections. Telemetry-only and restricted-key rejection remains unknown. |
+| PartnerStack | Partner Bearer `/api/v2/partnerships?limit=1&include_offers=false`. Requires numeric status=200, boolean data.has_more and typed items with key/company.id. Empty collections and archived partnerships accepted. Vendor credentials require a different contract; rejection remains unknown. |
+| Feedier | Migrates to `https://api.bx.feedier.com/v3/teams?page=1&limit=1`, Bearer auth. Requires data array with numeric id/name entries; empty teams and optional hierarchy metadata accepted. |
+| Fulcrum | X-ApiToken `/api/v2/users.json` returns the current user, requiring user.id/email. US/AU/CA/EU fixed-host fallback only on authorization ambiguity. Organization contexts are suppressed and byte-capped. |
+| Platform.sh/Upsun | Migrates api_token grant to `https://auth.upsun.com/oauth2/token`, with documented public-client Basic auth platform-api-user and empty password. Requires access_token, Bearer token_type and positive integer expires_in. Issued tokens are suppressed; incompatible bearer tokens remain unknown. |
+| ZeroTier | Replaces network listing with legacy Central `/api/v1/status`, Authorization: token. Requires central_status/CentralStatus and user.id/email. Read-only mode is legitimate. Local-service and newer credential-family rejection remains unknown. |
+
+All ten enforce whole-token trailing boundaries. Harness's keyword prefilter now
+recognizes standalone pat tokens; ZeroTier covers existing underscore/hyphen
+context variants. This batch hardens supported families without claiming complete
+modern-format detection. Fulcrum regional fallback stops on redirects, malformed
+success, rate limits, outages, transport/read failures and cancellation. No returned
+pagination links are followed.
+
+Mocked tests cover exact requests, ordinary verification policy, typed and
+conflicting schemas, legitimate empty/inactive/optional fields, response
+suppression, regional order and stop conditions, response caps, credential
+boundaries and unsupported Harness formats.
+
+Official evidence checked 2026-09-27:
+
+- [Harness current-user endpoint and required account context](https://apidocs.harness.io/user/getcurrentuserinfo.md), [official response model](https://github.com/harness/harness-go-sdk/blob/main/harness/nextgen/model_response_dto_user_info.go), [UserInfo model](https://github.com/harness/harness-go-sdk/blob/main/harness/nextgen/model_user_info.go).
+- [Sanity official users client](https://github.com/sanity-io/client/blob/main/src/users/UsersClient.ts), [current-user types](https://github.com/sanity-io/client/blob/main/src/types.ts), [authentication](https://www.sanity.io/docs/content-lake/http-auth.md).
+- [Temporal Cloud published OpenAPI](https://saas-api.tmprl.cloud/spec.json), [current API version](https://github.com/temporalio/cloud-api/blob/main/VERSION).
+- [Bunny Core OpenAPI statistics schema and date bounds](https://bunny.net/docs/api-reference/core/openapi.json).
+- [Cronitor group metadata, scopes and pagination](https://cronitor.io/docs/groups-api), [versioned API authentication](https://cronitor.io/docs/api).
+- [PartnerStack Partner Bearer authentication](https://docs.partnerstack.com/reference/partner-api-authentication.md), [Partner partnership schema and pagination](https://docs.partnerstack.com/reference/get_v2-partnerships.md).
+- [Feedier teams endpoint and schema](https://developers.feedier.com/teams), [pagination](https://developers.feedier.com/pagination).
+- [Fulcrum Users API authentication and current-user response](https://docs.fulcrumapp.com/reference/users-intro.md), [endpoint and regional servers](https://docs.fulcrumapp.com/reference/users-get-user.md).
+- [Upsun token exchange](https://developer.upsun.com/api/rest/authentication.md), [official Platform.sh CLI auth-host configuration](https://github.com/platformsh/cli/blob/main/internal/config/platformsh-cli.yaml).
+- [ZeroTier legacy Central OpenAPI status, user and authentication schemas](https://docs.zerotier.com/openapi/central/v1.json).
 
 ## Remediation batch 25: ten schema, identity and metadata verifiers
 
