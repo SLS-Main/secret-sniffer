@@ -707,15 +707,9 @@ func validRunpodPods(body []byte) bool {
 }
 
 func verifyBetterStack(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://betterstack.com/api/v2/team-members", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://betterstack.com/api/v2/team-members?page=1&per_page=1", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		response := strings.ToLower(string(body))
-		if statusCode == http.StatusUnprocessableEntity && strings.Contains(response, "global") && strings.Contains(response, "team") {
-			return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a multi-team token"}, true
-		}
-		return VerificationResult{}, false
-	})
+	return verifyIdentityRequest(ctx, req, validBetterStackMembers)
 }
 
 func verifyAiven(ctx context.Context, secret string) VerificationResult {
@@ -3150,11 +3144,10 @@ func verifyOnfido(ctx context.Context, secret string) VerificationResult {
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/v3.6/applicants?page=1&per_page=1", nil)
 	req.Header.Set("Authorization", "Token token="+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "authorization_error", "expired_token") {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		return validIdentityCollection(p, "applicants", func(applicant identityPayload) bool {
+			return !identityHasErrors(applicant) && identityStrings(applicant, "id", "created_at")
+		})
 	})
 }
 
@@ -3604,7 +3597,11 @@ func verifyPagarMe(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCodemagic(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.codemagic.io/apps", "x-auth-token", "")
+	return verifyIdentityGET(ctx, secret, "https://api.codemagic.io/apps", "x-auth-token", "", func(p identityPayload) bool {
+		return validIdentityCollection(p, "applications", func(app identityPayload) bool {
+			return !identityHasErrors(app) && identityStrings(app, "_id", "appName")
+		})
+	})
 }
 
 func verifyStreak(ctx context.Context, secret string) VerificationResult {
@@ -3667,7 +3664,7 @@ func verifyFulcrum(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyMavenlink(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.mavenlink.com/api/v1/users.json?limit=1&offset=0")
+	return verifyIdentityGET(ctx, secret, "https://api.mavenlink.com/api/v1/users/me.json", "Authorization", "Bearer ", validMavenlinkSelf)
 }
 
 func verifyAshby(ctx context.Context, secret string) VerificationResult {
@@ -3938,7 +3935,7 @@ func verifyChartMogul(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyIntrinio(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api-v2.intrinio.com/account/current_usage")
+	return verifyIdentityGET(ctx, secret, "https://api-v2.intrinio.com/account/current_usage", "Authorization", "Bearer ", validIntrinioUsage)
 }
 
 func verifyOmnisend(ctx context.Context, secret string) VerificationResult {
@@ -5608,10 +5605,10 @@ func verifySignable(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySnipcart(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.snipcart.com/api/orders?limit=1", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.snipcart.com/api/orders?limit=1&format=Excerpt", nil)
 	req.SetBasicAuth(secret, "")
 	req.Header.Set("Accept", "application/json")
-	return verifyPrivateCollection(ctx, req)
+	return verifyIdentityRequest(ctx, req, validSnipcartOrders)
 }
 
 func verifySimpleSat(ctx context.Context, secret string) VerificationResult {
@@ -6135,11 +6132,9 @@ func verifyConvertKit(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyScrutinizer(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://scrutinizer-ci.com/api/user/repositories?access_token=" + url.QueryEscape(secret)
+	endpoint := "https://scrutinizer-ci.com/api/user/repositories?page=1&per_page=1&access_token=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("invalid_grant", "access token provided is invalid"))
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, validScrutinizerRepositories)
 }
 
 func verifyInstantly(ctx context.Context, secret string) VerificationResult {
@@ -6302,7 +6297,18 @@ func verifyAlconost(ctx context.Context, secret string) VerificationResult {
 func verifyAxonaut(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://axonaut.com/api/v2/companies?type=all&sort=id", nil)
 	req.Header.Set("userApiKey", secret)
-	return verifyPrivateCollection(ctx, req, "provided api key is invalid")
+	req.Header.Set("page", "1")
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(status int, body []byte) (VerificationResult, bool) {
+		if status == http.StatusOK && validIdentityCollection(identityPayload{"companies": body}, "companies", func(company identityPayload) bool {
+			return !identityHasErrors(company) && collectionPositiveInteger(company["id"]) && identityStrings(company, "name")
+		}) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(status, body)
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyBuddyNS(ctx context.Context, secret string) VerificationResult {
@@ -6662,16 +6668,9 @@ func verifySurveySparrow(ctx context.Context, secret string) VerificationResult 
 }
 
 func verifySurvicate(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://data-api.survicate.com/v1/surveys", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://data-api.survicate.com/v2/surveys?items_per_page=1", nil)
 	req.Header.Set("Authorization", "Basic "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized {
-			return invalidCredentialResult(), true
-		}
-		return classifyCollectionResponse()(statusCode, body)
-	})
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, validSurvicateSurveys)
 }
 
 func verifyVyte(ctx context.Context, secret string) VerificationResult {
@@ -7084,9 +7083,9 @@ func verifyTeamwork(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyTeachable(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://developers.teachable.com/v1/courses", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://developers.teachable.com/v1/courses?page=1&per=1", nil)
 	req.Header.Set("apiKey", secret)
-	return verifyPrivateCollection(ctx, req, "invalid authentication credentials")
+	return verifyIdentityRequest(ctx, req, validTeachableCourses)
 }
 
 func verifyBrandfetch(ctx context.Context, secret string) VerificationResult {

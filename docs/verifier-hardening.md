@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 17:
+After remediation batch 18:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 388 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 123 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 398 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 113 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 215
-`read_only`, 74 `auth_only`, 99 `unsafe`, and 179 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 225
+`read_only`, 74 `auth_only`, 99 `unsafe`, and 169 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -324,6 +324,51 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 18: ten paginated collection and account verifiers
+
+All ten are now `read_only`. Each makes one authenticated GET, requires HTTP 200
+and provider-specific structured evidence, and suppresses the response body on
+success and failure. Permissions, subscriptions, credential subtypes and provider
+failures remain unknown. Redirects and response pagination links are not followed.
+
+| Provider | Contract and evidence required |
+| --- | --- |
+| Onfido / Entrust | Token-authenticated `GET /v3.6/applicants?page=1&per_page=1`; non-null applicants with string id/created_at. Live/sandbox token prefixes select exactly one EU, US or CA host. Regional bare-token prefilter keywords now match all six documented prefixes. Applicant PII is suppressed. |
+| Snipcart | Basic-auth `GET /api/orders?limit=1&format=Excerpt`; nonnegative integer totalItems/offset/limit and typed order token/status. Requests lighter summaries rather than full orders; cancelled orders still authenticate. Public-key rejection remains unknown. |
+| Scrutinizer | Escaped access_token query auth on `GET /api/user/repositories?page=1&per_page=1`; page/limit and embedded repositories with type/created_at and self href. Links are treated only as data and never requested. |
+| Codemagic | `x-auth-token` `GET /apps`; applications with string _id/appName. Workflow metadata is optional, since YAML workflows are not returned before a build. The documented list has no pagination; one response is read under the shared 1 MiB cap, with truncated JSON unknown. |
+| Teachable | `apiKey` `GET /v1/courses?page=1&per=1`; courses with positive integer id/name and boolean is_published, plus meta total/page/per_page. Unpublished courses and nullable descriptions remain legitimate. |
+| Axonaut | `userApiKey` `GET /api/v2/companies?type=all&sort=id`, documented `page: 1` header; top-level array of integer id/name objects. Uses the provider's first-page size, since the contract exposes no page-size parameter. Business and financial data are suppressed. |
+| Survicate | `Authorization: Basic <key>` `GET /v2/surveys?items_per_page=1`; pagination_data.has_more boolean and typed data survey id/name/created_at/type. Replaces v1, retired September 15, 2026. Does not retrieve survey responses or respondents. |
+| Better Stack | Bearer `GET /api/v2/team-members?page=1&per_page=1`; JSON:API member or pending-invitation id/type plus email/role. A global token needing team_name now remains unknown instead of being classified verified from error text. No team is guessed. |
+| Intrinio | Bearer `GET /account/current_usage`; account email and non-null usage collection with access_code and documented string count/limit. Limits are not assumed numeric; public-key domain restrictions and subscription failures remain unknown. |
+| Mavenlink / Kantata | Bearer `GET /api/v1/users/me.json` replaces collaborator listing; exactly one canonical results entry must resolve to the matching users map id/email_address, with count=1. No optional associations are requested. |
+
+Empty resource collections are valid, whereas missing/null arrays, malformed
+entries and contradictory errors are unknown. Current-user identity requires a
+real result. All probes use the shared bounded response reader and remain subject
+to normal provider request quotas.
+
+Mocked tests cover all ten exact requests and ordinary-policy promotions, query
+escaping, Basic/header authentication, integer versus string IDs, unpublished or
+cancelled resources, pending invitations, nullable metadata, malformed envelopes,
+non-200 success-like bodies, response suppression and transport/read failures.
+Onfido tests additionally verify standalone detection and single-host routing for
+all six environment/region prefixes, including authorization and outage responses.
+
+Official evidence checked 2026-09-26:
+
+- [Onfido API regions, tokens, applicant schema and pagination](https://documentation.onfido.com/api/latest/).
+- [Snipcart orders, Excerpt format, Basic authentication and list envelope](https://docs.snipcart.com/v3/api-reference/orders).
+- [Scrutinizer authenticated user repositories and per_page bounds](https://scrutinizer-ci.com/docs/api/).
+- [Codemagic applications and optional workflow metadata](https://docs.codemagic.io/rest-api/applications/).
+- [Teachable courses, per pagination and typed schemas](https://docs.teachable.com/reference/listcourses.md).
+- [Axonaut embedded OpenAPI: company array, page header and userApiKey](https://axonaut.com/api/v2/doc).
+- [Survicate survey list](https://developers.survicate.com/data-export/survey.md) and [v1-to-v2 migration, unchanged authentication and retirement date](https://developers.survicate.com/data-export/migration-v1-v2.md).
+- [Better Stack members, invitations and global-token ambiguity](https://betterstack.com/docs/uptime/api/team-members/), [pagination](https://betterstack.com/docs/uptime/api/pagination/). The existing detector format is retained; the contract does not publish a universal token-length guarantee.
+- [Intrinio current usage](https://docs.intrinio.com/documentation/web_api/get_account_current_usage_v2), [authentication](https://docs.intrinio.com/documentation/api_v2/authentication), and [official SDK string counters](https://github.com/intrinio/javascript-sdk/blob/master/src/model/AccountCurrentUsage.js).
+- [Kantata API response indexing and authentication](https://developer.mavenlink.com/), [official OpenAPI /users/me contract and User schema](https://app.mavenlink.com/oas/specification).
 
 ## Remediation batch 17: ten principal, token and bounded-read verifiers
 
