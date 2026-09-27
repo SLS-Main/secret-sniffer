@@ -725,7 +725,10 @@ func verifySourcegraphCody(ctx context.Context, secret string) VerificationResul
 }
 
 func verifyOpenPhone(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.quo.com/v1/users?maxResults=1", "Authorization", "")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.quo.com/organization", nil)
+	req.Header.Set("Authorization", secret)
+	req.Header.Set("Quo-Api-Version", "2026-03-30")
+	return verifyIdentityRequest(ctx, req, validQuoOrganization)
 }
 
 func verifyCallRail(ctx context.Context, secret string) VerificationResult {
@@ -1419,8 +1422,12 @@ func verifyShippo(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyTaxJar(ctx context.Context, secret string) VerificationResult {
-	return verifyEndpoints(ctx, []string{"https://api.taxjar.com/v2/categories", "https://api.sandbox.taxjar.com/v2/categories"}, func(endpoint string) VerificationResult {
-		return verifyBearerGET(ctx, secret, endpoint)
+	return verifyIdentityEndpoints(ctx, []string{"https://api.taxjar.com/v2/categories", "https://api.sandbox.taxjar.com/v2/categories"}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", func(p identityPayload) bool {
+			return validIdentityCollection(p, "categories", func(category identityPayload) bool {
+				return !identityHasErrors(category) && identityStrings(category, "product_tax_code", "name")
+			})
+		})
 	})
 }
 
@@ -1548,8 +1555,8 @@ func verifyTwist(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyYousign(ctx context.Context, secret string) VerificationResult {
-	return verifyEndpoints(ctx, []string{"https://api.yousign.app/v3/users?limit=1", "https://api-sandbox.yousign.app/v3/users?limit=1"}, func(endpoint string) VerificationResult {
-		return verifyBearerGET(ctx, secret, endpoint)
+	return verifyIdentityEndpoints(ctx, []string{"https://api.yousign.app/v3/users?limit=1", "https://api-sandbox.yousign.app/v3/users?limit=1"}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", validYousignUsers)
 	})
 }
 
@@ -1600,7 +1607,7 @@ func verifyFireHydrant(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySocketDev(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.socket.dev/v0/organizations")
+	return verifyIdentityGET(ctx, secret, "https://api.socket.dev/v0/organizations", "Authorization", "Bearer ", validSocketOrganizations)
 }
 
 func verifySemgrep(ctx context.Context, secret string) VerificationResult {
@@ -4613,7 +4620,7 @@ func verifyCurrencyScoop(ctx context.Context, secret string) VerificationResult 
 }
 
 func verifyFastForex(ctx context.Context, secret string) VerificationResult {
-	return verifyQueryAPI(ctx, "https://api.fastforex.io/fetch-one?from=USD&to=EUR&api_key="+url.QueryEscape(secret), []string{"base", "result", "updated"}, "api key not valid")
+	return verifyIdentityGET(ctx, secret, "https://api.fastforex.io/usage", "X-API-KEY", "", validFastForexUsage)
 }
 
 func verifyVATLayer(ctx context.Context, secret string) VerificationResult {
@@ -5024,20 +5031,7 @@ func verifyIPInfoDB(ctx context.Context, secret string) VerificationResult {
 func verifyGeckoboard(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.geckoboard.com/", nil)
 	req.SetBasicAuth(secret, "")
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		if containsAnyFold(string(body), "api key you provided is invalid") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode >= 200 && statusCode < 300 && jsonObject(body) {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-	})
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool { return len(p) == 0 })
 }
 
 func verifyYelp(ctx context.Context, secret string) VerificationResult {
@@ -5357,9 +5351,7 @@ func verifyWorldCoinIndex(ctx context.Context, secret string) VerificationResult
 func verifyCraftMyPDF(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.craftmypdf.com/v1/get-account-info", nil)
 	req.Header.Set("X-API-KEY", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"status", "data"}, "invalid api key"))
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, validCraftMyPDFAccount)
 }
 
 func verifyGlassnode(ctx context.Context, secret string) VerificationResult {
@@ -5669,9 +5661,10 @@ func verifyHappyScribe(ctx context.Context, secret string) VerificationResult {
 func verifyNimble(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.nimble.com/api/v1/myself", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "access token is invalid or expired"))
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		_, hasCode := p["code"]
+		return !hasCode && identityStrings(p, "user_id", "company_id", "email")
+	})
 }
 
 func verifyZenkit(ctx context.Context, secret string) VerificationResult {
@@ -5881,10 +5874,20 @@ func verifyRiteKit(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyFloat(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.float.com/v3/people?per-page=1", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.float.com/v3/accounts?per-page=1&fields=account_id,name", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	req.Header.Set("User-Agent", "secret-sniffer credential verifier")
-	return verifyPrivateCollection(ctx, req, "invalid credentials")
+	req.Header.Set("User-Agent", "secret-sniffer credential verifier (sls-jmantz@users.noreply.github.com)")
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(status int, body []byte) (VerificationResult, bool) {
+		if status == http.StatusOK && validIdentityCollection(identityPayload{"accounts": body}, "accounts", func(account identityPayload) bool {
+			return !identityHasErrors(account) && collectionPositiveInteger(account["account_id"]) && identityStrings(account, "name")
+		}) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(status, body)
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyHumanity(ctx context.Context, secret string) VerificationResult {
@@ -7989,10 +7992,11 @@ func verifyHubSpot(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyKlaviyo(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://a.klaviyo.com/api/profiles?page[size]=1", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://a.klaviyo.com/api/accounts?fields%5Baccount%5D=timezone", nil)
 	req.Header.Set("Authorization", "Klaviyo-API-Key "+secret)
-	req.Header.Set("revision", "2025-10-15")
-	return verifyHTTPRequest(ctx, req)
+	req.Header.Set("revision", "2026-07-15")
+	req.Header.Set("Accept", "application/vnd.api+json")
+	return verifyIdentityRequest(ctx, req, validKlaviyoAccount)
 }
 
 func verifyPostmark(ctx context.Context, secret string) VerificationResult {

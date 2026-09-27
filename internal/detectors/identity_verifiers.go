@@ -12,7 +12,9 @@ type identityPayload map[string]json.RawMessage
 // Identity probes accept only the documented success status and structure.
 // Permission, region and credential-subtype failures are not proof of invalidity.
 func verifyIdentityRequest(ctx context.Context, req *http.Request, valid func(identityPayload) bool) VerificationResult {
-	req.Header.Set("Accept", "application/json")
+	if req.Header.Get("Accept") == "" {
+		req.Header.Set("Accept", "application/json")
+	}
 	result := verifyHTTPRequestWithClassifier(ctx, req, func(status int, body []byte) (VerificationResult, bool) {
 		var payload identityPayload
 		if status == http.StatusOK && json.Unmarshal(body, &payload) == nil && payload != nil && !identityHasErrors(payload) && valid(payload) {

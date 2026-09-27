@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 18:
+After remediation batch 19:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 398 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 113 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 408 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 103 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 225
-`read_only`, 74 `auth_only`, 99 `unsafe`, and 169 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 234
+`read_only`, 75 `auth_only`, 99 `unsafe`, and 159 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -324,6 +324,52 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 19: ten account-context and authentication verifiers
+
+Nine probes are now `read_only`; Geckoboard's authentication ping is `auth_only`.
+All require HTTP 200 and provider-specific evidence and suppress response bodies
+on success and failure. Permission, subscription, credential-subtype and provider
+errors remain unknown. Requests use the shared bounded response reader and never
+follow redirects or response-supplied links.
+
+| Provider | Contract and evidence required |
+| --- | --- |
+| Klaviyo | `GET /api/accounts?fields[account]=timezone` replaces profiles; exactly one account with id/type and attributes.timezone. Uses Klaviyo-API-Key authentication, revision `2026-07-15` and JSON:API Accept. Missing accounts:read scope remains unknown. |
+| OpenPhone / Quo | `GET /organization`, literal Authorization key and `Quo-Api-Version: 2026-03-30`; data id/createdAt/updatedAt and active or expired subscriptionStatus. Nullable name and expired subscriptions are legitimate. Quo context is now detected. |
+| Socket.dev | Bearer `GET /v0/organizations`; non-null organization map, entries with id/slug/plan. Empty maps and nullable names/images are legitimate. Requires authentication but no org-token scope; consumes **one quota unit**. The socketdev prefilter now matches its existing regex context. |
+| Float | Bearer `GET /v3/accounts?per-page=1&fields=account_id,name` replaces people; array of positive integer account_id and name. Uses the documented contact-bearing User-Agent, sparse fields and one-item page. |
+| Nimble | Bearer `GET /api/v1/myself`; user_id/company_id/email replace the incorrect id expectation. Application code envelopes remain unknown; token suffix boundaries prevent truncated credential verification. |
+| Yousign | Bearer `GET /v3/users?limit=1`; data array with id/email and meta.next_cursor string or null. Fixed production/sandbox hosts, fallback only on authorization ambiguity. Optional user metadata and inactive users do not invalidate authentication. |
+| Geckoboard | Basic-auth `GET /`; success requires exactly an empty JSON object. Generic success objects no longer prove authentication; trailing credential suffixes cannot be truncated into a supported key. |
+| TaxJar | Bearer `GET /v2/categories`; typed product_tax_code/name collection, fixed production/sandbox hosts with authorization-only fallback. Documented 28-character keys are accepted whole. |
+| fastFOREX | `X-API-KEY` `GET /usage` replaces exchange-rate lookup and query authentication; numeric quota/history counters and current-period start/end/usage/remaining_quota. Supported key boundaries reject truncated suffixes. |
+| CraftMyPDF | `X-API-KEY` `GET /v1/get-account-info`; top-level status=success, username/created_at and numeric quotas replace the incorrect data envelope. Padded base64 credential characters are preserved. |
+
+TaxJar/Yousign fallback stops on malformed success, redirects, throttling,
+outages, transport/read failures and cancellation. Collection probes accept empty
+collections; identity probes require the documented account evidence. Requests
+remain subject to provider quotas. Socket organization and TaxJar category lists
+have no requested pagination; response size is capped by the shared reader.
+
+Mocked regressions cover all ten exact requests, headers, ordinary verification
+policy, nullable metadata, empty collections, non-200 success-like responses,
+contradictory errors, response suppression, transport/read failures, fallback and
+cancellation. Detection tests cover padded credentials, whole-key boundaries and
+Quo/Socket context. Shared identity requests now preserve explicit Accept headers.
+
+Official evidence checked 2026-09-27:
+
+- [Klaviyo account schema, sparse fields, revision and scope](https://developers.klaviyo.com/en/reference/get_accounts.md).
+- [Quo versioned organization endpoint, authentication and subscription states](https://www.quo.com/docs/2026-03-30/organization/get-the-organization.md).
+- [Socket organization schema, scopes and quota](https://docs.socket.dev/reference/getorganizations.md), [authentication](https://docs.socket.dev/reference/authentication.md).
+- [Float accounts schema and pagination](https://developer.float.com/paths/accounts.yaml), [API overview and sparse fields](https://developer.float.com/), [authentication](https://developer.float.com/overview_authentication.html).
+- [Nimble current-user response and OAuth authentication](https://nimble.readthedocs.io/en/latest/).
+- [Yousign/Youtrust v3 users schema and environments](https://developers.youtrust.com/reference/get-users-1.md).
+- [Geckoboard authentication ping and key example](https://developer.geckoboard.com/).
+- [TaxJar authentication, sandbox and category schema](https://developers.taxjar.com/api/reference/).
+- [fastFOREX usage schema and header authentication](https://www.fastforex.io/docs/api-reference/admin/usage.md).
+- [CraftMyPDF official OpenAPI, account fields and credential examples](https://craftmypdf.s3.ap-southeast-1.amazonaws.com/craftmypdf_api/craftmypdf_api.yaml).
 
 ## Remediation batch 18: ten paginated collection and account verifiers
 
