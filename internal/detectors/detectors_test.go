@@ -730,8 +730,8 @@ func TestInfuraVerifierRequiresJSONRPCResult(t *testing.T) {
 		body   string
 		status VerificationStatus
 	}{
-		{name: "valid", code: http.StatusOK, body: `{"jsonrpc":"2.0","id":1,"result":"0x1234"}`, status: VerificationVerified},
-		{name: "invalid", code: http.StatusUnauthorized, body: `invalid project id`, status: VerificationUnverified},
+		{name: "valid", code: http.StatusOK, body: `{"jsonrpc":"2.0","id":1,"result":"0x1"}`, status: VerificationVerified},
+		{name: "authorization ambiguity", code: http.StatusUnauthorized, body: `invalid project id`, status: VerificationUnknown},
 		{name: "missing result", code: http.StatusOK, body: `{"jsonrpc":"2.0","id":1,"error":{"code":-32000}}`, status: VerificationUnknown},
 	}
 	for _, tt := range tests {
@@ -2293,8 +2293,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 129,
-		VerificationSafetyReadOnly:   261,
+		VerificationSafetyUnreviewed: 119,
+		VerificationSafetyReadOnly:   271,
 		VerificationSafetyAuthOnly:   78,
 		VerificationSafetyUnsafe:     99,
 	}
@@ -2307,7 +2307,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 438 || report.RequiresHardening != 73 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 448 || report.RequiresHardening != 63 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

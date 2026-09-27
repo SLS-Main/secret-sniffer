@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 22:
+After remediation batch 23:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 438 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 73 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 448 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 63 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 261
-`read_only`, 78 `auth_only`, 99 `unsafe`, and 129 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 271
+`read_only`, 78 `auth_only`, 99 `unsafe`, and 119 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -87,8 +87,8 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 
 ## Recommended following batches
 
-1. **Identity/collection contracts:** Typeform, Harness, BitGo,
-   Sourcegraph, and regional content-management APIs.
+1. **Identity/collection contracts:** Harness, Salesforce, CoinAPI,
+   API-Sports, and regional content-management APIs.
    Confirm current documentation, validate identity/list schemas, suppress
    metadata, and classify structured failures conservatively.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
@@ -324,6 +324,54 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 23: ten identity and observation verifiers
+
+All ten are now `read_only`. Success requires HTTP 200 and a typed provider
+schema; response bodies are suppressed on success and failure. Substring-based
+invalid classifications are removed. Permission, account state, subscription,
+quota, feature restrictions and deployment ambiguity remain unknown. Fixed-host
+fallback retries only authorization ambiguity and stops on malformed responses,
+redirects, throttling, provider outages, transport/read failures or cancellation.
+
+| Provider | Contract and supported scope |
+| --- | --- |
+| Typeform | Bearer `GET /workspaces?page=1&page_size=1` replaces `/me`, whose response schema was not established. Integer total_items/page_count and typed workspace id/name are required; empty lists are valid. This probe requires workspaces:read, so accounts:read-only tokens may remain unknown. Existing US/old-EU workspace APIs share results; authorization-only fallback targets the separate new-EU `api.typeform.eu` host. |
+| BitGo | Bearer `GET /api/v2/user/me`; nested user id/username required and suppressed. Frozen/inactive accounts are not rejected. Documented production/test hosts are tried only on authorization ambiguity; no wallet, signing, session unlock or token-generation operations. |
+| Statuspage | `Authorization: OAuth` `GET /v1/pages`; array of id/name/created_at, including empty arrays. The official page-list operation offers no pagination parameters: one collection is read under the shared response-byte cap, without inventing a server-side limit. Truncated malformed responses are unknown and all page metadata is suppressed. |
+| Sourcegraph | Token-authenticated read-only GraphQL currentUser username query. Nested errors and anonymous/null currentUser cannot prove authentication; partial data with errors remains unknown. Local-prefixed tokens preserve unsupported/no-request behavior; hashed and legacy prefixes retain the existing cloud-only probe, with self-hosted rejection unknown. |
+| Flutterwave | V3 Bearer `GET /balances`; status=success plus currency and numeric available/ledger balances. Empty collections, zero and negative balances authenticate. Supported FLWSECK_TEST variant added alongside existing keys. V4 OAuth credentials/exchanges are outside this probe. The documented currency collection has no pagination. |
+| OpenWeather | One current-weather call for fixed London coordinates replaces deprecated built-in city-name lookup. Requires numeric cod=200, timestamp, coordinates, temperature and a typed weather array. Optional precipitation/station metadata is ignored. Activation delay, subscription and quota rejection remain unknown. |
+| Tomorrow.io | One realtime call for fixed coordinates; data.time, numeric temperature and location coordinates required. Optional cloud/precipitation metrics can be absent/null. Structured code errors cannot prove success. |
+| HERE | One Berlin geocode result (`limit=1`); id/title/resultType and numeric position. A valid empty result collection is accepted. Structured errors, feature restrictions and quota failures remain unknown. |
+| World Weather Online | Current-only London weather (`num_of_days=0`); typed request and nonempty observation collection inside data, with observation time, weather code and finite numeric-string temperature. Nested provider errors and malformed values remain unknown; no forecast/history is requested. |
+| Infura | Read-only JSON-RPC `eth_chainId` replaces `eth_blockNumber`, reducing documented cost from 80 to 5 credits. Requires jsonrpc=2.0, numeric matching id=1 and mainnet result=0x1, with no error object. Project-secret, allowlist, network restriction and quota ambiguity remain unknown. |
+
+Weather, geocoding and RPC probes consume provider quota and can count toward
+plan billing. They issue one request each and do not retry rate limits. All
+responses retain the shared byte cap; links and returned endpoint URLs are never
+followed. All ten patterns have whole-token trailing boundaries; BitGo test-host,
+World Weather context variants and trailing HERE key hyphens are covered.
+
+Mocked regressions cover exact URLs, methods, headers and GraphQL/RPC bodies;
+ordinary verification policy; typed, empty and optional success data; contradictory
+errors; non-200 success-like bodies; transport/read errors; response suppression;
+fallback order and cancellation; no-request local tokens; credential boundaries;
+and Statuspage response truncation. The older Infura regression now expects the
+chain ID and conservative authorization result.
+
+Official evidence checked 2026-09-27:
+
+- [Typeform workspaces and pagination](https://www.typeform.com/developers/create/reference/retrieve-workspaces/), [scopes](https://www.typeform.com/developers/get-started/scopes/), [EU hosts and account separation](https://www.typeform.com/developers/get-started/responses-data-center/).
+- [BitGo current-user schema and me alias](https://developers.bitgo.com/reference/userget), [production/test environments](https://developers.bitgo.com/docs/get-started-environments).
+- [Statuspage page list, response schema and OAuth authorization](https://developer.statuspage.io/).
+- [Sourcegraph current-user GraphQL query and token authentication](https://sourcegraph.com/docs/api/graphql).
+- [Flutterwave V3 balance schema and test-key authorization](https://developer.flutterwave.com/reference/get-all-wallet-balances.md).
+- [OpenWeather current weather, coordinates and JSON success schema](https://openweathermap.org/current).
+- [Tomorrow.io realtime OpenAPI and query authentication](https://docs.tomorrow.io/reference/realtime-weather.md).
+- [HERE Berlin geocode example](https://docs.here.com/geocoding-and-search/docs/code-geocode-area.md), [OpenAPI limit, authentication and restricted features](https://docs.here.com/geocoding-and-search/reference/get_geocode.md).
+- [World Weather Online current-only parameters and response](https://www.worldweatheronline.com/developer/api/docs/local-city-town-weather-api.aspx).
+- [Infura chain-ID response and five-credit cost](https://docs.infura.io/reference/ethereum/json-rpc-methods/eth_chainid/), [replaced block-number probe's 80-credit cost](https://docs.infura.io/reference/ethereum/json-rpc-methods/eth_blocknumber/).
 
 ## Remediation batch 22: ten token and bounded collection verifiers
 

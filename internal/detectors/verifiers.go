@@ -2145,12 +2145,7 @@ func verifyPaystack(ctx context.Context, secret string) VerificationResult {
 func verifyFlutterwave(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.flutterwave.com/v3/balances", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && !containsAnyFold(string(body), "invalid authorization key") {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
-	})
+	return verifyIdentityRequest(ctx, req, validFlutterwaveBalances)
 }
 
 func verifyVirusTotal(ctx context.Context, secret string) VerificationResult {
@@ -2173,7 +2168,21 @@ func verifyVirusTotal(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyStatuspage(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.statuspage.io/v1/pages", "Authorization", "OAuth ")
+	// /pages has no documented pagination parameters. Read once with the shared
+	// byte cap rather than inventing a limit that the provider could ignore.
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.statuspage.io/v1/pages", nil)
+	req.Header.Set("Authorization", "OAuth "+secret)
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(status int, body []byte) (VerificationResult, bool) {
+		if status == http.StatusOK && validIdentityCollection(identityPayload{"pages": body}, "pages", func(page identityPayload) bool {
+			return !identityHasErrors(page) && identityStrings(page, "id", "name", "created_at")
+		}) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(status, body)
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyStatusCake(ctx context.Context, secret string) VerificationResult {
@@ -3326,8 +3335,8 @@ func verifyAirbrakeUser(ctx context.Context, secret string) VerificationResult {
 
 func verifyBitGo(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://app.bitgo.com/api/v2/user/me", "https://app.bitgo-test.com/api/v2/user/me"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyBearerGET(ctx, secret, endpoint)
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", validBitGoUser)
 	})
 }
 
@@ -3702,7 +3711,11 @@ func verifySourcegraphCloud(ctx context.Context, secret string) VerificationResu
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://sourcegraph.com/.api/graphql", strings.NewReader(`{"query":"query { currentUser { username } }"}`))
 	req.Header.Set("Authorization", "token "+secret)
 	req.Header.Set("Content-Type", "application/json")
-	return verifyHTTPRequestWithClassifier(ctx, req, classifyGraphQLIdentity("username"))
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		data := identityObject(p, "data")
+		user := identityObject(data, "currentUser")
+		return !identityHasErrors(data) && !identityHasErrors(user) && identityStrings(user, "username")
+	})
 }
 
 func verifySemaphore(ctx context.Context, secret string) VerificationResult {
@@ -4401,15 +4414,18 @@ func verifyEtherscan(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyOpenWeather(ctx context.Context, secret string) VerificationResult {
-	return verifyQueryAPI(ctx, "https://api.openweathermap.org/data/2.5/weather?q=London&appid="+url.QueryEscape(secret), []string{"weather", "main"}, "invalid api key")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.openweathermap.org/data/2.5/weather?lat=51.5074&lon=-0.1278&appid="+url.QueryEscape(secret), nil)
+	return verifyIdentityRequest(ctx, req, validOpenWeatherCurrent)
 }
 
 func verifyTomorrowIO(ctx context.Context, secret string) VerificationResult {
-	return verifyQueryAPI(ctx, "https://api.tomorrow.io/v4/weather/realtime?location=0%2C0&apikey="+url.QueryEscape(secret), []string{"data", "location"}, "invalid auth", "invalid api key")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.tomorrow.io/v4/weather/realtime?location=0%2C0&apikey="+url.QueryEscape(secret), nil)
+	return verifyIdentityRequest(ctx, req, validTomorrowCurrent)
 }
 
 func verifyHERE(ctx context.Context, secret string) VerificationResult {
-	return verifyQueryAPI(ctx, "https://geocode.search.hereapi.com/v1/geocode?q=Berlin&limit=1&apiKey="+url.QueryEscape(secret), []string{"items"}, "apikey invalid", "apikey not found")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://geocode.search.hereapi.com/v1/geocode?q=Berlin&limit=1&apiKey="+url.QueryEscape(secret), nil)
+	return verifyIdentityRequest(ctx, req, validHEREGeocode)
 }
 
 func verifyPolygon(ctx context.Context, secret string) VerificationResult {
@@ -4533,7 +4549,8 @@ func verifyGeocodio(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyWorldWeather(ctx context.Context, secret string) VerificationResult {
-	return verifyQueryAPI(ctx, "https://api.worldweatheronline.com/premium/v1/weather.ashx?q=London&num_of_days=0&format=json&key="+url.QueryEscape(secret), []string{"request", "current_condition"}, "api key is invalid")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.worldweatheronline.com/premium/v1/weather.ashx?q=London&num_of_days=0&format=json&key="+url.QueryEscape(secret), nil)
+	return verifyIdentityRequest(ctx, req, validWorldWeatherCurrent)
 }
 
 func verifyFinancialModelingPrep(ctx context.Context, secret string) VerificationResult {
@@ -4818,11 +4835,14 @@ func verifyAPILayer(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyInfura(ctx context.Context, secret string) VerificationResult {
-	body := `{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`
+	body := `{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}`
 	endpoint := "https://mainnet.infura.io/v3/" + url.PathEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	return verifyHTTPRequestWithClassifier(ctx, req, classifyJSONRPC("invalid project id"))
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		var id *int
+		return identityStringEquals(p, "jsonrpc", "2.0") && json.Unmarshal(p["id"], &id) == nil && id != nil && *id == 1 && identityStringEquals(p, "result", "0x1")
+	})
 }
 
 func verifyMoralis(ctx context.Context, secret string) VerificationResult {
@@ -7723,13 +7743,8 @@ func classifyTokenExchange(invalidMarkers ...string) verificationResponseClassif
 }
 
 func verifyTypeform(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.typeform.com/me", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden && strings.Contains(string(body), "AUTHENTICATION_FAILED") {
-			return invalidCredentialResult(), true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityEndpoints(ctx, []string{"https://api.typeform.com/workspaces?page=1&page_size=1", "https://api.typeform.eu/workspaces?page=1&page_size=1"}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", validTypeformWorkspaces)
 	})
 }
 
