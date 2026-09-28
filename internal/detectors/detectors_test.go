@@ -206,12 +206,12 @@ func TestDynalistVerifierUsesProviderResultCode(t *testing.T) {
 	}
 }
 
-func TestGrafanaVerifierRecognizesAuthenticatedScopeFailure(t *testing.T) {
+func TestGrafanaVerifierPreservesScopeAmbiguity(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"message":"required scope accesspolicies:read"}`)), Header: make(http.Header)}, nil
 	})}
 	result := verifyGrafanaCloud(WithVerificationHTTPClient(context.Background(), client), "secret")
-	if result.Status != VerificationVerified {
+	if result.Status != VerificationUnknown {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -2293,9 +2293,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 79,
-		VerificationSafetyReadOnly:   309,
-		VerificationSafetyAuthOnly:   80,
+		VerificationSafetyUnreviewed: 69,
+		VerificationSafetyReadOnly:   318,
+		VerificationSafetyAuthOnly:   81,
 		VerificationSafetyUnsafe:     99,
 	}
 	for safety, want := range expected {
@@ -2307,7 +2307,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 488 || report.RequiresHardening != 23 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 498 || report.RequiresHardening != 13 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

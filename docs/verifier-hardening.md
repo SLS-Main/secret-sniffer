@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 27:
+After remediation batch 28:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 488 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 23 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 498 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 13 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 309
-`read_only`, 80 `auth_only`, 99 `unsafe`, and 79 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 318
+`read_only`, 81 `auth_only`, 99 `unsafe`, and 69 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -87,14 +87,15 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 
 ## Recommended following batches
 
-1. **Identity/collection contracts:** Salesforce, API-Sports, AlienVault OTX,
-   and regional content-management APIs.
+1. **Identity/collection contracts:** AlienVault OTX, Atera, BombBomb, Cloudplan,
+   Cloverly, ProdPad and Vyte.
    Confirm current documentation, validate identity/list schemas, suppress
    metadata, and classify structured failures conservatively.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
    key families require different verification operations; a rejection by the
    wrong API must not label the key invalid.
-3. **Region and endpoint context:** Grafana, Tray.io and self-hosted deployments.
+3. **Region and endpoint context:** ComplyAdvantage, Sourcegraph Cody and
+   self-hosted deployments; broader Grafana region coverage remains a follow-up.
    Correlate endpoint context and use only documented bounded fallbacks. Preserve
    unknown results when the necessary region or self-hosted URL is missing.
 
@@ -324,6 +325,53 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 28: ten regional and credential-context verifiers
+
+Nine verifiers are now `read_only`; Vagrant Cloud is `auth_only`. Every probe
+requires HTTP 200 and its success schema, suppresses the entire response, and
+preserves scope, deployment, legacy-family and subscription ambiguity as unknown.
+Grafana permission text and API-Sports token error substrings no longer establish
+authentication or invalidity. No pagination links or response-supplied hosts are
+followed. All responses use the shared byte cap.
+
+| Provider | Contract and supported scope |
+| --- | --- |
+| Grafana Cloud | Canonical `www.grafana.com/api/v1/tokens?region=us&pageSize=1` returns typed id/accessPolicyId/name metadata. Fixed US/EU/AU fallback only on 401/403; other regions remain unknown. Empty token inventories accepted. No token creation or token-value retrieval. |
+| fal.ai | Authenticated `/v1/account/billing` replaces the model catalog. Requires the documented account username; no credit expansion. Admin-scope requirements mean inference-only keys can remain unknown. |
+| Salesforce | Production/sandbox OIDC userinfo with string sub/user_id/organization_id. Only authorization failures try the second host; Bad_OAuth_Token remains ambiguous. Custom org hosts and scope restrictions remain unknown. |
+| API-Sports | Existing football `/status` request now requires get=status, results=1, empty errors, account email, subscription plan, and nonnegative integer current/limit_day counters. Both empty-array and empty-object errors accepted. Optional active metadata is ignored, including legacy string representations; inactive subscriptions and zero quotas accepted. RapidAPI and other product keys remain ambiguous. |
+| Tray.io | Public/optional-auth connector catalog replaced by authenticated `/core/v1/workspaces?first=1`. Requires typed pagination booleans and id/name/type for returned elements; documented omitted elements accepted. Fixed US/EU/APAC authorization-only fallback; Embedded and RBAC scope differences remain unknown. |
+| Vagrant Cloud | Official Ruby SDK host `vagrantcloud.com`, `GET /api/v2/authenticate`, Bearer auth, typed user.username identity consumed by the SDK account loader. Migration messages, empty objects, redirects, HTML, and non-200 statuses remain unknown. No HCP token issuance or refresh. |
+| Percy | Corrects header to `Authorization: Token token=…`. Requires the documented single project object with id/type/name/slug/full-slug and boolean publicly-readable; public project-list arrays cannot authenticate. Optional enabled state does not gate success. |
+| Pepipost/Netcore | Migrates to V6 Bearer `/suppressions/global/domain?limit=1`. Typed domain/created/modified/status entries, including empty arrays. Fixed non-EU/EU authorization-only fallback. Legacy-key and master-key subaccount requirements remain unknown. |
+| Cliengo | Current sk_live_/sk_test_ tokens use fixed production/stage Connect hosts and `/v1/users/me`, requiring id/email. Existing UUID detections retained without network requests because a current legacy contract is unproven. JWT detection remains a follow-up. |
+| Data.gov | Retired USDA endpoint replaced by participating-agency NLR `/api/alt-fuel-stations/v1.json?limit=0`. Requires a nonnegative total, station locator URL, and empty station array. Retrieves only metadata; gateway restrictions remain unknown. |
+
+All ten enforce trailing credential boundaries, including punctuation endings.
+Percy now recognizes direct PERCY_TOKEN assignments and prefixed tokens. Cliengo
+adds contextual live/test tokens while preserving legacy detections. These are
+bounded detection heuristics, not claims of exhaustive credential-format coverage.
+
+Mocked regressions cover exact requests and ordinary verification policy, every
+success schema, public fallback, error envelopes, non-200 success-like responses,
+empty/inactive metadata, family routing, regional retries and stop conditions,
+cancellation, transport/read failures, response caps and whole-token boundaries.
+Credential-free requests to fal, Vagrant, Percy, API-Sports and NLR returned
+401/403 authentication errors; no real credentials were used.
+
+Official evidence checked 2026-09-28:
+
+- [Grafana Cloud token metadata, regions and pagination](https://grafana.com/docs/grafana-cloud/developer-resources/api-reference/cloud-api/).
+- [fal billing schema and admin-key authentication](https://fal.ai/docs/platform-apis/v1/account/billing.md).
+- Salesforce [production](https://login.salesforce.com/.well-known/openid-configuration) and [sandbox](https://test.salesforce.com/.well-known/openid-configuration) discovery advertise userinfo endpoints and identity claims. The developer reference returned HTTP 403.
+- [API-Sports documentation entry](https://api-sports.io/documentation/football/v3.json) identifies the [football OpenAPI reference](https://api-sports.io/public/documentations/football-v3.yaml), which remained HTTP 403 during this review. The provider's SDK repository supplies the [status envelope](https://github.com/api-sports/api-sports/blob/master/src/API-Football.SDK/Models/Status.cs), [account fields](https://github.com/api-sports/api-sports/blob/master/src/API-Football.SDK/Models/Account.cs), [subscription fields](https://github.com/api-sports/api-sports/blob/master/src/API-Football.SDK/Models/Subscription.cs), and [integer usage counters](https://github.com/api-sports/api-sports/blob/master/src/API-Football.SDK/Models/Requests.cs). Credential-free `/status` confirmed the error envelope and authentication requirement.
+- [Tray OpenAPI workspace schema and required auth](https://tray.ai/documentation/files/openapi/trayapi.yaml), [regional host allowlist](https://tray.ai/documentation/platform/enterprise-core/organisation-management/regional-hosting.md).
+- [Vagrant official SDK host and validation method](https://github.com/hashicorp/vagrant_cloud/blob/main/lib/vagrant_cloud/client.rb), [account loader's user.username contract](https://github.com/hashicorp/vagrant_cloud/blob/main/lib/vagrant_cloud/account.rb), and [official identity fixtures](https://github.com/hashicorp/vagrant_cloud/blob/main/spec/unit/vagrant_cloud/account_spec.rb). The client method's empty-Hash comment conflicts with its account loader and tests; the verifier follows the latter. The endpoint still rejects unauthenticated requests; this does not establish full service availability after migration.
+- [Percy project-specific response versus public fallback and header syntax](https://www.browserstack.com/docs/percy/api-reference/projects), [official client authentication](https://github.com/percy/cli/blob/master/packages/client/src/client.js).
+- [Netcore V6 domain suppression schema, pagination, regional hosts and auth](https://emaildocs.netcore.ai/reference/get-suppression-domain-1.md).
+- [Cliengo current OpenAPI hosts, key prefixes and user schema](https://developers.cliengo.com/openapi.json).
+- [NLR station metadata, limit=0 and required key](https://developer.nlr.gov/docs/transportation/alt-fuel-stations-v1/all/), [API key usage](https://developer.nlr.gov/docs/api-key/), [Data.gov participating APIs](https://api.data.gov/docs/).
 
 ## Remediation batch 27: ten usage, inventory and current-account verifiers
 

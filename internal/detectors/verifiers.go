@@ -1366,30 +1366,15 @@ func verifyYNAB(ctx context.Context, secret string) VerificationResult {
 
 func verifyGrafanaCloud(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{
-		"https://grafana.com/api/v1/tokens?region=us&pageSize=1",
-		"https://grafana.com/api/v1/tokens?region=eu&pageSize=1",
-		"https://grafana.com/api/v1/tokens?region=au&pageSize=1",
+		"https://www.grafana.com/api/v1/tokens?region=us&pageSize=1",
+		"https://www.grafana.com/api/v1/tokens?region=eu&pageSize=1",
+		"https://www.grafana.com/api/v1/tokens?region=au&pageSize=1",
 	}
-	result := verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		req.Header.Set("Authorization", "Bearer "+secret)
-		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-			if statusCode != http.StatusUnauthorized && statusCode != http.StatusForbidden {
-				return VerificationResult{}, false
-			}
-			response := string(body)
-			switch {
-			case containsAnyFold(response, "invalid permission", "required scope"):
-				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a token with insufficient permission"}, true
-			case containsAnyFold(response, "InvalidCredentials", "could not be parsed"):
-				return invalidCredentialResult(), true
-			default:
-				return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-			}
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", func(p identityPayload) bool {
+			return validContextCollection(p, "items", "id", "accessPolicyId", "name")
 		})
 	})
-	result.Response = ""
-	return result
 }
 
 func verifyLokalise(ctx context.Context, secret string) VerificationResult {
@@ -2938,7 +2923,11 @@ func verifyXata(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyVagrantCloud(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://app.vagrantup.com/api/v2/authenticate")
+	return verifyIdentityGET(ctx, secret, "https://vagrantcloud.com/api/v2/authenticate", "Authorization", "Bearer ", func(p identityPayload) bool {
+		// The SDK account loader consumes user.username from token validation.
+		user := identityObject(p, "user")
+		return !identityHasErrors(user) && identityStrings(user, "username")
+	})
 }
 
 func verifyPaperform(ctx context.Context, secret string) VerificationResult {
@@ -3299,9 +3288,9 @@ func verifyBitGo(ctx context.Context, secret string) VerificationResult {
 
 func verifyPercy(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://percy.io/api/v1/projects", nil)
-	req.Header.Set("Authorization", "Token "+secret)
+	req.Header.Set("Authorization", "Token token="+secret)
 	req.Header.Set("Accept", "application/vnd.percy+json; version=3")
-	return verifyHTTPRequest(ctx, req)
+	return verifyIdentityRequest(ctx, req, validPercyProject)
 }
 
 func verifyNGC(ctx context.Context, secret string) VerificationResult {
@@ -4014,26 +4003,15 @@ func verifyIncrease(ctx context.Context, secret string) VerificationResult {
 func verifyAPISports(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://v3.football.api-sports.io/status", nil)
 	req.Header.Set("x-apisports-key", secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		var response struct {
-			Results int             `json:"results"`
-			Errors  json.RawMessage `json:"errors"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-		}
-		errorsText := strings.TrimSpace(string(response.Errors))
-		if response.Results == 1 && (errorsText == "[]" || errorsText == "{}") {
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(status int, body []byte) (VerificationResult, bool) {
+		if status == http.StatusOK && validAPISportsStatus(body) {
 			return VerificationResult{Status: VerificationVerified}, true
 		}
-		if containsAnyFold(errorsText, "missing application key", "token") {
-			return invalidCredentialResult(), true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		return verifyJSONReadClassification(status, body)
 	})
+	result.Response = ""
+	return result
 }
 
 func verifyOpenCage(ctx context.Context, secret string) VerificationResult {
@@ -4329,14 +4307,9 @@ func verifyWorkable(ctx context.Context, secret string) VerificationResult {
 
 func verifySalesforce(ctx context.Context, secret string) VerificationResult {
 	endpoints := []string{"https://login.salesforce.com/services/oauth2/userinfo", "https://test.salesforce.com/services/oauth2/userinfo"}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		req.Header.Set("Authorization", "Bearer "+secret)
-		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-			if statusCode == http.StatusForbidden && strings.TrimSpace(string(body)) == "Bad_OAuth_Token" {
-				return invalidCredentialResult(), true
-			}
-			return VerificationResult{}, false
+	return verifyIdentityEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", func(p identityPayload) bool {
+			return identityStrings(p, "user_id", "organization_id", "sub")
 		})
 	})
 }
@@ -4789,8 +4762,9 @@ func verifyUnsplash(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyDataGov(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://api.ers.usda.gov/data/arms/state?api_key=" + url.QueryEscape(secret)
-	return verifyQueryAPI(ctx, endpoint, []string{"data"}, "api_key_invalid", "invalid api_key was supplied")
+	endpoint := "https://developer.nlr.gov/api/alt-fuel-stations/v1.json?limit=0&api_key=" + url.QueryEscape(secret)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return verifyIdentityRequest(ctx, req, validDataGovStations)
 }
 
 func verifyAbstractAPI(ctx context.Context, secret string) VerificationResult {
@@ -5523,11 +5497,17 @@ func verifyPartnerStack(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPepipost(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pepipost.com/v5.1/domain/getDomains?domain=pepisandbox.com", nil)
-	req.Header.Set("api_key", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"data"}, "invalid api_key"))
-	result.Response = ""
-	return result
+	return verifyIdentityEndpoints(ctx, []string{
+		"https://emailapi.netcorecloud.net/v6/suppressions/global/domain?limit=1",
+		"https://apieu.netcorecloud.net/v6/suppressions/global/domain?limit=1",
+	}, func(endpoint string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Authorization", "Bearer "+secret)
+		return verifyInventoryArray(ctx, req, func(p identityPayload) bool {
+			return !identityHasErrors(p) && identityStrings(p, "domain", "created", "modified") && contextInteger(p["status"])
+		})
+	})
 }
 
 func verifySignable(ctx context.Context, secret string) VerificationResult {
@@ -5928,9 +5908,9 @@ func verifyLithic(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyFalAI(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.fal.ai/v1/models", nil)
-	req.Header.Set("Authorization", "Key "+secret)
-	return verifyPrivateCollection(ctx, req, "authorization_error", "invalid api key")
+	return verifyIdentityGET(ctx, secret, "https://api.fal.ai/v1/account/billing", "Authorization", "Key ", func(p identityPayload) bool {
+		return identityStrings(p, "username")
+	})
 }
 
 func verifyChromaCloud(ctx context.Context, secret string) VerificationResult {
@@ -5979,11 +5959,13 @@ func verifyTriggerDev(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyTrayIO(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.tray.io/core/v1/connectors", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"elements"}, "request is unauthorized"))
-	result.Response = ""
-	return result
+	return verifyIdentityEndpoints(ctx, []string{
+		"https://api.tray.io/core/v1/workspaces?first=1",
+		"https://api.eu1.tray.io/core/v1/workspaces?first=1",
+		"https://api.ap1.tray.io/core/v1/workspaces?first=1",
+	}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", validTrayWorkspaces)
+	})
 }
 
 func verifyMotherDuck(ctx context.Context, secret string) VerificationResult {
@@ -6997,11 +6979,16 @@ func verifyOptimizely(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCliengo(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://api.cliengo.com/1.0/account?api_key=" + url.QueryEscape(secret)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "invalid credentials"))
-	result.Response = ""
-	return result
+	if !strings.HasPrefix(secret, "sk_live_") && !strings.HasPrefix(secret, "sk_test_") {
+		return unknownVerificationResult("credential_type", "legacy credentials require a supported API contract")
+	}
+	endpoint := "https://connect.cliengo.com/v1/users/me"
+	if strings.HasPrefix(secret, "sk_test_") {
+		endpoint = "https://connect.stagecliengo.com/v1/users/me"
+	}
+	return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Bearer ", func(p identityPayload) bool {
+		return identityStrings(p, "id", "email")
+	})
 }
 
 func verifyTeamwork(ctx context.Context, secret string) VerificationResult {
