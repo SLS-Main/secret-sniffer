@@ -1390,16 +1390,13 @@ func TestComplyAdvantageVerifierTriesRegions(t *testing.T) {
 	}
 }
 
-func TestCloudflareCAVerifierUsesApplicationStatus(t *testing.T) {
+func TestCloudflareCAVerifierDoesNotProbeDeprecatedKeys(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.Header.Get("X-Auth-User-Service-Key") != "secret" {
-			t.Fatalf("X-Auth-User-Service-Key=%q", req.Header.Get("X-Auth-User-Service-Key"))
-		}
-		body := `{"success":false,"errors":[{"code":9106,"message":"Authentication failed (status: 400)"}],"result":null}`
-		return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		t.Fatal("deprecated key sent a request")
+		return nil, nil
 	})}
 	result := verifyCloudflareCA(WithVerificationHTTPClient(context.Background(), client), "secret")
-	if result.Status != VerificationUnverified || result.Response != "" {
+	if result.Status != VerificationUnknown || result.ErrorCategory != "credential_type" || result.Response != "" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -2269,8 +2266,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 23,
-		VerificationSafetyReadOnly:   361,
+		VerificationSafetyUnreviewed: 22,
+		VerificationSafetyReadOnly:   362,
 		VerificationSafetyAuthOnly:   84,
 		VerificationSafetyUnsafe:     99,
 	}
@@ -2283,7 +2280,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 544 || report.RequiresHardening != 0 || report.Blocked != 23 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 545 || report.RequiresHardening != 0 || report.Blocked != 22 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

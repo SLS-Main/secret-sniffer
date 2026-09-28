@@ -1324,7 +1324,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("mite-api-key", "mite API Key", "high", []string{"mite"}, `(?i)\bmite\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("mixmax-api-key", "Mixmax API Key", "high", []string{"mixmax"}, `(?i)\bmixmax\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, verifyMixmax),
 		NewRegex("moderation-api-key", "Moderation API Key", "high", []string{"moderation"}, `(?i)\bmoderation\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
-		NewRegex("moonclerk-api-key", "MoonClerk API Key", "critical", []string{"moonclerk", "moon clerk"}, `(?i)\b(?:moonclerk|moon[ _-]?clerk)\b.{0,80}\b(?:api[_-]?key|key|token|secret)\b\s*[:=]\s*['\"]?([a-z0-9]{32})\b`, 1, verifyMoonClerk),
+		NewReadOnlyRegex("moonclerk-api-key", "MoonClerk API Key", "critical", []string{"moonclerk", "moon clerk"}, `(?i)\b(?:moonclerk|moon[ _-]?clerk)\b.{0,80}\b(?:api[_-]?key|key|token|secret)\b\s*[:=]\s*['\"]?([a-z0-9]{32})\b`, 1, verifyMoonClerk),
 		NewUnsafeRegex("moralis-api-key", "Moralis API Key", "critical", []string{"moralis"}, `(?i)\bmoralis\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{64})\b`, 1, verifyMoralis),
 		NewRegex("mrticktock-api-key", "MrTickTock API Key", "high", []string{"mrticktock", "mr tick tock"}, `(?i)\b(?:mrticktock|mr[ _-]?tick[ _-]?tock)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("myfreshworks-api-key", "Freshworks API Key", "high", []string{"myfreshworks", "freshworks"}, `(?i)\b(?:myfreshworks|freshworks)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),

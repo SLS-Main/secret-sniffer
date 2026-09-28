@@ -2668,14 +2668,7 @@ func verifyGreenhouse(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPivotalTracker(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.pivotaltracker.com/services/v5/me", nil)
-	req.Header.Set("X-TrackerToken", secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "invalid authentication credentials") {
-			return invalidCredentialResult(), true
-		}
-		return VerificationResult{}, false
-	})
+	return unknownVerificationResult("verification_context", "a current Pivotal Tracker verification contract is unavailable")
 }
 
 func verifyCloudConvert(ctx context.Context, secret string) VerificationResult {
@@ -3298,17 +3291,7 @@ func verifyNGC(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyWitAI(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.wit.ai/apps?offset=1&limit=2", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if (statusCode == http.StatusBadRequest || statusCode == http.StatusUnauthorized) && containsAnyFold(string(body), "no-auth", "bad auth") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode == http.StatusBadRequest || statusCode == http.StatusUnauthorized {
-			return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-		}
-		return VerificationResult{}, false
-	})
+	return unknownVerificationResult("verification_context", "Wit.ai token family and versioned app-list verification contract remain unresolved")
 }
 
 func verifyRailway(ctx context.Context, secret string) VerificationResult {
@@ -3806,27 +3789,7 @@ func verifyDialpad(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCryptoCompare(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://min-api.cryptocompare.com/data/blockchain/latest?fsym=BTC", nil)
-	req.Header.Set("Authorization", "Apikey "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		var response struct {
-			Response string `json:"Response"`
-			Message  string `json:"Message"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-		}
-		if response.Response == "Success" {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		if response.Response == "Error" && containsAnyFold(response.Message, "valid auth key", "valid api key") {
-			return invalidCredentialResult(), true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-	})
+	return unknownVerificationResult("verification_context", "legacy CryptoCompare keys lack a supported non-workload verification contract")
 }
 
 func verifyCloudinary(ctx context.Context, secret string) VerificationResult {
@@ -4173,7 +4136,7 @@ func verifyCloudplan(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyClustdoc(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://app.clustdoc.com/api/users")
+	return unknownVerificationResult("verification_context", "Clustdoc's legacy users route returns a login page rather than a supported verification response")
 }
 
 func verifyCheckly(ctx context.Context, secret string) VerificationResult {
@@ -4508,7 +4471,7 @@ func verifyCurrencyFreaks(ctx context.Context, secret string) VerificationResult
 }
 
 func verifyCurrencyScoop(ctx context.Context, secret string) VerificationResult {
-	return verifyQueryAPI(ctx, "https://api.currencybeacon.com/v1/currencies?api_key="+url.QueryEscape(secret), []string{"meta", "response"}, "missing or invalid api credentials")
+	return unknownVerificationResult("credential_type", "legacy CurrencyScoop key compatibility with CurrencyBeacon is unproven")
 }
 
 func verifyFastForex(ctx context.Context, secret string) VerificationResult {
@@ -6203,10 +6166,7 @@ func verifyLoadmill(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyNozbeTeams(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api4.nozbe.com/v1/api/users", nil)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", secret)
-	return verifyPrivateCollection(ctx, req, "authenticate yourself", `"errno":104`)
+	return unknownVerificationResult("verification_context", "Nozbe Teams private user-list authentication and response contract remain unresolved")
 }
 
 func verifyOverloop(ctx context.Context, secret string) VerificationResult {
@@ -6425,10 +6385,14 @@ func verifyMindMeister(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyMoonClerk(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.moonclerk.com/forms", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.moonclerk.com/forms?count=1&offset=0", nil)
 	req.Header.Set("Authorization", "Token token="+secret)
 	req.Header.Set("Accept", "application/vnd.moonclerk+json;version=1")
-	return verifyPrivateCollection(ctx, req, "http token: access denied")
+	return verifyIdentityRequest(ctx, req, func(v identityPayload) bool {
+		return validIdentityCollection(v, "forms", func(form identityPayload) bool {
+			return !identityHasErrors(form) && finalPositiveInteger(form["id"]) && identityStrings(form, "title")
+		})
+	})
 }
 
 func verifyPrivacy(ctx context.Context, secret string) VerificationResult {
@@ -6591,33 +6555,7 @@ func verifyBlazeMeter(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCloudflareCA(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.cloudflare.com/client/v4/certificates?per_page=5", nil)
-	req.Header.Set("X-Auth-User-Service-Key", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		var response struct {
-			Success bool            `json:"success"`
-			Result  json.RawMessage `json:"result"`
-			Errors  []struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-			} `json:"errors"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-		}
-		if statusCode >= 200 && statusCode < 300 && response.Success && len(response.Result) > 0 {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		if !response.Success && len(response.Errors) > 0 && response.Errors[0].Code == 9106 {
-			return invalidCredentialResult(), true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-	})
-	result.Response = ""
-	return result
+	return unknownVerificationResult("credential_type", "Origin CA service keys are deprecated; replacement API tokens are a different credential family")
 }
 
 func verifyGTmetrix(ctx context.Context, secret string) VerificationResult {
@@ -6828,10 +6766,7 @@ func verifyDocparser(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyInterseller(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://interseller.io/api/campaigns/list", nil)
-	req.Header.Set("X-API-Key", secret)
-	req.Header.Set("Accept", "application/json")
-	return verifyPrivateCollection(ctx, req, "unauthorizederror", `"message":"unauthorized"`)
+	return unknownVerificationResult("verification_context", "Interseller is sunsetting and its campaign-list verification contract remains unproven")
 }
 
 func verifySquarespace(ctx context.Context, secret string) VerificationResult {
@@ -6915,11 +6850,7 @@ func verifyCaflou(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAutopilot(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api2.autopilothq.com/v1/account", nil)
-	req.Header.Set("autopilotapikey", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "autopilotapikey not valid"))
-	result.Response = ""
-	return result
+	return unknownVerificationResult("verification_context", "legacy Autopilot account verification semantics remain unresolved")
 }
 
 func verifyBeebole(ctx context.Context, secret string) VerificationResult {

@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 33:
+After remediation batch 34:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 544 | The recorded verifier contract has been reviewed/hardened. |
+| Reviewed | 545 | The recorded verifier contract has been reviewed/hardened. |
 | Requires hardening | 0 | All actionable items in this audit queue have been addressed. |
-| Blocked | 23 | Required context or a reliable validation contract is unresolved. |
+| Blocked | 22 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 361
-`read_only`, 84 `auth_only`, 99 `unsafe`, and 23 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 362
+`read_only`, 84 `auth_only`, 99 `unsafe`, and 22 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -88,7 +88,7 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 ## Remaining contract and coverage work
 
 1. **Blocked contracts:** establish provider-owned authenticated schemas and
-   required context for the 23 blocked patterns. Cloudplan, Cloverly, generic
+   required context for the 22 blocked patterns. Cloudplan, Cloverly, generic
    Google keys, Abstract, APILayer, ConfigCat SDK keys and legacy Greenhouse
    Harvest keys return unknown without requests, including under explicit opt-in.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
@@ -325,6 +325,41 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 34: ten legacy-provider dispositions
+
+One supported contract is promoted and nine unproven probes are replaced with
+explicit no-network hooks. Ordinary `--verify` now supports **446 patterns**
+(362 `read_only` + 84 `auth_only`); 22 patterns remain blocked/unreviewed.
+Detection is retained for all ten. Blocked hooks return `unknown` even with
+`--verify-unreviewed` enabled; a retirement announcement or unavailable service
+does not establish that a detected credential is invalid.
+
+| Provider | Disposition and evidence checked 2026-09-28 |
+| --- | --- |
+| MoonClerk | Promoted to `read_only`. [Official help](https://help.moonclerk.com/en/articles/1239747-does-moonclerk-offer-an-api) links the [provider-maintained API documentation](https://github.com/moonclerk/developer/blob/master/api/README.md) and [forms schema](https://github.com/moonclerk/developer/blob/master/api/v1/forms.md). `GET https://api.moonclerk.com/forms?count=1&offset=0` uses `Authorization: Token token=<key>` and `Accept: application/vnd.moonclerk+json;version=1`. Requires HTTP 200 and a forms array containing positive integer id and nonempty title; empty arrays are valid. Optional statistics and form access tokens are not validation requirements and the whole response is suppressed. The provider documents a read-only API, count/offset pagination and 429 throttling. A credential-free request returned 401; success was tested with mocks, not customer credentials. |
+| Cloudflare Origin CA | No-network `credential_type`. [Provider deprecation notice](https://developers.cloudflare.com/fundamentals/api/get-started/ca-keys/) removes service keys September 30, 2026. Replacement API tokens are a different credential family. The old broad certificate probe is removed; this does not classify existing keys as invalid before or after that date. |
+| CryptoCompare | No-network `verification_context`. [Legacy documentation URL](https://min-api.cryptocompare.com/documentation) returned a 401 directing users to [CoinDesk](https://developers.coindesk.com/). Legacy-key compatibility and a non-workload authentication contract remain unresolved. Removed blockchain market-data lookup rather than treating a data response as generic credential introspection. |
+| CurrencyScoop | No-network `credential_type`. [Legacy documentation](https://currencyscoop.com/api-documentation) redirects to [CurrencyBeacon documentation](https://currencybeacon.com/api-documentation), which describes CurrencyBeacon keys and request quotas. A documentation redirect does not prove legacy-key compatibility. Removed automatic forwarding of CurrencyScoop keys to the successor API. |
+| Pivotal Tracker | No-network `verification_context`. The [provider site](https://www.pivotaltracker.com/) was unavailable during review (DNS timeout); no supported current identity contract was established. Removed the old me request and its generic status fallback. Availability is not credential validity. |
+| Interseller | No-network `verification_context`. [Provider sunset announcement](https://help.interseller.io/article/298-important-interseller-update-july-2026) specifies December 15, 2026 and says existing subscriptions retain access until then. A bounded, typed campaign-list verification contract remains unproven even before sunset. Removed the campaign-list request. |
+| Autopilot | No-network `verification_context`. [Provider developer entry point](https://developers.autopilothq.com/) still links legacy Apiary documentation; its HTTPS endpoint failed certificate hostname validation during review. Current account schema and key-family semantics remain unresolved. Removed the minimally validated account probe. |
+| Wit.ai | No-network `verification_context`. [Current HTTP documentation](https://wit.ai/docs/http/20240304/) returned a client-rendered shell; the versioned app-list success schema and applicability to detected token families were not established in this review. Removed the unversioned apps request and generic status fallback; this is not a claim that the provider has no API. |
+| Clustdoc | No-network `verification_context`. The [old users route](https://app.clustdoc.com/api/users) returned HTTP 200 with an HTML login page without credentials; [developer root](https://developers.clustdoc.com/) returned 404. No supported authenticated schema was established. Removed the status-only Bearer probe. |
+| Nozbe Teams | No-network `verification_context`. [API root](https://api.nozbe.com/) and attempted [help API page](https://help.nozbe.com/advanced/api/) returned 404; the private api4 user-list authentication/schema remains unresolved. Removed that probe without assuming compatibility between Nozbe products. |
+
+MoonClerk regressions cover exact method/host/path/query/auth/version, typed
+successes, empty collections, nested errors, permission/status ambiguity,
+redirect rejection, transport/read failures, cancellation, timeouts, the shared
+1 MiB response cap and suppression of payment-form metadata/access tokens.
+All nine blocked detectors retain detection and unreviewed policy gating;
+regressions prove no requests with either opt-in combination, direct hook calls,
+or supplied endpoint/type context.
+
+Next priorities are the remaining unresolved probes (SalesBlink, Autoklose,
+Stormboard, Mailjet SMS, Teletype and Upwave), alongside obtaining authoritative
+contracts for blocked credential families. Live benchmarking, broader modern
+credential formats and refreshed TruffleHog comparisons remain deferred.
 
 ## Remediation batch 33: ten scoped metadata contracts
 
