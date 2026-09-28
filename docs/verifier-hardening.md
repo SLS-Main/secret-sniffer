@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 30:
+After remediation batch 31:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 519 | The recorded verifier contract has been reviewed/hardened. |
+| Reviewed | 529 | The recorded verifier contract has been reviewed/hardened. |
 | Requires hardening | 0 | All actionable items in this audit queue have been addressed. |
-| Blocked | 48 | Required context or a reliable validation contract is unresolved. |
+| Blocked | 38 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 336
-`read_only`, 84 `auth_only`, 99 `unsafe`, and 48 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 346
+`read_only`, 84 `auth_only`, 99 `unsafe`, and 38 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -88,7 +88,7 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 ## Remaining contract and coverage work
 
 1. **Blocked contracts:** establish provider-owned authenticated schemas and
-   required context for the 48 blocked patterns. Cloudplan and Cloverly now
+   required context for the 38 blocked patterns. Cloudplan and Cloverly now
    return unknown without making requests, including under explicit opt-in.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
    key families require different verification operations; a rejection by the
@@ -324,6 +324,52 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 31: ten context and metadata contracts
+
+Ten more blocked patterns now support ordinary `--verify` as `read_only`.
+The mapping-local and bounded env/INI context rules from batch 30 also apply
+here. Explicit credential-family assignments participate in conflict detection
+and cache identity. Unsupported families remain detectable and return `unknown`.
+
+| Provider | Context and authenticated operation |
+| --- | --- |
+| Hightouch | `HIGHTOUCH_API_KEY`; optional `HIGHTOUCH_API_URL=https://api.hightouch.com/api/v1`. Bearer `GET /events/domains?limit=1&offset=0` replaces the undocumented workspace listing. Requires data array with string id/name and numeric workspaceId. |
+| Deno Deploy | Current `ddo_` organization tokens use Bearer `GET https://api.deno.com/v2/domains?limit=1`; optional `DENO_API_URL` must match that base. Requires domain id, organization_id, domain and boolean is_validated. Legacy `ddp_`/`ddw_` tokens make no request. |
+| ngrok | `NGROK_API_KEY` or explicit `NGROK_CREDENTIAL_TYPE=api`; `NGROK_AUTHTOKEN` conflicts with API context. Optional `NGROK_API_URL=https://api.ngrok.com`. Bearer `GET /agent_ingresses?limit=1`, ngrok-version 2; typed ingress metadata and uri. Untyped prefixed tokens make no request. |
+| ConvertAPI | `CONVERTAPI_MASTER_TOKEN` or explicit `CONVERTAPI_CREDENTIAL_TYPE=master`; ordinary `CONVERTAPI_API_TOKEN` is incompatible. Optional `CONVERTAPI_API_URL=https://v2.convertapi.com`. Bearer `GET /user`; requires Active boolean, Email and integer conversion quotas. Inactive accounts and exhausted quotas are accepted. |
+| Voicegain | `VOICEGAIN_JWT`, explicit `VOICEGAIN_API_URL=https://api.voicegain.ai/v1` and UUID `VOICEGAIN_SA_CONFIG_ID`. Bearer `GET /sa/config/{id}`; matching saConfId, name and builtIn boolean. Edge deployments and missing context make no request. |
+| Stitch Data | `STITCH_API_TOKEN` in `ac_` Connect family, explicit `STITCH_API_URL=https://api.stitchdata.com` and positive numeric `STITCH_CLIENT_ID`. Bearer `GET /v4/{client_id}/extractions?page=1`; validates page/total and matching client_id, source_id, job_name entries. Provider caps this page at 100. No extraction is started and no source credentials are fetched. |
+| Qubole | `QUBOLE_API_TOKEN`, explicit `QUBOLE_API_URL` selecting `https://api.qubole.com`, `https://in.qubole.com`, `https://eu.qubole.com`, `https://us.qubole.com` or `https://gcp.qubole.com`. X-AUTH-TOKEN `GET /api/v1.2/qcuh_usages` for the current UTC month with group_by=month; validates month and numeric spot/ondemand usage. Reads precomputed usage, not account cloud credentials or a compute job. |
+| PayMongo | `PAYMONGO_SECRET_KEY`, live or test; optional `PAYMONGO_API_URL=https://invoices-api.paymongo.com`. Basic-auth `GET /v1/invoices/settings` requires data.approvals_enabled boolean. Replaces signing-secret-bearing webhook listing. Product/permission errors stay unknown. |
+| Canny | `CANNY_API_KEY`; optional `CANNY_API_URL=https://canny.io/api/v1`. Read-only `POST /groups/list` with apiKey and limit=1; validates items id/name/urlName and hasNextPage boolean. Replaces private-board token retrieval. |
+| ScrapingBee | `SCRAPINGBEE_API_KEY`; optional `SCRAPINGBEE_API_URL=https://app.scrapingbee.com/api/v1`. Bearer `GET /usage` requires integer quota/concurrency fields. No scrape target is supplied. Exhaustion, bans and ambiguous authentication errors remain unknown. |
+
+All ten require HTTP 200 and typed success evidence, accept documented empty
+collections and false/zero values, suppress responses, and stop on ambiguous
+errors. Responses are byte-capped; redirects and response-supplied pagination
+links are never followed. Exact supported bases (with optional trailing slash)
+are required; arbitrary/self-hosted endpoints are not contacted.
+
+Evidence checked 2026-09-28:
+
+- Hightouch [published OpenAPI](https://api.hightouch.io/api/swagger.json) and [API guide](https://hightouch.com/docs/developer-tools/api-guide).
+- Deno [V2 OpenAPI, including organization access-token authentication](https://api.deno.com/v2/openapi.json).
+- ngrok [agent ingress contract](https://ngrok.com/docs/api-reference/agentingresses/list.md) and [official SDK](https://github.com/ngrok/ngrok-api-go/blob/main/agent_ingresses/client.go).
+- ConvertAPI [user contract](https://www.convertapi.com/doc/user) and [authentication](https://www.convertapi.com/doc/auth).
+- Voicegain [official SA API client](https://github.com/voicegain/python-sdk/blob/master/voicegain_speech/api/sa_api.py), [configuration model](https://github.com/voicegain/python-sdk/blob/master/voicegain_speech/models/speech_analytics_config.py) and [cloud base](https://github.com/voicegain/python-sdk/blob/master/voicegain_speech/configuration.py).
+- Stitch [Connect API authentication, extraction status and pagination](https://www.stitchdata.com/docs/developers/stitch-connect/api).
+- Qubole [monthly QCU usage, schemas and supported deployments](https://docs.qubole.com/en/latest/rest-api/account_api/view-qcuh-monthly-usage.html).
+- PayMongo [invoice settings contract](https://docs.paymongo.com/reference/list_invoices_settings.md).
+- Canny [group listing and authentication](https://developers.canny.io/api-reference).
+- ScrapingBee [usage endpoint and Bearer authentication examples](https://www.scrapingbee.com/documentation/).
+
+Mocked regression contracts cover all ten providers, exact requests, success/error
+schemas, credential-family and endpoint gating, context/cache isolation, response
+suppression, transport/read failures, cancellation, timeouts and oversized bodies.
+This is contract validation, not live customer-credential reliability measurement.
+The previously recorded benchmarking, broader format coverage and TruffleHog
+comparison priorities remain deferred.
 
 ## Remediation batch 30: ten context-dependent providers
 

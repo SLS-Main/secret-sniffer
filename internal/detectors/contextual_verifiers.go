@@ -24,6 +24,16 @@ var contextualProviders = map[string]contextualProvider{
 	"flagsmith-server-key": {map[string]string{"flagsmith_api_url": "endpoint"}, `[A-Za-z0-9._-]{32,256}`, []string{"flagsmith_environment_key", "flagsmith_server_key"}},
 	"airbyte-api-token":    {map[string]string{"airbyte_api_url": "endpoint", "airbyte_credential_type": "credential_type"}, `[A-Za-z0-9._~/-]{32,256}`, []string{"airbyte_access_token", "airbyte_client_secret"}},
 	"getresponse-api-key":  {map[string]string{"getresponse_api_url": "endpoint", "getresponse_domain": "domain"}, `[a-z0-9]{32}`, []string{"getresponse_api_key"}},
+	"hightouch-api-key":    {map[string]string{"hightouch_api_url": "endpoint"}, `[A-Za-z0-9._-]{32,256}`, []string{"hightouch_api_key"}},
+	"deno-deploy-token":    {map[string]string{"deno_api_url": "endpoint"}, "", nil},
+	"ngrok-token":          {map[string]string{"ngrok_api_url": "endpoint", "ngrok_credential_type": "credential_type"}, `[A-Za-z0-9_]{20,256}`, []string{"ngrok_api_key", "ngrok_authtoken"}},
+	"convertapi-secret":    {map[string]string{"convertapi_api_url": "endpoint", "convertapi_credential_type": "credential_type"}, `[A-Za-z0-9._-]{16,256}`, []string{"convertapi_master_token", "convertapi_api_token"}},
+	"voicegain-api-key":    {map[string]string{"voicegain_api_url": "endpoint", "voicegain_sa_config_id": "config_id"}, `ey[A-Za-z0-9_-]{34}\.ey[A-Za-z0-9_-]{108}\.[A-Za-z0-9_-]{43}`, []string{"voicegain_jwt"}},
+	"stitchdata-api-token": {map[string]string{"stitch_api_url": "endpoint", "stitch_client_id": "client_id"}, `[a-z0-9_]{35}`, []string{"stitch_api_token"}},
+	"qubole-api-token":     {map[string]string{"qubole_api_url": "endpoint"}, `[a-z0-9]{64}`, []string{"qubole_api_token"}},
+	"paymongo-secret-key":  {map[string]string{"paymongo_api_url": "endpoint"}, `sk_(?:live|test)_[A-Za-z0-9]{32,128}`, []string{"paymongo_secret_key"}},
+	"canny-api-key":        {map[string]string{"canny_api_url": "endpoint"}, `[A-Za-z0-9]{32}`, []string{"canny_api_key"}},
+	"scrapingbee-api-key":  {map[string]string{"scrapingbee_api_url": "endpoint"}, `[A-Za-z0-9]{80}`, []string{"scrapingbee_api_key"}},
 }
 
 var contextUUID = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -175,7 +185,7 @@ func verifyContextualProvider(ctx context.Context, c Candidate) VerificationResu
 			return !code && !status && identityStrings(v, "accountId", "email")
 		}
 	default:
-		return missingVerificationContext()
+		return verifyMetadataContextProvider(ctx, c)
 	}
 	if base == "" {
 		return missingVerificationContext()

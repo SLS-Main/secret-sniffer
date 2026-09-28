@@ -456,10 +456,7 @@ func verifyPagerDuty(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyNgrok(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ngrok.com/agent_ingresses", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	req.Header.Set("ngrok-version", "2")
-	return verifyHTTPRequest(ctx, req)
+	return verifyContextlessProvider(ctx, "ngrok-token", secret)
 }
 
 func verifyAzureDevOpsPAT(ctx context.Context, secret string) VerificationResult {
@@ -2491,7 +2488,7 @@ func verifyTurso(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyDenoDeploy(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.deno.com/v1/organizations")
+	return verifyContextlessProvider(ctx, "deno-deploy-token", secret)
 }
 
 func verifyCoinlayer(ctx context.Context, secret string) VerificationResult {
@@ -2758,9 +2755,7 @@ func verifyBaremetrics(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyScrapingBee(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://app.scrapingbee.com/api/v1/usage?api_key=" + url.QueryEscape(secret)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequest(ctx, req)
+	return verifyContextlessProvider(ctx, "scrapingbee-api-key", secret)
 }
 
 func verifyVoyageAI(ctx context.Context, secret string) VerificationResult {
@@ -3910,7 +3905,7 @@ func verifyCircle(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyHightouch(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.hightouch.com/api/v1/workspaces")
+	return verifyContextlessProvider(ctx, "hightouch-api-key", secret)
 }
 
 func verifyPendo(ctx context.Context, secret string) VerificationResult {
@@ -4971,20 +4966,7 @@ func verifyMoosend(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCanny(ctx context.Context, secret string) VerificationResult {
-	body, _ := json.Marshal(map[string]any{"apiKey": secret, "limit": 1})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://canny.io/api/v1/boards/list", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, responseBody []byte) (VerificationResult, bool) {
-		if containsAnyFold(string(responseBody), "invalid api key") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode >= 200 && statusCode < 300 && jsonHasTopLevelArray(responseBody, "boards") {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return verifyJSONReadClassification(statusCode, responseBody)
-	})
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "canny-api-key", secret)
 }
 
 func verifyProxyCrawl(ctx context.Context, secret string) VerificationResult {
@@ -5354,22 +5336,7 @@ func verifyUpLead(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyConvertAPI(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://v2.convertapi.com/user?auth=" + url.QueryEscape(secret)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		if containsAnyFold(string(body), "invalid or missing api credentials") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode >= 200 && statusCode < 300 && jsonHasAnyField(body, "Id", "id", "SecondsLeft", "seconds_left", "ConversionsTotal") {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-	})
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "convertapi-secret", secret)
 }
 
 func verifyBestTime(ctx context.Context, secret string) VerificationResult {
@@ -5615,22 +5582,7 @@ func verifySpectralOps(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyVoicegain(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.voicegain.ai/v1/sa/config", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "unauthorized") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode >= 200 && statusCode < 300 && jsonObject(body) {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-	})
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "voicegain-api-key", secret)
 }
 
 func verifyGetGeoAPI(ctx context.Context, secret string) VerificationResult {
@@ -5840,11 +5792,7 @@ func verifyHumanity(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyQubole(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://us.qubole.com/api/v1.2/account", nil)
-	req.Header.Set("X-AUTH-TOKEN", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "invalid token"))
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "qubole-api-token", secret)
 }
 
 func verifyProdPad(ctx context.Context, secret string) VerificationResult {
@@ -5882,9 +5830,7 @@ func verifyScaleway(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPayMongo(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.paymongo.com/v1/webhooks?limit=1", nil)
-	req.SetBasicAuth(secret, "")
-	return verifyPrivateCollection(ctx, req, "authentication_invalid", "authentication is invalid")
+	return verifyContextlessProvider(ctx, "paymongo-secret-key", secret)
 }
 
 func verifyUnit(ctx context.Context, secret string) VerificationResult {
@@ -6306,10 +6252,7 @@ func verifySkrapp(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyStitchData(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.stitchdata.com/v4/sources", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	req.Header.Set("Content-Type", "application/json")
-	return verifyPrivateCollection(ctx, req, "not authorized")
+	return verifyContextlessProvider(ctx, "stitchdata-api-token", secret)
 }
 
 func verifyTeletype(ctx context.Context, secret string) VerificationResult {

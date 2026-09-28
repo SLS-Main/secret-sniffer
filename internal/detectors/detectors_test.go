@@ -888,7 +888,7 @@ func TestFetchedExampleVerifierRequiresSentinelContent(t *testing.T) {
 	}
 }
 
-func TestCannyVerifierSuppressesPrivateBoardResponse(t *testing.T) {
+func TestCannyVerifierRejectsLegacyBoardResponse(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(req.Body)
 		if err != nil || !strings.Contains(string(body), `"apiKey":"secret"`) {
@@ -897,7 +897,7 @@ func TestCannyVerifierSuppressesPrivateBoardResponse(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"boards":[{"name":"private"}]}`)), Header: make(http.Header)}, nil
 	})}
 	result := verifyCanny(WithVerificationHTTPClient(context.Background(), client), "secret")
-	if result.Status != VerificationVerified || result.Response != "" {
+	if result.Status != VerificationUnknown || result.Response != "" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -2293,8 +2293,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 48,
-		VerificationSafetyReadOnly:   336,
+		VerificationSafetyUnreviewed: 38,
+		VerificationSafetyReadOnly:   346,
 		VerificationSafetyAuthOnly:   84,
 		VerificationSafetyUnsafe:     99,
 	}
@@ -2307,7 +2307,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 519 || report.RequiresHardening != 0 || report.Blocked != 48 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 529 || report.RequiresHardening != 0 || report.Blocked != 38 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

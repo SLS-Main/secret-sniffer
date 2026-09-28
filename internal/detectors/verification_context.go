@@ -40,6 +40,17 @@ func contextualRegistry(registry []Detector) []Detector {
 var verificationContextAssignment = regexp.MustCompile(`(?m)^[ \t]*(?:export[ \t]+)?["']?([A-Za-z_][A-Za-z0-9_-]*)["']?[ \t]*[:=][ \t]*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s#;,]+))`)
 var verificationContextINISection = regexp.MustCompile(`^\[[A-Za-z0-9_. -]+\][ \t]*(?:\r?\n|$)`)
 
+var contextCredentialAssignments = map[string]struct{ selector, kind string }{
+	"airbyte_access_token":    {"airbyte_credential_type", "bearer"},
+	"access_token":            {"airbyte_credential_type", "bearer"},
+	"airbyte_client_secret":   {"airbyte_credential_type", "client_secret"},
+	"client_secret":           {"airbyte_credential_type", "client_secret"},
+	"ngrok_api_key":           {"ngrok_credential_type", "api"},
+	"ngrok_authtoken":         {"ngrok_credential_type", "agent"},
+	"convertapi_master_token": {"convertapi_credential_type", "master"},
+	"convertapi_api_token":    {"convertapi_credential_type", "api"},
+}
+
 func attachVerificationContext(content string, candidates []Candidate, fields map[string]string) {
 	if len(candidates) == 0 {
 		return
@@ -50,12 +61,9 @@ func attachVerificationContext(content string, candidates []Candidate, fields ma
 		parts := map[string]string{"credential": c.Secret}
 		add := func(name, value string) {
 			name = strings.ToLower(name)
-			if _, airbyte := fields["airbyte_credential_type"]; airbyte {
-				switch name {
-				case "airbyte_access_token", "access_token":
-					name, value = "airbyte_credential_type", "bearer"
-				case "airbyte_client_secret", "client_secret":
-					name, value = "airbyte_credential_type", "client_secret"
+			if kind, exists := contextCredentialAssignments[name]; exists {
+				if _, applies := fields[kind.selector]; applies {
+					name, value = kind.selector, kind.kind
 				}
 			}
 			if part, ok := fields[name]; ok {
