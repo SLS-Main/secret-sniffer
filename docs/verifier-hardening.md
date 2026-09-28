@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 26:
+After remediation batch 27:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 478 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 33 | A verifier exists, with concrete contract work remaining. |
+| Reviewed | 488 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 23 | A verifier exists, with concrete contract work remaining. |
 | Blocked | 56 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 299
-`read_only`, 80 `auth_only`, 99 `unsafe`, and 89 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 309
+`read_only`, 80 `auth_only`, 99 `unsafe`, and 79 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -87,14 +87,14 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 
 ## Recommended following batches
 
-1. **Identity/collection contracts:** Salesforce, CoinAPI,
-   API-Sports, and regional content-management APIs.
+1. **Identity/collection contracts:** Salesforce, API-Sports, AlienVault OTX,
+   and regional content-management APIs.
    Confirm current documentation, validate identity/list schemas, suppress
    metadata, and classify structured failures conservatively.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
    key families require different verification operations; a rejection by the
    wrong API must not label the key invalid.
-3. **Region and endpoint context:** Grafana, Insightly, Tray.io and self-hosted deployments.
+3. **Region and endpoint context:** Grafana, Tray.io and self-hosted deployments.
    Correlate endpoint context and use only documented bounded fallbacks. Preserve
    unknown results when the necessary region or self-hosted URL is missing.
 
@@ -324,6 +324,58 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 27: ten usage, inventory and current-account verifiers
+
+All ten are now `read_only`. Success requires HTTP 200 and a provider-specific
+schema. Every response body is suppressed, including identity, account keys,
+quota metadata, device inventory and address-book PII. Authentication, scope,
+subscription, migration and credential-family errors remain unknown. Insightly
+429 responses no longer count as authentication; pod fallback retries only
+401/403 authorization ambiguity and stops on all other failures or cancellation.
+
+| Provider | Contract and supported scope |
+| --- | --- |
+| CoinAPI | Replaces unproven `/v1/limits` with documented `/v1/exchanges/COINBASE`, X-CoinAPI-Key. Requires a typed array of matching exchange_id/name entries, including an empty array. One filtered metadata request; other CoinAPI product keys and quota rejection remain unknown. |
+| Etherscan | Replaces chain balance lookup with V2 module=getapilimit/action=getapilimit. Requires status=1/message=OK and typed credit usage/limit/interval metadata. String errors, rate-limit messages and success-looking envelopes with missing usage cannot authenticate. |
+| Pagar.me | Existing ak_live_ detection identifies legacy keys. Routes those to `GET /1/plans?count=1`, using documented Basic auth with key username and password x. Requires plan object discriminator, integer id/amount/days and name; empty arrays accepted. Incompatible formats make no request. Legacy API deprecation/migration failures remain unknown; V5 sk_ detection is a separate follow-up. |
+| Polygon/Massive | Migrates to `https://api.massive.com/v1/marketstatus/now`, Bearer auth. Existing Polygon keys are documented as valid on the new host. Requires market, RFC3339 serverTime and boolean earlyHours/afterHours. Closed markets are valid. No ticker data retrieval. |
+| Detectify | Routes 32-hex V2 keys to `/rest/v2/assets/?pageSize=1&include_subdomains=false` with X-Detectify-Key, and UUID V3 keys to `/rest/v3/ips?limit=1` with raw Authorization. V2 requires typed asset entries and has_more, also accepting the explicitly documented empty object for no assets. V3 requires typed IP identity and address entries. Unrecognized formats remain detected but make no request. Required V2 message-signature or missing scope stays unknown. |
+| Route4Me | Strictly bounds existing address-book retrieval with limit=1/offset=0. Requires integer total and contact address_id/address_1; empty collections accepted. Optional personal fields ignored, all returned PII suppressed. |
+| Smartlead | Replaces full campaign configurations with the sparse analytics campaign selector `/api/v1/analytics/campaign/list`. Requires ok=true and data.campaign_list id/name entries, including empty lists. No documented server pagination; one byte-capped metadata response, truncation unknown. |
+| Ubidots | Replaces undocumented V1.6 current-user lookup with V2 `/devices/?page=1&page_size=1`, X-Auth-Token. Requires count and device id/label entries, including empty arrays; inactive devices and optional last-activity fields accepted. Account API keys, scoped tokens and deployment ambiguity remain unknown; no token creation. |
+| APIMatic | Official CLI's `/account/profile` replaces code-generation listing. Requires Id/Email with X-Auth-Key authentication. Entire profile is suppressed, including optional SecurityStamp and ApiCopilotKeys; no generated artifacts retrieved. |
+| Insightly | Basic-auth `/v3.1/Users/Me` replaces contact listing, requiring integer USER_ID and EMAIL_ADDRESS. Fixed na1/eu1/au1 pod fallback with authorization-only retries. Optional inactive/profile fields accepted; quota errors never prove authentication. Custom/unknown pods remain ambiguous. |
+
+All ten patterns enforce trailing credential boundaries. Detectify now detects
+the documented V3 UUID family while retaining its existing ambiguous family;
+Smartlead keyword prefilters cover the existing underscore/hyphen variants.
+Broader modern credential-format coverage remains separate from this review.
+Metadata requests can still consume provider request quota. No response-supplied
+links or cursors are followed, and every body uses the shared response cap.
+
+Mocked tests cover exact requests and credentials, ordinary verification policy,
+typed success/error schemas, non-200 success-like bodies, empty/inactive/optional
+metadata, version routing, whole-token boundaries, regional fallback/stop
+conditions, cancellation, transport/read failures and byte-capped suppression.
+Unauthenticated, credential-free checks of the new CoinAPI and Massive metadata
+endpoints returned HTTP 401; no real credentials were used for validation.
+
+Official evidence checked 2026-09-27:
+
+- [CoinAPI published OpenAPI, exchange-id filter and schema](https://rest.coinapi.io/swagger/v1/swagger.json).
+- [Etherscan account API usage endpoint and response](https://docs.etherscan.io/api-reference/endpoint/getapilimit.md).
+- [Pagar.me legacy plans schema and count bound](https://docs.pagar.me/v4/reference/retornando-planos.md), [Basic authentication](https://docs.pagar.me/v4/reference/principios-basicos), [modern sk_/pk_ keys](https://docs.pagar.me/docs/chaves-de-acesso.md).
+- [Polygon-to-Massive transition and key compatibility](https://massive.com/blog/polygon-is-now-massive), [REST authentication](https://massive.com/docs/rest/quickstart), [market-status contract](https://massive.com/docs/rest/stocks/market-operations/market-status.md).
+- [Detectify V2 authentication, optional signing, bounded assets and empty-object response](https://developer.detectify.com/v2/), [V3-specific key authentication and bounded IP schema](https://developer.detectify.com/).
+- [Route4Me address-book pagination](https://route4me.io/docs/), [official Go response envelope](https://github.com/route4me/route4me-go-sdk/blob/master/addressbook/addressbook.go), [contact/query types](https://github.com/route4me/route4me-go-sdk/blob/master/addressbook/models.go).
+- [Smartlead sparse campaign selector](https://api.smartlead.ai/api-reference/analytics/campaign-list.md), [full campaign endpoint lacks server pagination](https://api.smartlead.ai/api-reference/campaigns/get-all.md).
+- [Ubidots V2 device schema](https://docs.ubidots.com/reference/get-all-devices.md), [pagination](https://docs.ubidots.com/reference/pagination.md), [token/API-key distinction](https://docs.ubidots.com/reference/authentication.md).
+- [APIMatic official CLI account request and auth](https://github.com/apimatic/apimatic-cli/blob/main/src/infrastructure/services/api-service.ts), [account schema](https://github.com/apimatic/apimatic-cli/blob/main/src/types/api/account.ts).
+- [Insightly current-user OpenAPI](https://api.na1.insightly.com/v3.1/swagger/docs/v3.1), [pod context, Basic auth and quota behavior](https://api.insightly.com/v3.1/Help).
+
+Salesforce/API-Football reference pages still returned HTTP 403 during this
+review. Atera documentation was also blocked; those verifiers remain unchanged.
 
 ## Remediation batch 26: ten control-plane identity and metadata verifiers
 

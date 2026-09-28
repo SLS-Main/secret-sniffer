@@ -547,7 +547,7 @@ func TestEtherscanVerifierUsesApplicationStatus(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
 	result := verifyEtherscan(WithVerificationHTTPClient(context.Background(), client), "secret")
-	if result.Status != VerificationUnverified {
+	if result.Status != VerificationUnknown || result.Response != "" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -1622,10 +1622,10 @@ func TestInsightlyVerifierTriesRegionalPods(t *testing.T) {
 			body := `{"Message":"Authorization has been denied for this request."}`
 			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`[]`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"USER_ID":1,"EMAIL_ADDRESS":"mail"}`)), Header: make(http.Header)}, nil
 	})}
 	result := verifyInsightly(WithVerificationHTTPClient(context.Background(), client), "secret")
-	if result.Status != VerificationVerified || result.Response != "" || requests != 3 {
+	if result.Status != VerificationVerified || result.Response != "" || requests != 2 {
 		t.Fatalf("result=%#v requests=%d", result, requests)
 	}
 }
@@ -2293,8 +2293,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 89,
-		VerificationSafetyReadOnly:   299,
+		VerificationSafetyUnreviewed: 79,
+		VerificationSafetyReadOnly:   309,
 		VerificationSafetyAuthOnly:   80,
 		VerificationSafetyUnsafe:     99,
 	}
@@ -2307,7 +2307,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 478 || report.RequiresHardening != 33 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 488 || report.RequiresHardening != 23 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

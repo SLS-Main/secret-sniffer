@@ -3152,7 +3152,12 @@ func verifyRebrandly(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCoinAPI(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://rest.coinapi.io/v1/limits", "X-CoinAPI-Key", "")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://rest.coinapi.io/v1/exchanges/COINBASE", nil)
+	req.Header.Set("X-CoinAPI-Key", secret)
+	req.Header.Set("Accept", "application/json")
+	return verifyInventoryArray(ctx, req, func(exchange identityPayload) bool {
+		return !identityHasErrors(exchange) && identityStringEquals(exchange, "exchange_id", "COINBASE") && identityStrings(exchange, "name")
+	})
 }
 
 func verifyPinata(ctx context.Context, secret string) VerificationResult {
@@ -3517,9 +3522,15 @@ func verifySingleStore(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPagarMe(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pagar.me/core/v5/orders?page=1&size=1", nil)
-	req.SetBasicAuth(secret, "")
-	return verifyHTTPRequest(ctx, req)
+	if !pagarMeLegacyLiveKey.MatchString(secret) {
+		return unknownVerificationResult("credential_type", "credential is not a supported legacy live key")
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.pagar.me/1/plans?count=1", nil)
+	req.SetBasicAuth(secret, "x")
+	req.Header.Set("Accept", "application/json")
+	return verifyInventoryArray(ctx, req, func(plan identityPayload) bool {
+		return !identityHasErrors(plan) && identityStringEquals(plan, "object", "plan") && identityNonnegativeIntegers(plan, "id", "amount", "days") && identityStrings(plan, "name")
+	})
 }
 
 func verifyCodemagic(ctx context.Context, secret string) VerificationResult {
@@ -3752,7 +3763,13 @@ func verifyZeroBounce(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyDetectify(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.detectify.com/rest/v3/ips?limit=1", "Authorization", "")
+	if detectifyV2Key.MatchString(secret) {
+		return verifyIdentityGET(ctx, secret, "https://api.detectify.com/rest/v2/assets/?pageSize=1&include_subdomains=false", "X-Detectify-Key", "", validDetectifyAssets)
+	}
+	if detectifyV3Key.MatchString(secret) {
+		return verifyIdentityGET(ctx, secret, "https://api.detectify.com/rest/v3/ips?limit=1", "Authorization", "", validDetectifyIPs)
+	}
+	return unknownVerificationResult("credential_type", "credential does not identify a supported Detectify API version")
 }
 
 func verifyMixmax(ctx context.Context, secret string) VerificationResult {
@@ -3766,7 +3783,12 @@ func verifyBunny(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyUbidots(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://industrial.api.ubidots.com/api/v1.6/users/me/", "X-Auth-Token", "")
+	return verifyIdentityGET(ctx, secret, "https://industrial.api.ubidots.com/api/v2.0/devices/?page=1&page_size=1", "X-Auth-Token", "", func(p identityPayload) bool {
+		_, code := p["code"]
+		return !code && identityNonnegativeIntegers(p, "count") && validIdentityCollection(p, "results", func(device identityPayload) bool {
+			return !identityHasErrors(device) && identityStrings(device, "id", "label")
+		})
+	})
 }
 
 func verifyZohoCRM(ctx context.Context, secret string) VerificationResult {
@@ -4353,28 +4375,9 @@ func verifyPlatformSH(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyEtherscan(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://api.etherscan.io/v2/api?chainid=1&module=account&action=balance&address=0x0000000000000000000000000000000000000000&tag=latest&apikey=" + url.QueryEscape(secret)
+	endpoint := "https://api.etherscan.io/v2/api?module=getapilimit&action=getapilimit&apikey=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		var response struct {
-			Status  string `json:"status"`
-			Message string `json:"message"`
-			Result  string `json:"result"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-		}
-		if response.Status == "1" && response.Message == "OK" {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		if response.Status == "0" && containsAnyFold(response.Result, "invalid api key") {
-			return invalidCredentialResult(), true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-	})
+	return verifyIdentityRequest(ctx, req, validEtherscanUsage)
 }
 
 func verifyOpenWeather(ctx context.Context, secret string) VerificationResult {
@@ -4393,7 +4396,7 @@ func verifyHERE(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPolygon(ctx context.Context, secret string) VerificationResult {
-	return verifyQueryAPI(ctx, "https://api.polygon.io/v3/reference/tickers?limit=1&apiKey="+url.QueryEscape(secret), []string{"request_id", "results"}, "unknown api key")
+	return verifyIdentityGET(ctx, secret, "https://api.massive.com/v1/marketstatus/now", "Authorization", "Bearer ", validMassiveMarketStatus)
 }
 
 func verifyAbuseIPDB(ctx context.Context, secret string) VerificationResult {
@@ -4724,11 +4727,13 @@ func verifySalesblink(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyRoute4Me(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://api.route4me.com/api.v4/address_book.php?api_key=" + url.QueryEscape(secret)
+	endpoint := "https://api.route4me.com/api.v4/address_book.php?limit=1&offset=0&api_key=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("invalid api key"))
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		return identityNonnegativeIntegers(p, "total") && validIdentityCollection(p, "results", func(contact identityPayload) bool {
+			return !identityHasErrors(contact) && identityNonnegativeIntegers(contact, "address_id") && identityStrings(contact, "address_1")
+		})
+	})
 }
 
 func verifyButterCMS(ctx context.Context, secret string) VerificationResult {
@@ -6096,11 +6101,15 @@ func verifyInstantly(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySmartlead(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://server.smartlead.ai/api/v1/campaigns/?api_key=" + url.QueryEscape(secret)
+	endpoint := "https://server.smartlead.ai/api/v1/analytics/campaign/list?api_key=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyJSONArrayAPI("invalid api key"))
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+		var ok bool
+		data := identityObject(p, "data")
+		return json.Unmarshal(p["ok"], &ok) == nil && ok && !identityHasErrors(data) && validIdentityCollection(data, "campaign_list", func(campaign identityPayload) bool {
+			return !identityHasErrors(campaign) && identityNonnegativeIntegers(campaign, "id") && identityStrings(campaign, "name")
+		})
+	})
 }
 
 func verifyDeel(ctx context.Context, secret string) VerificationResult {
@@ -6378,22 +6387,9 @@ func verifyWorksnaps(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAPIMatic(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.apimatic.io/code-generations", nil)
-	req.Header.Set("Authorization", "X-Auth-Key "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "authorization has been denied") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode >= 200 && statusCode < 300 && (jsonArray(body) || jsonObject(body) || containsAnyFold(string(body), "<CodeGeneration", "<code-generation")) {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+	return verifyIdentityGET(ctx, secret, "https://api.apimatic.io/account/profile", "Authorization", "X-Auth-Key ", func(p identityPayload) bool {
+		return identityStrings(p, "Id", "Email")
 	})
-	result.Response = ""
-	return result
 }
 
 func verifyAppointedd(ctx context.Context, secret string) VerificationResult {
@@ -7179,25 +7175,14 @@ func verifyKylas(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyInsightly(ctx context.Context, secret string) VerificationResult {
-	hosts := []string{"api.insightly.com", "api.na1.insightly.com", "api.eu1.insightly.com", "api.au1.insightly.com"}
-	result := verifyEndpoints(ctx, hosts, func(host string) VerificationResult {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/v3.1/Contacts?top=1", nil)
+	hosts := []string{"api.na1.insightly.com", "api.eu1.insightly.com", "api.au1.insightly.com"}
+	return verifyIdentityEndpoints(ctx, hosts, func(host string) VerificationResult {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/v3.1/Users/Me", nil)
 		req.SetBasicAuth(secret, "")
-		return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-			if statusCode == http.StatusTooManyRequests {
-				return VerificationResult{Status: VerificationVerified, Message: "provider authenticated a rate-limited key"}, true
-			}
-			if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "authorization has been denied") {
-				return invalidCredentialResult(), true
-			}
-			if statusCode >= 200 && statusCode < 300 && jsonArray(body) {
-				return VerificationResult{Status: VerificationVerified}, true
-			}
-			return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
+		return verifyIdentityRequest(ctx, req, func(p identityPayload) bool {
+			return identityNonnegativeIntegers(p, "USER_ID") && identityStrings(p, "EMAIL_ADDRESS")
 		})
 	})
-	result.Response = ""
-	return result
 }
 
 func verifyOOPSpam(ctx context.Context, secret string) VerificationResult {
