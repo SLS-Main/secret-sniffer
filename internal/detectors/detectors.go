@@ -219,6 +219,7 @@ type RegexDetector struct {
 	VerificationSafety  VerificationSafety
 	BroadContext        bool
 	TrailingSecretChars string
+	ContextFields       map[string]string
 }
 
 var openAIAdminKeyPattern = regexp.MustCompile(`\b(sk-admin-[A-Za-z0-9_-]{58}T3BlbkFJ[A-Za-z0-9_-]{58})\b`)
@@ -301,6 +302,9 @@ func (d RegexDetector) detectContent(content string) []Candidate {
 			out = append(out, Candidate{DetectorID: d.ID, Name: d.Name, Severity: d.Severity, Secret: secret, SecretParts: secretParts, VerificationSafety: d.VerificationSafety, Start: start, End: end, Verifier: d.Verifier, CompositeVerifier: d.CompositeVerifier})
 		}
 	}
+	if len(d.ContextFields) > 0 {
+		attachVerificationContext(content, out, d.ContextFields)
+	}
 	return out
 }
 
@@ -358,7 +362,7 @@ func NewMultipartRegexWithSafety(id, name, severity string, keywords []string, e
 }
 
 func DefaultRegistry() []Detector {
-	return []Detector{
+	return contextualRegistry([]Detector{
 		NewRegex("aws-access-key", "AWS Access Key", "critical", []string{"AKIA", "ASIA"}, `\b((?:AKIA|ASIA)[A-Z0-9]{16})\b`, 1, nil),
 		NewRegexWithTrailingBoundary("aws-secret-key", "AWS Secret Access Key", "critical", []string{"aws_secret", "secret_access_key", "AWS_SECRET_ACCESS_KEY"}, `(?i)(aws(.{0,20})?(secret|private).{0,20})['\"\s:=]+([A-Za-z0-9/+=]{40})`, 4, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/+=", nil),
 		CorrelatedDetector{
@@ -1503,7 +1507,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("ssh-private-key", "SSH Private Key", "critical", []string{"OPENSSH PRIVATE KEY", "RSA PRIVATE KEY"}, `-----BEGIN (?:OPENSSH|RSA|DSA|EC) PRIVATE KEY-----[\s\S]+?-----END (?:OPENSSH|RSA|DSA|EC) PRIVATE KEY-----`, 0, nil),
 		NewRegex("basic-auth-url", "Basic Auth URL", "high", []string{"://"}, `\b[a-z][a-z0-9+.-]*://[^\s:/?#]+:([^\s@/?#]{8,})@[^\s]+`, 1, nil),
 		AssignedSecretDetector{},
-	}
+	})
 }
 
 func ToFinding(c Candidate, file, commit string, b []byte, verify bool) Finding {

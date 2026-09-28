@@ -2156,7 +2156,7 @@ func verifyPipedream(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCrowdin(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.crowdin.com/api/v2/user")
+	return verifyContextlessProvider(ctx, "crowdin-token", secret)
 }
 
 func verifyEventbrite(ctx context.Context, secret string) VerificationResult {
@@ -3105,7 +3105,7 @@ func verifySparkPost(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAirbyte(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.airbyte.com/v1/workspaces?limit=1")
+	return verifyContextlessProvider(ctx, "airbyte-api-token", secret)
 }
 
 func verifyShipEngine(ctx context.Context, secret string) VerificationResult {
@@ -3118,7 +3118,7 @@ func verifyShipEngine(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyGetResponse(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.getresponse.com/v3/accounts", "X-Auth-Token", "api-key ")
+	return verifyContextlessProvider(ctx, "getresponse-api-key", secret)
 }
 
 func verifyMailerLite(ctx context.Context, secret string) VerificationResult {
@@ -3696,9 +3696,7 @@ func verifySourcegraphCloud(ctx context.Context, secret string) VerificationResu
 }
 
 func verifySemaphore(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://api.semaphore.co/api/v4/account?apikey=" + url.QueryEscape(secret)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequest(ctx, req)
+	return verifyContextlessProvider(ctx, "semaphore-api-token", secret)
 }
 
 func verifyHunter(ctx context.Context, secret string) VerificationResult {
@@ -3926,9 +3924,7 @@ func verifyNorthflank(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyFlagsmith(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://edge.api.flagsmith.com/api/v1/flags/", nil)
-	req.Header.Set("X-Environment-Key", secret)
-	return positiveOnlyVerification(verifyHTTPRequest(ctx, req), "credential subtype could not be confirmed")
+	return verifyContextlessProvider(ctx, "flagsmith-server-key", secret)
 }
 
 func verifyConfigCat(ctx context.Context, secret string) VerificationResult {
@@ -3990,10 +3986,7 @@ func verifyAfterShip(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyGrowthBook(ctx context.Context, secret string) VerificationResult {
-	if !strings.HasPrefix(secret, "secret_") {
-		return VerificationResult{Status: VerificationUnsupported, Message: "GrowthBook client and SDK keys are not secret API keys"}
-	}
-	return verifyBearerGET(ctx, secret, "https://api.growthbook.io/api/v1/projects?limit=1")
+	return verifyContextlessProvider(ctx, "growthbook-api-key", secret)
 }
 
 func verifyPersona(ctx context.Context, secret string) VerificationResult {
@@ -4092,7 +4085,7 @@ func classifyAPIlayerAccessKey(statusCode int, body []byte) (VerificationResult,
 }
 
 func verifySaladCloud(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.salad.com/api/public", "Salad-Api-Key", "")
+	return verifyContextlessProvider(ctx, "saladcloud-api-key", secret)
 }
 
 func verifyAyrshare(ctx context.Context, secret string) VerificationResult {
@@ -4202,7 +4195,7 @@ func verifyClustdoc(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCheckly(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.checklyhq.com/v1/accounts")
+	return verifyContextlessProvider(ctx, "checkly-api-key", secret)
 }
 
 func verifyKustomer(ctx context.Context, secret string) VerificationResult {
@@ -5885,9 +5878,7 @@ func classifyBinaryResponse(magics [][]byte, invalidMarkers ...string) verificat
 }
 
 func verifyScaleway(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.scaleway.com/account/v3/projects?per_page=1", nil)
-	req.Header.Set("X-Auth-Token", secret)
-	return verifyPrivateCollection(ctx, req, "denied_authentication", "authentication is denied")
+	return verifyContextlessProvider(ctx, "scaleway-secret-key", secret)
 }
 
 func verifyPayMongo(ctx context.Context, secret string) VerificationResult {
@@ -7713,15 +7704,7 @@ func verifyIterable(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyLangSmith(ctx context.Context, secret string) VerificationResult {
-	endpoints := []string{
-		"https://api.smith.langchain.com/api/v1/workspaces",
-		"https://eu.api.smith.langchain.com/api/v1/workspaces",
-		"https://apac.api.smith.langchain.com/api/v1/workspaces",
-		"https://aws.api.smith.langchain.com/api/v1/workspaces",
-	}
-	return verifyEndpoints(ctx, endpoints, func(endpoint string) VerificationResult {
-		return verifyHeaderGET(ctx, secret, endpoint, "X-API-Key", "")
-	})
+	return verifyContextlessProvider(ctx, "langsmith-api-key", secret)
 }
 
 func verifyLinear(ctx context.Context, secret string) VerificationResult {

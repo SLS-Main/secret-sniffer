@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 29:
+After remediation batch 30:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 509 | The recorded verifier contract has been reviewed/hardened. |
+| Reviewed | 519 | The recorded verifier contract has been reviewed/hardened. |
 | Requires hardening | 0 | All actionable items in this audit queue have been addressed. |
-| Blocked | 58 | Required context or a reliable validation contract is unresolved. |
+| Blocked | 48 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 326
-`read_only`, 84 `auth_only`, 99 `unsafe`, and 58 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 336
+`read_only`, 84 `auth_only`, 99 `unsafe`, and 48 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -88,7 +88,7 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 ## Remaining contract and coverage work
 
 1. **Blocked contracts:** establish provider-owned authenticated schemas and
-   required context for the 58 blocked patterns. Cloudplan and Cloverly now
+   required context for the 48 blocked patterns. Cloudplan and Cloverly now
    return unknown without making requests, including under explicit opt-in.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
    key families require different verification operations; a rejection by the
@@ -324,6 +324,65 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 30: ten context-dependent providers
+
+Ten previously blocked patterns now have supported cloud contracts under ordinary
+`--verify`. This adds context-aware capability, not a guarantee of successful
+verification when context is absent. Detection remains available for incomplete,
+unsupported and self-hosted configurations; those cases return `unknown`.
+
+Provider-qualified context assignments are read from the same JSON/YAML mapping
+as the credential, including decoded scalar views. Env/INI fragments correlate
+within 512 bytes without crossing blank lines, sections, document boundaries,
+bracket/brace boundaries or another credential of the same family. Conflicting
+context values prevent requests. Context participates in the verification cache
+identity, so the same credential in different accounts/deployments is not cached
+as one request. Context capture does not change raw human-output formatting.
+
+| Pattern | Accepted context and authenticated read |
+| --- | --- |
+| Checkly | `CHECKLY_ACCOUNT_ID` (UUID), optional `CHECKLY_API_URL=https://api.checklyhq.com`. Official CLI `GET /next/accounts/{id}` with Bearer auth and `X-Checkly-Account`; response id must match and name/runtimeId must be strings. |
+| SaladCloud | `SALAD_ORGANIZATION_NAME` or `SALAD_ORGANIZATION`; optional `SALAD_API_URL=https://api.salad.com/api/public`. Organization GPU classes, authenticated with `Salad-Api-Key`. Provider schema caps collection at 100; validates item id/name and accepts an empty list. No resource creation or inference. |
+| Scaleway | `SCW_ACCESS_KEY` paired with `SCW_SECRET_KEY`; optional `SCW_API_URL=https://api.scaleway.com`. Single IAM `/iam/v1alpha1/api-keys/{access_key}` metadata, matching access_key and a user or application identity. The SDK states secret_key is not returned by this read; responses are suppressed regardless. |
+| Semaphore CI | `SEMAPHORE_ORGANIZATION`, optional matching `SEMAPHORE_API_URL=https://{organization}.semaphoreci.com`. `GET /api/v1alpha/agents?page_size=1`, Authorization Token; validates agent state/name/type and accepts empty inventory. Replaces the unrelated Semaphore SMS (`semaphore.co`) request. |
+| LangSmith | `LANGSMITH_ENDPOINT`/`LANGCHAIN_ENDPOINT` selects exactly GCP US, EU, APAC or AWS US cloud base. Default is documented GCP US. `LANGSMITH_WORKSPACE_ID`/`LANGCHAIN_WORKSPACE_ID` supplies `X-Tenant-Id` and is required for service keys in this verifier. `GET /api/v1/settings` validates id/display_name/created_at and matches supplied workspace id. No cross-region guessing. |
+| Crowdin | Default Crowdin.com or `CROWDIN_ORGANIZATION` for `https://{organization}.api.crowdin.com/api/v2`; optional `CROWDIN_BASE_URL` must match. `GET /user` validates data.id integer and username. No fallback to a different organization. |
+| GrowthBook | `GROWTHBOOK_API_HOST` or `GROWTHBOOK_API_URL` must explicitly identify `https://api.growthbook.io/api`. Only `secret_` keys; `GET /v1/projects?limit=1&offset=0`, typed project metadata and pagination. Client/SDK key detection retained, with no verification request. |
+| Flagsmith | `FLAGSMITH_API_URL` must explicitly identify `https://edge.api.flagsmith.com/api/v1` or `https://api.flagsmith.com/api/v1`. Only `ser.` server environment keys; `GET /flags/` validates enabled booleans and feature names. No identity argument, trait updates or identity creation. Endpoint has no pagination; one byte-capped response, suppressed completely. |
+| Airbyte | `AIRBYTE_API_URL=https://api.airbyte.com/v1` and `AIRBYTE_ACCESS_TOKEN`, or `AIRBYTE_CREDENTIAL_TYPE=bearer` for legacy ambiguous token labels. Client-secret labels are recognized as incompatible, including conflicts with a bearer declaration. One workspace metadata page, limit=1; validates workspaceId/name/dataResidency. Does not exchange client secrets or call self-managed hosts. |
+| GetResponse | Default retail base or explicit `GETRESPONSE_API_URL=https://api3.getresponse360.pl/v3` / `https://api3.getresponse360.com/v3` with `GETRESPONSE_DOMAIN` for `X-Domain`. `GET /accounts?fields=accountId,email` requests sparse identity. Domain without a MAX base is ambiguous and makes no request. |
+
+All requests require exact HTTP 200 and typed success fields, suppress response
+bodies, retain permission/region/subtype ambiguity as unknown, reject oversized
+responses, and never follow response links or redirects. Missing, empty,
+conflicting, malformed or unsupported endpoint context cannot cause a request to
+an arbitrary host. A trailing slash on a supported base is accepted; alternate
+schemes, ports, userinfo, queries and fragments are not.
+
+Evidence checked 2026-09-28:
+
+- Checkly CLI [account routes/schema](https://github.com/checkly/checkly-cli/blob/main/packages/cli/src/rest/accounts.ts), [authentication and account header](https://github.com/checkly/checkly-cli/blob/main/packages/cli/src/rest/api.ts), [production API base](https://github.com/checkly/checkly-cli/blob/main/packages/cli/src/services/config.ts).
+- SaladCloud [organization GPU classes OpenAPI, authentication and maximum collection size](https://docs.salad.com/reference/saladcloud-api/organizations/list-gpu-classes.md).
+- Scaleway [official IAM SDK APIKey model and GetAPIKey contract](https://github.com/scaleway/scaleway-sdk-go/blob/main/api/iam/v1alpha1/iam_sdk.go).
+- Semaphore [API reference: authentication and agent pagination/schema](https://docs.semaphore.io/reference/api).
+- LangSmith [deployment/workspace/key configuration](https://docs.langchain.com/langsmith/create-account-api-key.md), [live OpenAPI settings schema and authentication headers](https://api.smith.langchain.com/openapi.json).
+- Crowdin [official client API domain and Enterprise routing](https://github.com/crowdin/crowdin-api-client-js/blob/master/src/core/index.ts), [authenticated-user method and models](https://github.com/crowdin/crowdin-api-client-js/blob/master/src/users/index.ts).
+- GrowthBook [project pagination, schemas, cloud base and secret-key authentication](https://docs.growthbook.io/api/projects/operation/listProjects.md).
+- Flagsmith [environment-key authentication](https://github.com/Flagsmith/flagsmith/blob/main/api/environments/authentication.py), [SDK flag read and no-pagination contract](https://github.com/Flagsmith/flagsmith/blob/main/api/features/views.py), [flag response serializer](https://github.com/Flagsmith/flagsmith/blob/main/api/features/serializers.py).
+- Airbyte [official workspace client](https://github.com/airbytehq/airbyte-api-python-sdk/blob/main/src/airbyte_api/workspaces.py), [workspace response JSON aliases](https://github.com/airbytehq/airbyte-api-python-sdk/blob/main/src/airbyte_api/models/workspaceresponse.py), [cloud server selection](https://github.com/airbytehq/airbyte-api-python-sdk/blob/main/src/airbyte_api/sdkconfiguration.py).
+- GetResponse [retail/MAX deployment and tenant requirements](https://apidocs.getresponse.com/v3/index.md), [OpenAPI account schema and sparse fields parameter](https://apireference.getresponse.com/open-api.json).
+
+Regression tests cover all ten providers' exact requests, policy promotion,
+schemas, empty collections, malformed/error bodies, non-200 responses, response
+suppression, transport/read failures and response caps; context order, conflicts,
+cache identity, unsupported hosts and credential families; JSON/YAML record and
+document isolation; and decoded/base64 scanner-to-verifier context propagation.
+
+Deferred work remains explicitly tracked: controlled live reliability and labeled
+accuracy benchmarks, known modern credential-format gaps, and a refreshed
+provider-level TruffleHog comparison. Further blocked-provider work should
+continue in batches of at least ten without promoting unproven contracts.
 
 ## Remediation batch 29: disposition of the final thirteen hardening items
 

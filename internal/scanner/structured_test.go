@@ -105,6 +105,46 @@ func TestStructuredMultipartVerification(t *testing.T) {
 	}
 }
 
+func TestStructuredProviderVerificationContext(t *testing.T) {
+	key := strings.Repeat("aB3d", 10)
+	account := "12345678-1234-1234-1234-123456789abc"
+	for _, tc := range []struct{ input, wantAccount string }{
+		{`{"CHECKLY_API_KEY":"` + key + `","CHECKLY_ACCOUNT_ID":"` + account + `"}`, account},
+		{`{"CHECKLY_API_KEY":"\u0061` + key[1:] + `","CHECKLY_ACCOUNT_ID":"` + account + `"}`, account},
+		{"CHECKLY_API_KEY: >-\n  " + key + "\nCHECKLY_ACCOUNT_ID: " + account, account},
+		{`[{"CHECKLY_API_KEY":"` + key + `"},{"CHECKLY_ACCOUNT_ID":"` + account + `"}]`, ""},
+		{`{"one":{"CHECKLY_API_KEY":"` + key + `"},"two":{"CHECKLY_ACCOUNT_ID":"` + account + `"}}`, ""},
+		{"CHECKLY_API_KEY: " + key + "\n---\nCHECKLY_ACCOUNT_ID: " + account, ""},
+	} {
+		for _, encoded := range []bool{false, true} {
+			calls := 0
+			var registry []detectors.Detector
+			for _, d := range detectors.DefaultRegistry() {
+				if d.Info().ID != "checkly-api-key" {
+					continue
+				}
+				r := d.(detectors.RegexDetector)
+				r.CompositeVerifier = func(_ context.Context, c detectors.Candidate) detectors.VerificationResult {
+					calls++
+					if c.Secret != key || c.SecretParts["account_id"] != tc.wantAccount {
+						t.Errorf("context mismatch: %v", c.SecretParts)
+					}
+					return detectors.VerificationResult{Status: detectors.VerificationUnknown}
+				}
+				registry = append(registry, r)
+			}
+			input := tc.input
+			if encoded {
+				input = base64.StdEncoding.EncodeToString([]byte(input))
+			}
+			findings := New(Config{Verify: true}, registry).ScanContent(context.Background(), "context", []byte(input))
+			if len(findings) != 1 || calls != 1 {
+				t.Fatalf("encoded=%v input=%s calls=%d findings=%+v", encoded, tc.input, calls, findings)
+			}
+		}
+	}
+}
+
 func TestStructuredVerificationSafetyPolicy(t *testing.T) {
 	calls := 0
 	d := detectors.NewUnsafeRegex("unsafe-test", "Unsafe Test", "high", []string{"unsafe_"}, `\b(unsafe_[A-Za-z0-9]{16})\b`, 1, func(context.Context, string) detectors.VerificationResult {

@@ -505,7 +505,7 @@ func TestGrowthBookClientKeyDoesNotUseSecretAPI(t *testing.T) {
 		return nil, nil
 	})}
 	result := verifyGrowthBook(WithVerificationHTTPClient(context.Background(), client), "sdk-client-key")
-	if result.Status != VerificationUnsupported {
+	if result.Status != VerificationUnknown || result.ErrorCategory != "credential_type" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -2293,8 +2293,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 58,
-		VerificationSafetyReadOnly:   326,
+		VerificationSafetyUnreviewed: 48,
+		VerificationSafetyReadOnly:   336,
 		VerificationSafetyAuthOnly:   84,
 		VerificationSafetyUnsafe:     99,
 	}
@@ -2307,7 +2307,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 509 || report.RequiresHardening != 0 || report.Blocked != 58 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 519 || report.RequiresHardening != 0 || report.Blocked != 48 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
