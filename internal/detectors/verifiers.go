@@ -731,7 +731,7 @@ func verifyAiven(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySourcegraphCody(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://cody-gateway.sourcegraph.com/v1/limits")
+	return verifyIdentityGET(ctx, secret, "https://cody-gateway.sourcegraph.com/v1/limits", "Authorization", "Bearer ", validCodyLimits)
 }
 
 func verifyOpenPhone(ctx context.Context, secret string) VerificationResult {
@@ -1761,13 +1761,8 @@ func verifySonarCloud(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAlienVaultOTX(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://otx.alienvault.com/api/v1/user/me", nil)
-	req.Header.Set("X-OTX-API-KEY", secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "authentication required") {
-			return invalidCredentialResult(), true
-		}
-		return VerificationResult{}, false
+	return verifyIdentityGET(ctx, secret, "https://otx.alienvault.com/api/v1/user/me", "X-OTX-API-KEY", "", func(p identityPayload) bool {
+		return finalPositiveInteger(p["user_id"]) && identityStrings(p, "username")
 	})
 }
 
@@ -1836,7 +1831,11 @@ func verifyAdafruitIO(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAtera(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://app.atera.com/api/v3/agents?page=1&itemsInPage=1", "X-API-KEY", "")
+	return verifyIdentityGET(ctx, secret, "https://app.atera.com/api/v3/agents?page=1&itemsInPage=1", "X-API-KEY", "", func(p identityPayload) bool {
+		return identityNonnegativeIntegers(p, "TotalItemCount") && validIdentityCollection(p, "Items", func(item identityPayload) bool {
+			return !identityHasErrors(item) && finalPositiveInteger(item["AgentID"])
+		})
+	})
 }
 
 func verifyBorgBase(ctx context.Context, secret string) VerificationResult {
@@ -3294,7 +3293,17 @@ func verifyPercy(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyNGC(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.ngc.nvidia.com/v2/users/me")
+	if strings.HasPrefix(secret, "nvapi-") {
+		return verifyNVAPI(ctx, secret)
+	}
+	if !ngcLegacyCredential.MatchString(secret) {
+		return unknownVerificationResult("credential_type", "unsupported NGC credential format")
+	}
+	// Legacy keys exchange for a short-lived token, as in the official NGC SDK.
+	// No org/team scopes are requested and the returned token is never reused.
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://authn.nvidia.com/token?service=ngc", nil)
+	req.SetBasicAuth("$oauthtoken", secret)
+	return verifyIdentityRequest(ctx, req, validNGCLegacyToken)
 }
 
 func verifyWitAI(ctx context.Context, secret string) VerificationResult {
@@ -4185,7 +4194,7 @@ func verifyStormboard(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCloudplan(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.cloudplan.biz/api/user/me", "session_id", "")
+	return unknownVerificationResult("provider_contract", "Cloudplan verification requires a documented current authentication contract")
 }
 
 func verifyClustdoc(ctx context.Context, secret string) VerificationResult {
@@ -4831,20 +4840,7 @@ func verifyBrowshot(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyTwitterBearer(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.twitter.com/2/tweets/20", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "unauthorized") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode >= 200 && statusCode < 300 && jsonHasAllFields(body, "data", "id") {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return unknownVerificationResult("authorization", "provider authentication response was ambiguous"), true
-	})
+	return verifyIdentityGET(ctx, secret, "https://api.x.com/2/usage/credits", "Authorization", "Bearer ", validXCredits)
 }
 
 func verifyAlchemy(ctx context.Context, secret string) VerificationResult {
@@ -5530,9 +5526,17 @@ func verifySimpleSat(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySendbirdOrganization(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://gate.sendbird.com/api/v2/applications", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://gate.sendbird.com/api/v2/organization_members/predefined_roles", nil)
 	req.Header.Set("SENDBIRDORGANIZATIONAPITOKEN", secret)
-	return verifyPrivateCollection(ctx, req, "authentication information invalid")
+	req.Header.Set("Accept", "application/json")
+	result := verifyHTTPRequestWithClassifier(ctx, req, func(status int, body []byte) (VerificationResult, bool) {
+		if status == http.StatusOK && finalStringList(body) {
+			return VerificationResult{Status: VerificationVerified}, true
+		}
+		return verifyJSONReadClassification(status, body)
+	})
+	result.Response = ""
+	return result
 }
 
 func verifyShipday(ctx context.Context, secret string) VerificationResult {
@@ -5853,7 +5857,12 @@ func verifyQubole(ctx context.Context, secret string) VerificationResult {
 func verifyProdPad(ctx context.Context, secret string) VerificationResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.prodpad.com/v1/tags", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyPrivateCollection(ctx, req, "api key is not valid", "not a valid one")
+	req.Header.Set("Accept", "application/json")
+	// The published tag endpoint has no pagination parameters. Read one capped
+	// metadata response, never ideas, feedback, or other account content.
+	return verifyInventoryArray(ctx, req, func(p identityPayload) bool {
+		return !identityHasErrors(p) && identityStrings(p, "id", "tag")
+	})
 }
 
 func classifyBinaryResponse(magics [][]byte, invalidMarkers ...string) verificationResponseClassifier {
@@ -6589,10 +6598,15 @@ func verifySurvicate(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyVyte(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.vyte.in/v2/events", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.vyte.in/v2/events?limit=1", nil)
 	req.Header.Set("Authorization", secret)
-	req.Header.Set("Accept", "application/vnd.vyte+json; version=3")
-	return verifyPrivateCollection(ctx, req, "unauthorized")
+	req.Header.Set("Accept", "application/json")
+	return verifyInventoryArray(ctx, req, func(p identityPayload) bool {
+		confirmed := identityObject(p, "confirmed")
+		var title *string
+		return !identityHasErrors(p) && !identityHasErrors(confirmed) && identityStrings(p, "_id") &&
+			json.Unmarshal(p["title"], &title) == nil && title != nil && contextBoolean(confirmed["flag"])
+	})
 }
 
 func verifyStorecove(ctx context.Context, secret string) VerificationResult {
@@ -6654,13 +6668,9 @@ func verifyCourier(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyComplyAdvantage(ctx context.Context, secret string) VerificationResult {
-	result := verifyEndpoints(ctx, []string{"https://api.complyadvantage.com/users", "https://api.us.complyadvantage.com/users", "https://api.ap.complyadvantage.com/users"}, func(endpoint string) VerificationResult {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		req.Header.Set("Authorization", "Token "+secret)
-		return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"status", "content"}, "api key is invalid or was not provided"))
+	return verifyIdentityEndpoints(ctx, []string{"https://api.complyadvantage.com/users", "https://api.us.complyadvantage.com/users", "https://api.ap.complyadvantage.com/users"}, func(endpoint string) VerificationResult {
+		return verifyIdentityGET(ctx, secret, endpoint, "Authorization", "Token ", validComplyUsers)
 	})
-	result.Response = ""
-	return result
 }
 
 func verifyCronitor(ctx context.Context, secret string) VerificationResult {
@@ -7014,16 +7024,15 @@ func verifyBrandfetch(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyBombBomb(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.bombbomb.com/v2/user/", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized {
-			return invalidCredentialResult(), true
-		}
-		return classifyReadOnlyAPI([]string{"id"})(statusCode, body)
-	})
-	result.Response = ""
-	return result
+	// BBCore validates JWTs with this dedicated method, not a content listing.
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("method", "ValidateJsonWebToken")
+	_ = writer.WriteField("jwt", secret)
+	_ = writer.Close()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://app.bombbomb.com/app/api/api.php", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return verifyIdentityRequest(ctx, req, validBombBombSession)
 }
 
 func verifyCaflou(ctx context.Context, secret string) VerificationResult {
@@ -7065,11 +7074,7 @@ func verifyRingover(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCloverly(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.cloverly.com/2019-03-beta/account", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"id"}, "incorrect api key given"))
-	result.Response = ""
-	return result
+	return unknownVerificationResult("provider_contract", "Cloverly verification requires a documented authenticated metadata contract")
 }
 
 func verifyVBOUT(ctx context.Context, secret string) VerificationResult {
@@ -7263,23 +7268,13 @@ func verifyColumn(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyNVAPI(ctx context.Context, secret string) VerificationResult {
+	if !ngcScopedCredential.MatchString(secret) {
+		return unknownVerificationResult("credential_type", "unsupported NVIDIA scoped-key format")
+	}
 	body := "credentials=" + url.QueryEscape(secret)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.ngc.nvidia.com/v3/keys/get-caller-info", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "unauthorized", "invalid api key") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode >= 200 && statusCode < 300 && jsonHasTopLevelStrings(body, "id") {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-	})
-	result.Response = ""
-	return result
+	return verifyIdentityRequest(ctx, req, validNGCScopedCaller)
 }
 
 func verifyPaymo(ctx context.Context, secret string) VerificationResult {

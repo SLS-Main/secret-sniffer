@@ -585,7 +585,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("geocomply-license-key", "GeoComply License Key", "critical", []string{"geocomply", "geoguard"}, `(?i)\b(?:geocomply|geoguard)\b[\s\S]{0,200}\b(?:license[_-]?key|client[_-]?key|secret|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("alloy-api-key", "Alloy API Key", "critical", []string{"alloy", "developer.alloy.com"}, `(?i)\b(?:alloy|developer\.alloy\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|api[_-]?secret|bearer|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("socure-api-key", "Socure API Key", "critical", []string{"socure", "api.socure.com"}, `(?i)\b(?:socure|api\.socure\.com|x-api-key)\b[\s\S]{0,160}\b(?:api[_-]?key|x-api-key|sdk[_-]?key|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
-		NewRegex("complyadvantage-api-key", "ComplyAdvantage API Key", "critical", []string{"complyadvantage", "comply advantage"}, `(?i)\b(?:complyadvantage|comply[ _-]?advantage|api\.complyadvantage\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyComplyAdvantage),
+		NewReadOnlyRegexWithTrailingBoundary("complyadvantage-api-key", "ComplyAdvantage API Key", "critical", []string{"complyadvantage", "comply advantage", "comply_advantage", "comply-advantage"}, `(?i)\b(?:complyadvantage|comply[ _-]?advantage|api\.complyadvantage\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyComplyAdvantage),
 		NewRegex("chainalysis-api-key", "Chainalysis API Key", "critical", []string{"chainalysis", "api.chainalysis.com"}, `(?i)\b(?:chainalysis|api\.chainalysis\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("trm-labs-api-key", "TRM Labs API Key", "critical", []string{"trmlabs", "trm labs"}, `(?i)\b(?:trmlabs|trm[ _-]?labs|api\.trmlabs\.com)\b[\s\S]{0,160}\b(?:api[_-]?key|secret|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewReadOnlyRegexWithTrailingBoundary("bitgo-access-token", "BitGo Access Token", "critical", []string{"bitgo", "app.bitgo.com"}, `(?i)\b(?:bitgo|app\.bitgo\.com|app\.bitgo-test\.com|test\.bitgo\.com)\b[\s\S]{0,160}\b(?:access[_-]?token|api[_-]?token|token|bearer)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyBitGo),
@@ -607,7 +607,7 @@ func DefaultRegistry() []Detector {
 		NewReadOnlyRegex("guardian-api-key", "Guardian API Key", "high", []string{"guardianapi", "guardian", "content.guardianapis.com"}, `(?i)\b(?:guardianapi|guardian|content\.guardianapis\.com).{0,40}\b([0-9A-Za-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12})\b`, 1, verifyGuardian),
 		NewReadOnlyRegex("circleci-pat", "CircleCI Personal Access Token", "critical", []string{"CCIPAT_", "circleci"}, `\b(CCIPAT_[A-Za-z0-9]{22}_[A-Fa-f0-9]{40})\b`, 1, verifyCircleCI),
 		NewReadOnlyRegexWithTrailingBoundary("sourcegraph-token", "Sourcegraph Token", "critical", []string{"sgp_"}, `\b(sgp_(?:[A-Fa-f0-9]{16}|local)_[A-Fa-f0-9]{40}|sgp_[A-Fa-f0-9]{40})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifySourcegraphCloud),
-		NewRegex("sourcegraph-cody-token", "Sourcegraph Cody Token", "critical", []string{"slk_"}, `\b(slk_[a-f0-9]{64})\b`, 1, verifySourcegraphCody),
+		NewReadOnlyRegexWithTrailingBoundary("sourcegraph-cody-token", "Sourcegraph Cody Token", "critical", []string{"slk_"}, `\b(slk_[a-f0-9]{64})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifySourcegraphCody),
 		NewReadOnlyRegex("snyk-api-key", "Snyk API Key", "critical", []string{"snyk", "SNYK_TOKEN"}, `(?i)\bsnyk.{0,40}['\"\s:=]+([0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12})\b`, 1, verifySnyk),
 		NewReadOnlyRegex("uptimerobot-api-key", "UptimeRobot API Key", "high", []string{"uptimerobot", "UPTIMEROBOT_API_KEY"}, `(?i)\buptimerobot.{0,40}['\"\s:=]+([A-Za-z0-9]{9}-[A-Za-z0-9]{24})\b`, 1, verifyUptimeRobot),
 		NewRegex("sumologic-access-id", "Sumo Logic Access ID", "high", []string{"sumo", "accessId", "access_id"}, `(?i)\b(?:sumo(?:logic)?|access[_-]?id).{0,40}['\"\s:=]+(su[A-Za-z0-9]{12})\b`, 1, nil),
@@ -735,7 +735,7 @@ func DefaultRegistry() []Detector {
 			},
 			PrimaryPart: "client_secret", MaxDistance: 512, StopAtBlankLine: true, CompositeVerifier: verifyAzureEntraCredentials, VerificationSafety: VerificationSafetyAuthOnly,
 		},
-		NewRegex("twitter-bearer-token", "Twitter/X Bearer Token", "critical", []string{"twitter", "TWITTER_BEARER_TOKEN", "AAAA"}, `(?i)\b(?:twitter|x_api|twitter_bearer_token).{0,60}\bbearer[_ -]?token\b\s*[:=]\s*['\"]?(AAAA[A-Za-z0-9%_-]{80,300})\b`, 1, verifyTwitterBearer),
+		NewReadOnlyRegexWithTrailingBoundary("twitter-bearer-token", "Twitter/X Bearer Token", "critical", []string{"twitter", "x_api", "AAAA"}, `(?i)\b(?:twitter_bearer_token|(?:twitter|x_api|twitter_bearer_token).{0,60}\bbearer[_ -]?token)\s*[:=]\s*['\"]?(AAAA[A-Za-z0-9%_+/=-]{80,300})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=%", verifyTwitterBearer),
 		NewRegex("twitch-client-secret", "Twitch Client Secret", "critical", []string{"TWITCH_CLIENT_SECRET", "twitch"}, `(?i)\btwitch\b[\s\S]{0,120}\bclient[_-]?secret\b\s*[:=]\s*['\"]?([A-Za-z0-9]{32})\b`, 1, nil),
 		NewAuthOnlyRegex("twitch-access-token", "Twitch Access Token", "critical", []string{"twitch"}, `(?i)\btwitch\b.{0,60}\b(?:access[_-]?token|oauth[_-]?token|token)\b\s*[:=]\s*['\"]?([a-z0-9]{30})\b`, 1, verifyTwitch),
 		NewReadOnlyRegex("ipinfo-token", "IPinfo Token", "high", []string{"ipinfo"}, `(?i)\bipinfo\b.{0,40}\b(?:api[_-]?key|access[_-]?token|token|key)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{32,64})\b`, 1, verifyIPInfo),
@@ -810,7 +810,7 @@ func DefaultRegistry() []Detector {
 		NewReadOnlyRegexWithTrailingBoundary("percy-token", "Percy Token", "critical", []string{"PERCY_TOKEN", "percy"}, `(?i)\b(?:percy_token|(?:percy|percy_token)\b.{0,80}\btoken)\s*[:=]\s*['\"]?([A-Za-z0-9_-]{20,128})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyPercy),
 		NewRegex("crowdin-token", "Crowdin Token", "critical", []string{"crowdin"}, `(?i)\bcrowdin\b.{0,80}\b(?:personal[_-]?token|access[_-]?token|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, verifyCrowdin),
 		NewRegex("postageapp-api-key", "PostageApp API Key", "high", []string{"postageapp", "postage"}, `(?i)\bpostage(?:app)?\b.{0,80}\b(?:api[_-]?key|key)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{32})\b`, 1, nil),
-		NewRegex("sendbird-organization-api-token", "Sendbird Organization API Token", "critical", []string{"sendbird"}, `(?i)\bsendbird\b.{0,100}\b(?:organization[_-]?api[_-]?token|org[_-]?api[_-]?token|organization[_-]?token)\b\s*[:=]\s*['\"]?([a-f0-9]{24})\b`, 1, verifySendbirdOrganization),
+		NewReadOnlyRegexWithTrailingBoundary("sendbird-organization-api-token", "Sendbird Organization API Token", "critical", []string{"sendbird"}, `(?i)\bsendbird\b.{0,100}\b(?:organization[_-]?api[_-]?token|org[_-]?api[_-]?token|organization[_-]?token)\b\s*[:=]\s*['\"]?([a-f0-9]{24})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifySendbirdOrganization),
 		NewRegex("checkly-api-key", "Checkly API Key", "critical", []string{"checkly"}, `(?i)\bcheckly\b.{0,80}\b(?:api[_-]?key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, verifyCheckly),
 		NewAuthOnlyRegex("incidentio-api-key", "incident.io API Key", "critical", []string{"incident.io", "api.incident.io"}, `(?i)\b(?:incident\.io|api\.incident\.io|incidentio)\b[\s\S]{0,160}\b(?:api[_-]?key|bearer|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyIncidentIO),
 		NewAuthOnlyRegex("firehydrant-api-key", "FireHydrant API Key", "critical", []string{"firehydrant", "api.firehydrant.io"}, `(?i)\b(?:firehydrant|api\.firehydrant\.io)\b[\s\S]{0,160}\b(?:api[_-]?key|bearer|token|service[_-]?token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyFireHydrant),
@@ -1133,7 +1133,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("appsynergy-api-key", "AppSynergy API Key", "high", []string{"appsynergy", "app synergy"}, `(?i)\b(?:appsynergy|app[ _-]?synergy)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("apptivo-api-key", "Apptivo API Key", "high", []string{"apptivo"}, `(?i)\bapptivo\b.{0,80}\b(?:api[_-]?key|key|access[_-]?key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("artsy-api-token", "Artsy API Token", "high", []string{"artsy"}, `(?i)\bartsy\b.{0,80}\b(?:api[_-]?token|token|client[_-]?secret|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
-		NewRegex("atera-api-key", "Atera API Key", "critical", []string{"atera"}, `(?i)\batera\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, verifyAtera),
+		NewReadOnlyRegexWithTrailingBoundary("atera-api-key", "Atera API Key", "critical", []string{"atera"}, `(?i)\batera\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyAtera),
 		NewRegex("atlassian-datacenter-token", "Atlassian Data Center Token", "critical", []string{"atlassian", "datacenter"}, `(?i)\batlassian\b.{0,80}\b(?:data[ _-]?center|datacenter)\b.{0,80}\b(?:personal[_-]?access[_-]?token|access[_-]?token|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("audd-api-token", "AudD API Token", "high", []string{"audd"}, `(?i)\baudd\b.{0,80}\b(?:api[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("autodesk-client-secret", "Autodesk Client Secret", "critical", []string{"autodesk"}, `(?i)\bautodesk\b.{0,80}\b(?:client[_-]?secret|api[_-]?key|access[_-]?token|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
@@ -1145,7 +1145,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("billomat-api-key", "Billomat API Key", "high", []string{"billomat"}, `(?i)\bbillomat\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("blitapp-api-key", "Blitapp API Key", "high", []string{"blitapp"}, `(?i)\bblitapp\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("blogger-api-key", "Blogger API Key", "high", []string{"blogger"}, `(?i)\bblogger\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
-		NewRegex("bombbomb-api-key", "BombBomb API Key", "high", []string{"bombbomb", "bomb bomb"}, `(?i)\b(?:bombbomb|bomb[ _-]?bomb)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?(eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b`, 1, verifyBombBomb),
+		NewAuthOnlyRegexWithTrailingBoundary("bombbomb-api-key", "BombBomb API Key", "high", []string{"bombbomb", "bomb bomb", "bomb_bomb", "bomb-bomb"}, `(?i)\b(?:bombbomb|bomb[ _-]?bomb)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?(eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyBombBomb),
 		NewRegex("boostnote-api-token", "Boost Note API Token", "high", []string{"boostnote", "boost note"}, `(?i)\b(?:boostnote|boost[ _-]?note)\b.{0,80}\b(?:api[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewReadOnlyRegex("borgbase-api-key", "BorgBase API Key", "critical", []string{"borgbase"}, `(?i)\bborgbase\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._/-]{148,152})(?:['\"\s,;]|$)`, 1, verifyBorgBase),
 		NewAuthOnlyRegex("buddyns-api-key", "BuddyNS API Key", "high", []string{"buddyns", "buddy ns"}, `(?i)\b(?:buddyns|buddy[ _-]?ns)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-z0-9]{40})\b`, 1, verifyBuddyNS),
@@ -1174,8 +1174,8 @@ func DefaultRegistry() []Detector {
 		NewReadOnlyRegex("avaza-api-token", "Avaza API Token", "high", []string{"avaza"}, `(?i)\bavaza\b.{0,80}\b(?:api[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([0-9]+-[a-f0-9]{40})\b`, 1, verifyAvaza),
 		NewRegex("cloudelements-api-key", "Cloud Elements API Key", "critical", []string{"cloudelements", "cloud elements"}, `(?i)\b(?:cloudelements|cloud[ _-]?elements)\b.{0,80}\b(?:api[_-]?key|user[_-]?secret|secret|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("cloudimage-api-key", "Cloudimage API Key", "high", []string{"cloudimage"}, `(?i)\bcloudimage\b.{0,80}\b(?:api[_-]?key|token|key)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
-		NewRegex("cloudplan-api-key", "Cloudplan API Key", "high", []string{"cloudplan"}, `(?i)\bcloudplan\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, verifyCloudplan),
-		NewRegex("cloverly-api-key", "Cloverly API Key", "high", []string{"cloverly"}, `(?i)\bcloverly\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-z0-9:_]{28})\b`, 1, verifyCloverly),
+		NewRegexWithTrailingBoundary("cloudplan-api-key", "Cloudplan API Key", "high", []string{"cloudplan"}, `(?i)\bcloudplan\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyCloudplan),
+		NewRegexWithTrailingBoundary("cloverly-api-key", "Cloverly API Key", "high", []string{"cloverly"}, `(?i)\bcloverly\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-z0-9:_]{28})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=:", verifyCloverly),
 		NewRegex("cloze-api-key", "Cloze API Key", "high", []string{"cloze"}, `(?i)\bcloze\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("clustdoc-api-key", "Clustdoc API Key", "high", []string{"clustdoc"}, `(?i)\bclustdoc\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, verifyClustdoc),
 		NewAuthOnlyRegexWithTrailingBoundary("codequiry-api-key", "Codequiry API Key", "high", []string{"codequiry"}, `(?i)\bcodequiry\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9-]{64})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-", verifyCodequiry),
@@ -1331,12 +1331,12 @@ func DefaultRegistry() []Detector {
 		NewUnsafeRegex("newscatcher-api-key", "NewsCatcher API Key", "high", []string{"newscatcher", "news catcher"}, `(?i)\b(?:newscatcher|news[ _-]?catcher)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_]{43})\b`, 1, verifyNewsCatcher),
 		NewRegex("nexmo-api-key", "Nexmo API Key", "critical", []string{"nexmo"}, `(?i)\bnexmo\b.{0,80}\b(?:api[_-]?key|key|secret|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("nftport-api-key", "NFTPort API Key", "critical", []string{"nftport", "nft port"}, `(?i)\b(?:nftport|nft[ _-]?port)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
-		NewRegex("ngc-api-key", "NVIDIA NGC API Key", "critical", []string{"ngc", "nvidia"}, `(?i)\b(?:ngc|nvidia)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, verifyNGC),
+		NewAuthOnlyRegexWithTrailingBoundary("ngc-api-key", "NVIDIA NGC API Key", "critical", []string{"ngc", "nvidia"}, `(?i)\b(?:ngc|nvidia)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyNGC),
 		NewRegex("nicereply-api-key", "Nicereply API Key", "high", []string{"nicereply", "nice reply"}, `(?i)\b(?:nicereply|nice[ _-]?reply)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewReadOnlyRegexWithTrailingBoundary("nimble-api-key", "Nimble API Key", "high", []string{"nimble"}, `(?i)\bnimble\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{30})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_+/-=", verifyNimble),
 		NewRegex("noticeable-api-key", "Noticeable API Key", "high", []string{"noticeable"}, `(?i)\bnoticeable\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("nozbeteams-api-token", "Nozbe Teams API Token", "high", []string{"nozbeteams", "nozbe teams"}, `(?i)\b(?:nozbeteams|nozbe[ _-]?teams)\b.{0,80}\b(?:api[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{16}_[A-Za-z0-9_-]{64})\b`, 1, verifyNozbeTeams),
-		NewRegex("nvapi-key", "NVAPI Key", "high", []string{"nvapi-"}, `\b(nvapi-[A-Za-z0-9_-]{64})(?:['\"\s,;]|$)`, 1, verifyNVAPI),
+		NewAuthOnlyRegexWithTrailingBoundary("nvapi-key", "NVAPI Key", "high", []string{"nvapi-"}, `\b(nvapi-[A-Za-z0-9_-]{64})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyNVAPI),
 		NewRegex("onedesk-api-key", "OneDesk API Key", "high", []string{"onedesk", "one desk"}, `(?i)\b(?:onedesk|one[ _-]?desk)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("onepagecrm-api-key", "OnePageCRM API Key", "high", []string{"onepagecrm", "one page crm"}, `(?i)\b(?:onepagecrm|one[ _-]?page[ _-]?crm)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewUnsafeRegex("oopspam-api-key", "OOPSpam API Key", "high", []string{"oopspam"}, `(?i)\boopspam\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{40})\b`, 1, verifyOOPSpam),
@@ -1354,7 +1354,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("postbacks-api-key", "Postbacks API Key", "high", []string{"postbacks"}, `(?i)\bpostbacks\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("powrbot-api-key", "Powrbot API Key", "high", []string{"powrbot"}, `(?i)\bpowrbot\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewUnsafeRegex("privacy-api-key", "Privacy.com API Key", "critical", []string{"privacy.com", "privacy"}, `(?i)\b(?:privacy\.com|privacy)\b.{0,80}\b(?:api[_-]?key|key|token|secret)\b\s*[:=]\s*['\"]?([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\b`, 1, verifyPrivacy),
-		NewRegex("prodpad-api-key", "ProdPad API Key", "high", []string{"prodpad"}, `(?i)\bprodpad\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-f0-9]{64})\b`, 1, verifyProdPad),
+		NewReadOnlyRegexWithTrailingBoundary("prodpad-api-key", "ProdPad API Key", "high", []string{"prodpad"}, `(?i)\bprodpad\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-f0-9]{64})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyProdPad),
 		NewRegex("prospectcrm-api-key", "Prospect CRM API Key", "high", []string{"prospectcrm", "prospect crm"}, `(?i)\b(?:prospectcrm|prospect[ _-]?crm)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewReadOnlyRegexWithTrailingBoundary("protocolsio-api-token", "Protocols.io API Token", "high", []string{"protocols.io", "protocolsio"}, `(?i)\b(?:protocols\.io|protocolsio)\b.{0,80}\b(?:api[_-]?token|token|api[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyProtocolsIO),
 		NewRegex("purestake-api-key", "PureStake API Key", "critical", []string{"purestake"}, `(?i)\bpurestake\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
@@ -1415,7 +1415,7 @@ func DefaultRegistry() []Detector {
 		NewRegex("viewneo-api-key", "viewneo API Key", "high", []string{"viewneo"}, `(?i)\bviewneo\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("voodoosms-api-key", "VoodooSMS API Key", "critical", []string{"voodoosms", "voodoo sms"}, `(?i)\b(?:voodoosms|voodoo[ _-]?sms)\b.{0,80}\b(?:api[_-]?key|key|token|secret)\b\s*[:=]\s*['\"]?([A-Za-z0-9._-]{32,256})\b`, 1, nil),
 		NewRegex("vouchery-api-key", "Vouchery API Key", "high", []string{"vouchery"}, `(?i)\bvouchery\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
-		NewRegex("vyte-api-key", "Vyte API Key", "high", []string{"vyte"}, `(?i)\bvyte\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-z0-9]{50})\b`, 1, verifyVyte),
+		NewReadOnlyRegexWithTrailingBoundary("vyte-api-key", "Vyte API Key", "high", []string{"vyte"}, `(?i)\bvyte\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([a-z0-9]{50})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyVyte),
 		NewReadOnlyRegexWithTrailingBoundary("webscraper-api-key", "WebScraper API Key", "high", []string{"webscraper", "web scraper", "web_scraper", "web-scraper"}, `(?i)\b(?:webscraper|web[ _-]?scraper)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{60})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyWebScraper),
 		NewRegex("webscraping-api-key", "WebScraping API Key", "high", []string{"webscraping", "web scraping"}, `(?i)\b(?:webscraping|web[ _-]?scraping)\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,128})\b`, 1, nil),
 		NewRegex("worksnaps-api-key", "Worksnaps API Key", "high", []string{"worksnaps"}, `(?i)\bworksnaps\b.{0,80}\b(?:api[_-]?key|key|token)\b\s*[:=]\s*['\"]?([A-Za-z0-9]{40})\b`, 1, verifyWorksnaps),
@@ -1452,7 +1452,7 @@ func DefaultRegistry() []Detector {
 		NewAuthOnlyRegex("apollo-api-key", "Apollo API Key", "high", []string{"apollo"}, `(?i)\bapollo.{0,40}['\"\s:=]+([A-Za-z0-9]{22})\b`, 1, verifyApollo),
 		NewReadOnlyRegex("lemlist-api-key", "Lemlist API Key", "high", []string{"lemlist"}, `(?i)\blemlist.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyLemlist),
 		NewRegex("getresponse-api-key", "GetResponse API Key", "high", []string{"getresponse", "get response"}, `(?i)\b(?:getresponse|get[ _-]?response).{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, verifyGetResponse),
-		NewRegex("alienvault-otx-api-key", "AlienVault OTX API Key", "high", []string{"alienvault", "otx"}, `(?i)\b(?:alienvault|otx).{0,40}['\"\s:=]+([a-f0-9]{64})\b`, 1, verifyAlienVaultOTX),
+		NewReadOnlyRegexWithTrailingBoundary("alienvault-otx-api-key", "AlienVault OTX API Key", "high", []string{"alienvault", "otx", "levelblue"}, `(?i)\b(?:alienvault|otx|levelblue).{0,40}['\"\s:=]+([a-f0-9]{64})`, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/+=", verifyAlienVaultOTX),
 		NewRegex("censys-api-key", "Censys API Key", "high", []string{"censys"}, `(?i)\bcensys.{0,40}['\"\s:=]+([A-Za-z0-9]{32})\b`, 1, nil),
 		CorrelatedDetector{
 			ID: "censys-credentials", Name: "Censys API Credentials", Severity: "high",
@@ -2223,10 +2223,13 @@ func verifyHTTPRequestWithClassifier(ctx context.Context, req *http.Request, cla
 		return VerificationResult{Status: VerificationUnknown, ErrorCategory: "network", Message: "provider request failed"}
 	}
 	defer resp.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxVerificationResponseBytes))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxVerificationResponseBytes+1))
 	response := truncateVerificationResponse(string(body))
 	if readErr != nil {
 		return VerificationResult{Status: VerificationUnknown, ErrorCategory: "network", Message: "provider response could not be read", Response: response}
+	}
+	if len(body) > maxVerificationResponseBytes {
+		return VerificationResult{Status: VerificationUnknown, ErrorCategory: "provider_response", Message: "provider response exceeded the verification size limit", Response: response}
 	}
 	if classifier != nil {
 		if result, handled := classifier(resp.StatusCode, body); handled {

@@ -1399,7 +1399,7 @@ func TestComplyAdvantageVerifierTriesRegions(t *testing.T) {
 			body := `{"message":"API Key is invalid or was not provided"}`
 			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"status":"success","content":[]}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"status":"success","content":{"data":[]}}`)), Header: make(http.Header)}, nil
 	})}
 	result := verifyComplyAdvantage(WithVerificationHTTPClient(context.Background(), client), "secret")
 	if result.Status != VerificationVerified || result.Response != "" || requests != 3 {
@@ -2293,9 +2293,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 69,
-		VerificationSafetyReadOnly:   318,
-		VerificationSafetyAuthOnly:   81,
+		VerificationSafetyUnreviewed: 58,
+		VerificationSafetyReadOnly:   326,
+		VerificationSafetyAuthOnly:   84,
 		VerificationSafetyUnsafe:     99,
 	}
 	for safety, want := range expected {
@@ -2307,7 +2307,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 498 || report.RequiresHardening != 13 || report.Blocked != 56 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 509 || report.RequiresHardening != 0 || report.Blocked != 58 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

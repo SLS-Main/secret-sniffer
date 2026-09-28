@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 28:
+After remediation batch 29:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 498 | The recorded verifier contract has been reviewed/hardened. |
-| Requires hardening | 13 | A verifier exists, with concrete contract work remaining. |
-| Blocked | 56 | Required context or a reliable validation contract is unresolved. |
+| Reviewed | 509 | The recorded verifier contract has been reviewed/hardened. |
+| Requires hardening | 0 | All actionable items in this audit queue have been addressed. |
+| Blocked | 58 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 318
-`read_only`, 81 `auth_only`, 99 `unsafe`, and 69 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 326
+`read_only`, 84 `auth_only`, 99 `unsafe`, and 58 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -85,17 +85,16 @@ Sources checked 2026-09-25:
 [authentication](https://novita.ai/docs/api-reference/basic-authentication.md),
 and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.md).
 
-## Recommended following batches
+## Remaining contract and coverage work
 
-1. **Identity/collection contracts:** AlienVault OTX, Atera, BombBomb, Cloudplan,
-   Cloverly, ProdPad and Vyte.
-   Confirm current documentation, validate identity/list schemas, suppress
-   metadata, and classify structured failures conservatively.
+1. **Blocked contracts:** establish provider-owned authenticated schemas and
+   required context for the 58 blocked patterns. Cloudplan and Cloverly now
+   return unknown without making requests, including under explicit opt-in.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
    key families require different verification operations; a rejection by the
    wrong API must not label the key invalid.
-3. **Region and endpoint context:** ComplyAdvantage, Sourcegraph Cody and
-   self-hosted deployments; broader Grafana region coverage remains a follow-up.
+3. **Region and endpoint context:** self-hosted deployments, alternate Cody
+   gateways and broader Grafana region coverage remain follow-ups.
    Correlate endpoint context and use only documented bounded fallbacks. Preserve
    unknown results when the necessary region or self-hosted URL is missing.
 
@@ -325,6 +324,63 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 29: disposition of the final thirteen hardening items
+
+This batch hardens eleven supported contracts (eight `read_only`, three
+`auth_only`) and explicitly blocks two unproven contracts. The requires-hardening
+queue is now empty; **58 blocked patterns still require further contract or
+context work**. This is not a claim that every provider or key family can now be
+verified.
+
+| Provider | Disposition and contract |
+| --- | --- |
+| ComplyAdvantage | `read_only`: documented `/users` status=success/content.data array with integer id and string email/name. Fixed EU/US/APAC authorization-only fallback. The provider documents no pagination for this endpoint; one response per attempted deployment is byte-capped, never followed or expanded. |
+| Sourcegraph Cody | `read_only`: official gateway client `/v1/limits` feature map with integer limit/usage, interval and optional nullable timestamp expiry. Empty maps and signed integer limits accepted. The public host returned 404 without credentials during review; deployment/service availability remains unknown, never invalid. Alternate gateways need trusted endpoint context. |
+| Twitter/X | `read_only`: `/2/usage/credits` replaces the billable post lookup. Typed total/prepaid/free balances and free_grants amount entries; negative prepaid balances, zero balances, and empty grants accepted. No post or public user lookup. Subscription and OAuth subtype ambiguity remain unknown. |
+| Sendbird organization | `read_only`: authenticated `/api/v2/organization_members/predefined_roles` replaces application listing, which can return additional API credentials. Requires a string array. No application or token details fetched. |
+| Atera | `read_only`: first agent page, itemsInPage=1, requires integer TotalItemCount and positive integer AgentID for each item. Empty inventory accepted; all device data suppressed. IP allowlists and per-domain token permissions remain unknown. |
+| BombBomb | `auth_only`: BBCore's multipart POST `ValidateJsonWebToken` method, with jwt credential, replaces the unproven V2 user probe. Requires status=success and info user/client identity, accepting camelCase and snake_case. Session/JWT payloads suppressed. OAuth and legacy service rejection remain unknown. |
+| NVIDIA NGC | `auth_only`: non-nvapi detected keys use SDK's Basic `$oauthtoken` exchange at `authn.nvidia.com/token?service=ngc`, without organization/team scopes. Requires a token string and positive integer expires_in when supplied. Returned token is suppressed and never used for follow-up requests. nvapi-prefixed keys route to scoped-key introspection. |
+| NVIDIA NVAPI | `auth_only`: SDK's form POST `/v3/keys/get-caller-info` with credentials. Requires SUCCESS requestStatus, orgName, string products array, and PERSONAL_KEY with userId or SERVICE_KEY. Empty products and personal roles are accepted; service keys need no user. Incompatible formats make no request. |
+| ProdPad | `read_only`: published OpenAPI `/v1/tags` string id/tag array. Endpoint documents no server pagination; reads one byte-capped metadata response and suppresses it. No idea/feedback content fetched. Empty tag collections accepted; scope errors unknown. |
+| Vyte | `read_only`: documented `/v2/events?limit=1`, raw Authorization key, JSON. Requires event _id, string title (including empty), and confirmed.flag. Empty arrays and unconfirmed events accepted; participant details, messages and third-party metadata suppressed. |
+| AlienVault/LevelBlue OTX | `read_only`: `/api/v1/user/me` requires integer user_id and username. The provider SDK and credential-free public profile establish the identity field names; unauthenticated current-user lookup returns 403. No public profile is used by the verifier. Forbidden responses remain unknown. |
+| Cloudplan | **Blocked**: `/api/user/me` rejects unauthenticated requests but a current success schema and session/key contract could not be established. The cloudplan.biz website had an expired certificate. Detector retained; hook now returns unknown without any request, even with unreviewed opt-in. |
+| Cloverly | **Blocked**: provider material establishes purchase-capable key families but no authenticated account success schema for the old probe. Public SDK methods are primarily estimates/purchases; no speculative purchase or computation is used as verification. Detector retained; hook returns unknown without requests under opt-in too. |
+
+All thirteen patterns now enforce trailing whole-credential boundaries. Direct
+TWITTER_BEARER_TOKEN assignments, existing percent-encoded X tokens, and LevelBlue
+OTX context are recognized. Existing heuristic key-family coverage is retained;
+this does not establish exhaustive modern-format detection.
+
+The shared response reader now reads at most the existing 1 MiB limit plus one
+sentinel byte and rejects oversized responses **before classification**. Previously,
+a valid JSON prefix followed by content beyond the cap could be mistaken for a
+complete response. This matters for metadata endpoints without documented server
+pagination. Exactly-at-limit responses still work; oversized responses never
+authenticate or trigger regional retries. Response-output formatting is unchanged.
+
+Mocked contracts cover all thirteen dispositions, ordinary policy and blocked
+opt-ins, exact requests and credential placement, personal/service/legacy routing,
+typed success/error schemas, empty/zero/negative-prepaid values, non-200 bodies,
+redirects, regional stop conditions, cancellation, transport/read errors,
+whole-token boundaries, response suppression and exact byte-cap boundaries.
+
+Evidence checked 2026-09-28:
+
+- [ComplyAdvantage regional hosts, authentication and user response](https://docs.complyadvantage.com/#get-users).
+- [Sourcegraph published gateway client and LimitStatus schema](https://github.com/sourcegraph/sourcegraph-public-snapshot/blob/main/internal/codygateway/client.go). This is a published source snapshot, not evidence that every current deployment exposes the route.
+- [X credit-balance endpoint, Bearer authentication and success/error schema](https://docs.x.com/x-api/usage/get-usage-credits.md), [usage endpoint overview](https://docs.x.com/x-api/usage/introduction.md).
+- [Sendbird predefined role response](https://sendbird.com/docs/chat/platform-api/v3/organization/managing-roles/list-predefined-roles), [organization authentication](https://sendbird.com/docs/chat/platform-api/v3/organization/organization-overview). Credential-free role lookup returned 403.
+- [Atera API authentication, domain permissions, IP restrictions and AgentID examples](https://support.atera.com/hc/en-us/articles/219083397-API). The API documentation UI requires authentication; credential-free bounded agent requests returned 401.
+- [BombBomb BBCore JWT validation and identity handling](https://github.com/bombbomb/BBCore/blob/master/src/modules/bbcore.auth.js), [multipart request construction](https://github.com/bombbomb/BBCore/blob/master/src/modules/bbcore.api.js), [HTTPS API host](https://github.com/bombbomb/BBCore/blob/master/src/bbcore.js).
+- [NVIDIA key-family guide](https://docs.nvidia.com/ngc/gpu-cloud/ngc-user-guide/index.html), [NGC SDK 4.36.6](https://pypi.org/project/ngcsdk/4.36.6/), [published package metadata](https://pypi.org/pypi/ngcsdk/4.36.6/json), [NGC request-status enum](https://api.ngc.nvidia.com/v3/api-docs). Inspected wheel files: `ngcbase/api/authentication.py`, `ngcbase/constants.py`, `organization/api/users.py`, and `organization/data/uis/SakCallerInfoResponse.py`. Wheel SHA-256: `8cf4ce3bd071b3d2e24d40f2c66abc2c2b49022b53d400a2eb9fe6018fe3f343`. The SDK explicitly says scoped keys do not use normal user lookup; its caller-info schema has no mandatory top-level id. Credential-free legacy exchange returned 401.
+- [ProdPad's official API documentation link](https://help.prodpad.com/article/660-working-with-the-prodpad-api), [OpenAPI 1.1.4 tags and authentication](https://api.swaggerhub.com/apis/ProdPad/prodpad/1.1.4).
+- [Vyte event limit, array response and schema](https://developer.vyte.in/reference/events/), [authentication](https://developer.vyte.in/reference/#authentification). User-list alternatives can return connected-account tokens and were not selected.
+- [OTX official SDK user lookup](https://github.com/AlienVault-OTX/OTX-Python-SDK/blob/master/OTXv2.py), [provider public identity schema](https://otx.alienvault.com/api/v1/user/AlienVault), [current-user auth boundary](https://otx.alienvault.com/api/v1/user/me).
+- Cloudplan: credential-free `https://api.cloudplan.biz/api/user/me` returned 401; the website at `https://cloudplan.biz/` failed certificate validation. No certificate-validation bypass was used.
+- [Cloverly provider documentation](https://docs.cloverly.com/), [official Python SDK resource inventory](https://github.com/cloverly/cloverly-python-module/tree/main/cloverly/resources). Credential-free account/offset-type endpoints returned 403, which alone does not establish a successful authentication contract.
 
 ## Remediation batch 28: ten regional and credential-context verifiers
 
