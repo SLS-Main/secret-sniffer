@@ -14,6 +14,11 @@ type contextualProvider struct {
 }
 
 var contextualProviders = map[string]contextualProvider{
+	"pandadoc-api-key":     {map[string]string{"pandadoc_api_url": "endpoint", "pandadoc_credential_type": "credential_type"}, `[A-Za-z0-9_-]{32,128}`, []string{"pandadoc_api_key", "pandadoc_access_token", "pandadoc_client_secret"}},
+	"appointedd-api-key":   {map[string]string{"appointedd_api_url": "endpoint"}, `[A-Za-z0-9+/=]{88}`, []string{"appointedd_api_key"}},
+	"flexport-api-key":     {map[string]string{"flexport_api_url": "endpoint", "flexport_credential_type": "credential_type"}, `[A-Za-z0-9._~-]{32,1000}`, []string{"flexport_access_token", "flexport_api_key", "flexport_client_secret"}},
+	"gyazo-api-token":      {map[string]string{"gyazo_api_url": "endpoint", "gyazo_credential_type": "credential_type"}, `[A-Za-z0-9_-]{32,128}`, []string{"gyazo_access_token", "gyazo_client_secret"}},
+	"happyscribe-api-key":  {map[string]string{"happyscribe_api_url": "endpoint"}, `[A-Za-z0-9]{24}`, []string{"happyscribe_api_key"}},
 	"checkly-api-key":      {map[string]string{"checkly_account_id": "account_id", "checkly_api_url": "endpoint"}, `[A-Za-z0-9_-]{32,128}`, []string{"checkly_api_key"}},
 	"saladcloud-api-key":   {map[string]string{"salad_organization_name": "organization", "salad_organization": "organization", "salad_api_url": "endpoint"}, "", nil},
 	"scaleway-secret-key":  {map[string]string{"scw_access_key": "access_key", "scw_api_url": "endpoint"}, `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`, []string{"scw_secret_key"}},

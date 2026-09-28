@@ -176,9 +176,7 @@ func verifyAnthropic(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyGoogleAPIKey(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://generativelanguage.googleapis.com/v1beta/models?key=" + url.QueryEscape(secret)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequest(ctx, req)
+	return unknownVerificationResult("verification_context", "generic Google API-key verification requires a supported product and restriction context")
 }
 
 func verifySendGrid(ctx context.Context, secret string) VerificationResult {
@@ -1472,7 +1470,7 @@ func verifyDynalist(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyGyazo(ctx context.Context, secret string) VerificationResult {
-	return verifyBearerGET(ctx, secret, "https://api.gyazo.com/api/users/me")
+	return verifyContextlessProvider(ctx, "gyazo-api-token", secret)
 }
 
 func verifyLunchMoney(ctx context.Context, secret string) VerificationResult {
@@ -2666,9 +2664,7 @@ func verifyOANDA(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyGreenhouse(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://harvest.greenhouse.io/v1/users?per_page=1", nil)
-	req.SetBasicAuth(secret, "")
-	return verifyHTTPRequest(ctx, req)
+	return unknownVerificationResult("credential_type", "legacy Greenhouse Harvest keys cannot use the current OAuth verification contract")
 }
 
 func verifyPivotalTracker(ctx context.Context, secret string) VerificationResult {
@@ -3086,7 +3082,7 @@ func verifyCapsuleCRM(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyPandaDoc(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.pandadoc.com/public/v1/members/current", "Authorization", "API-Key ")
+	return verifyContextlessProvider(ctx, "pandadoc-api-key", secret)
 }
 
 func verifySparkPost(ctx context.Context, secret string) VerificationResult {
@@ -3923,16 +3919,7 @@ func verifyFlagsmith(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyConfigCat(ctx context.Context, secret string) VerificationResult {
-	parts := strings.Split(secret, "/")
-	for i := range parts {
-		if parts[i] == "" {
-			return VerificationResult{Status: VerificationUnsupported, Message: "ConfigCat SDK key path is invalid"}
-		}
-		parts[i] = url.PathEscape(parts[i])
-	}
-	endpoint := "https://cdn-global.configcat.com/configuration-files/" + strings.Join(parts, "/") + "/config_v6.json"
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	return verifyHTTPRequest(ctx, req)
+	return unknownVerificationResult("verification_context", "ConfigCat SDK-key verification requires a supported deployment and non-metered authentication contract")
 }
 
 func verifyAfterShip(ctx context.Context, secret string) VerificationResult {
@@ -4765,13 +4752,11 @@ func verifyDataGov(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAbstractAPI(ctx context.Context, secret string) VerificationResult {
-	return verifyQueryAPI(ctx, "https://exchange-rates.abstractapi.com/v1/live/?base=USD&api_key="+url.QueryEscape(secret), []string{"base", "exchange_rates"}, "invalid api key provided")
+	return unknownVerificationResult("verification_context", "Abstract verification requires a supported product-specific authentication contract")
 }
 
 func verifyAPILayer(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.apilayer.com/number_verification/countries", nil)
-	req.Header.Set("apikey", secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"country_code", "country_name"}, "invalid authentication credentials"))
+	return unknownVerificationResult("verification_context", "APILayer verification requires a supported subscription-specific authentication contract")
 }
 
 func verifyInfura(ctx context.Context, secret string) VerificationResult {
@@ -5537,9 +5522,7 @@ func verifyIconfinder(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyHappyScribe(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.happyscribe.com/api/v1/transcriptions", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyPrivateCollection(ctx, req, "invalid api key")
+	return verifyContextlessProvider(ctx, "happyscribe-api-key", secret)
 }
 
 func verifyNimble(ctx context.Context, secret string) VerificationResult {
@@ -6318,11 +6301,7 @@ func verifyAPIMatic(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAppointedd(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.appointedd.com/v1/availability/slots", nil)
-	req.Header.Set("X-API-KEY", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"total", "slots"}, `"message":"forbidden"`))
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "appointedd-api-key", secret)
 }
 
 func verifyBugHerd(ctx context.Context, secret string) VerificationResult {
@@ -6419,9 +6398,7 @@ func verifyFeedier(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyFlexport(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://logistics-api.flexport.com/logistics/api/2024-04/webhooks", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyPrivateCollection(ctx, req, `"code":401`, `"message":"unauthorized"`)
+	return verifyContextlessProvider(ctx, "flexport-api-key", secret)
 }
 
 func verifyJuro(ctx context.Context, secret string) VerificationResult {

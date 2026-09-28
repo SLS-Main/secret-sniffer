@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 31:
+After remediation batch 32:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 529 | The recorded verifier contract has been reviewed/hardened. |
+| Reviewed | 534 | The recorded verifier contract has been reviewed/hardened. |
 | Requires hardening | 0 | All actionable items in this audit queue have been addressed. |
-| Blocked | 38 | Required context or a reliable validation contract is unresolved. |
+| Blocked | 33 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 346
-`read_only`, 84 `auth_only`, 99 `unsafe`, and 38 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 351
+`read_only`, 84 `auth_only`, 99 `unsafe`, and 33 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -88,8 +88,9 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 ## Remaining contract and coverage work
 
 1. **Blocked contracts:** establish provider-owned authenticated schemas and
-   required context for the 38 blocked patterns. Cloudplan and Cloverly now
-   return unknown without making requests, including under explicit opt-in.
+   required context for the 33 blocked patterns. Cloudplan, Cloverly, generic
+   Google keys, Abstract, APILayer, ConfigCat SDK keys and legacy Greenhouse
+   Harvest keys return unknown without requests, including under explicit opt-in.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
    key families require different verification operations; a rejection by the
    wrong API must not label the key invalid.
@@ -324,6 +325,74 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 32: ten blocked-provider dispositions
+
+This batch promotes five documented contracts to `read_only` and replaces five
+unproven probes with explicit no-network hooks. There are now **435 ordinary
+verification patterns** (351 `read_only` + 84 `auth_only`) and **33 blocked
+patterns**. Blocked hooks remain `unreviewed`; opting in permits invoking the
+hook but cannot supply an absent provider contract or credential context.
+
+### Five supported contracts
+
+| Provider | Context and authenticated read |
+| --- | --- |
+| PandaDoc | `PANDADOC_API_KEY` uses `Authorization: API-Key`; `PANDADOC_ACCESS_TOKEN` uses Bearer. Optional `PANDADOC_CREDENTIAL_TYPE=api_key` or `bearer` must agree with the assignment; client-secret labels make no request. Optional `PANDADOC_API_URL=https://api.pandadoc.com`. `GET /public/v1/documents/folders?count=1&page=1` replaces the undocumented current-member probe; validates results uuid/name/date_created and has_folders/has_items booleans. Empty folders and false flags accepted. Legacy ambiguous labels retain API-key routing, with ambiguous rejections unknown. |
+| Appointedd | `APPOINTEDD_API_KEY`, optional `APPOINTEDD_API_URL=https://api.appointedd.com/v1`. `X-API-KEY` `GET /resources/groups?limit=1` replaces the undocumented availability route; validates integer total and data id/name. Empty groups accepted. No booking or availability computation. |
+| Flexport | `FLEXPORT_ACCESS_TOKEN` or `FLEXPORT_API_KEY` supplies bearer context; explicit `FLEXPORT_API_URL=https://api.flexport.com` is required. `FLEXPORT_CREDENTIAL_TYPE=bearer` must agree with labels. `GET /network/me/companies` with `Flexport-Version: 2` reads own-company metadata, validates the version-2 response envelope, company object/id/name and editable boolean. OAuth client secrets and detected `shltm_` logistics keys remain unknown without requests. No token exchange, webhook listing or product-host fallback. |
+| Gyazo | `GYAZO_ACCESS_TOKEN`, optional `GYAZO_API_URL=https://api.gyazo.com`; explicit `GYAZO_CREDENTIAL_TYPE`, if supplied, must be `bearer`. Bearer `GET /api/users/me` validates nested user.uid/email. Optional name/profile image metadata may be absent, empty or null. Client-secret labels make no request. No image lookup, search or upload. |
+| HappyScribe | `HAPPYSCRIBE_API_KEY`, optional `HAPPYSCRIBE_API_URL=https://www.happyscribe.com/api/v1`. Bearer `GET /organizations` replaces private transcription listing. Requires organization id/name/role/createdAt/updatedAt; empty memberships and non-admin roles are accepted. Staff-only metadata is not required. No server pagination is documented; one byte-capped response is suppressed. No transcription processing. |
+
+These providers inherit mapping-local JSON/YAML context, bounded env/INI
+correlation, whole-token trailing boundaries, exact cloud-base allowlists and
+context-sensitive cache keys. The added Flexport assignment detector covers
+32–1,000-character token literals; the existing 512-byte env/INI correlation
+bound still applies, so longer records may need structured mapping context.
+All requests require HTTP 200 with typed success evidence, suppress response
+bodies, reject oversized responses, and never follow redirects or response links.
+Permission, quota, product, deployment and credential-family ambiguity stays
+`unknown`.
+
+### Five explicit no-request dispositions
+
+| Pattern | Evidence and remaining blocker |
+| --- | --- |
+| Generic Google API key | Keys can have API and application restrictions; a Gemini model-list rejection cannot establish validity across Google products. Product/restriction context and a supported validation contract are still required. The generic hook no longer sends keys to Gemini. |
+| Abstract API | Official docs explicitly say every product has a distinct key. The old exchange-rate lookup selects an arbitrary product and performs a data operation. A product-specific, non-workload authentication contract remains unproven. |
+| APILayer | Marketplace Number Verification has subscription/usage plans; its countries route is not established as generic key introspection. Product subscription and an authoritative verification response contract remain unresolved. |
+| ConfigCat SDK key | Configuration downloads consume plan allowances and require matching CDN/data-governance settings. Public Management API uses a separate Basic credential pair, not an SDK key. The hook no longer downloads configuration or guesses the global CDN. |
+| Legacy Greenhouse Harvest key | Provider announces v1/v2 removal on 2026-08-31 and migration to v3. The old Basic-auth user-list probe is removed. Current OAuth credential-family support requires separate work; legacy detection is retained. |
+
+All five remain detectable, enforce complete trailing credential boundaries, and
+return `unknown` with no network request even under unreviewed/unsafe opt-ins.
+
+Evidence checked 2026-09-28:
+
+- PandaDoc [folder route, pagination, schemas and authentication](https://developers.pandadoc.com/reference/list-documents-folders.md).
+- Appointedd [resource-group OpenAPI](https://developers.appointedd.com/reference/get-resource-groups.md) and [API-key authentication](https://developers.appointedd.com/reference/getting-started.md).
+- Flexport [API credentials, bearer keys/tokens and exchange limits](https://developers.flexport.com/tutorials/using-api-credentials), [V2 own-company schema](https://apidocs.flexport.com/v2/tag/Company), and the documentation's [published versioned OpenAPI state](https://apidocs.flexport.com/redocly-state-f6204472147f61321db1c6aae9e930031a50c3b0.js).
+- Gyazo [authenticated-user response](https://gyazo.com/api/docs/user) and [OAuth access-token authentication](https://gyazo.com/api/docs/auth).
+- HappyScribe [organization response and role-specific fields](https://dev.happyscribe.com/sections/product/#organizations-list-organizations) and [authentication](https://dev.happyscribe.com/sections/general/#authentication).
+- Google [API-key types, restrictions and management credentials](https://cloud.google.com/docs/authentication/api-keys).
+- Abstract [distinct product keys, data operations and quota errors](https://docs.abstractapi.com/api/ip-intelligence.md).
+- APILayer [Number Verification subscription and usage plans](https://apilayer.com/marketplace/number_verification-api).
+- ConfigCat [download allowances](https://configcat.com/docs/subscription-plan-limits/), [CDN data-governance selection](https://configcat.com/docs/advanced/data-governance/), and [separate management authentication](https://configcat.com/docs/api/reference/configcat-public-management-api/).
+- Greenhouse [legacy removal notice and migration link](https://developers.greenhouse.io/harvest.html).
+
+Credential-free reads returned 401 for PandaDoc, Flexport, Gyazo and HappyScribe,
+and 403 for Appointedd. These checks confirm an authentication boundary, not
+successful verification with a real key; the success schemas come from the
+provider contracts above.
+
+Regression tests cover all ten dispositions: policy and opt-in behavior, exact
+requests, typed/error responses, nested errors, false/zero/empty values,
+suppression, transport/read failures, cancellation/timeouts and response caps.
+Additional coverage checks family-specific authentication/cache identity,
+conflicting or isolated context, unsupported hosts, and JSON/YAML/base64 scanner
+propagation. Contracts were tested with mocked responses, not live customer keys.
+Controlled benchmarks, broader format coverage and the refreshed TruffleHog
+comparison remain deferred.
 
 ## Remediation batch 31: ten context and metadata contracts
 

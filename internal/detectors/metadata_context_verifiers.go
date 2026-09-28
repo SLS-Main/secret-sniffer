@@ -23,6 +23,60 @@ func verifyMetadataContextProvider(ctx context.Context, c Candidate) Verificatio
 	var valid func(identityPayload) bool
 	var item func(identityPayload) bool
 	switch c.DetectorID {
+	case "pandadoc-api-key":
+		prefix = "API-Key "
+		switch p["credential_type"] {
+		case "", "api_key":
+		case "bearer":
+			prefix = "Bearer "
+		default:
+			return unknownVerificationResult("credential_type", "verification requires a PandaDoc API key or access token")
+		}
+		base = contextBase(p["endpoint"], "https://api.pandadoc.com", "https://api.pandadoc.com")
+		path = "/public/v1/documents/folders?count=1&page=1"
+		valid = func(v identityPayload) bool {
+			return validIdentityCollection(v, "results", func(v identityPayload) bool {
+				return !identityHasErrors(v) && identityStrings(v, "uuid", "name", "date_created") && contextBoolean(v["has_folders"]) && contextBoolean(v["has_items"])
+			})
+		}
+	case "appointedd-api-key":
+		base = contextBase(p["endpoint"], "https://api.appointedd.com/v1", "https://api.appointedd.com/v1")
+		path, header, prefix = "/resources/groups?limit=1", "X-API-KEY", ""
+		valid = func(v identityPayload) bool {
+			return identityNonnegativeIntegers(v, "total") && validIdentityCollection(v, "data", func(v identityPayload) bool { return !identityHasErrors(v) && identityStrings(v, "id", "name") })
+		}
+	case "flexport-api-key":
+		// Fulfillment/logistics keys and OAuth client secrets are not freight
+		// access tokens. Never exchange a secret or guess between product APIs.
+		if p["credential_type"] != "bearer" || strings.HasPrefix(c.Secret, "shltm_") {
+			return unknownVerificationResult("credential_type", "verification requires explicit Flexport freight bearer-token context")
+		}
+		base = contextBase(p["endpoint"], "", "https://api.flexport.com")
+		path = "/network/me/companies"
+		valid = func(v identityPayload) bool {
+			data := identityObject(v, "data")
+			return identityStringEquals(v, "_object", "/api/response") && string(v["version"]) == "2" && !identityHasErrors(data) && identityStringEquals(data, "_object", "/network/company") && identityStrings(data, "id", "name") && contextBoolean(data["editable"])
+		}
+	case "gyazo-api-token":
+		if kind := p["credential_type"]; kind != "" && kind != "bearer" {
+			return unknownVerificationResult("credential_type", "verification requires a Gyazo access token")
+		}
+		base = contextBase(p["endpoint"], "https://api.gyazo.com", "https://api.gyazo.com")
+		path = "/api/users/me"
+		valid = func(v identityPayload) bool {
+			user := identityObject(v, "user")
+			return !identityHasErrors(user) && identityStrings(user, "uid", "email")
+		}
+	case "happyscribe-api-key":
+		base = contextBase(p["endpoint"], "https://www.happyscribe.com/api/v1", "https://www.happyscribe.com/api/v1")
+		// Organization metadata avoids transcript contents and processing jobs.
+		// No server pagination is documented; read one byte-capped response.
+		path = "/organizations"
+		valid = func(v identityPayload) bool {
+			return validIdentityCollection(v, "organizations", func(v identityPayload) bool {
+				return !identityHasErrors(v) && finalPositiveInteger(v["id"]) && identityStrings(v, "name", "role", "createdAt", "updatedAt")
+			})
+		}
 	case "hightouch-api-key":
 		base = contextBase(p["endpoint"], "https://api.hightouch.com/api/v1", "https://api.hightouch.com/api/v1")
 		path = "/events/domains?limit=1&offset=0"
@@ -143,6 +197,9 @@ func verifyMetadataContextProvider(ctx context.Context, c Candidate) Verificatio
 	}
 	if c.DetectorID == "ngrok-token" {
 		req.Header.Set("ngrok-version", "2")
+	}
+	if c.DetectorID == "flexport-api-key" {
+		req.Header.Set("Flexport-Version", "2")
 	}
 	if c.DetectorID == "stitchdata-api-token" || c.DetectorID == "qubole-api-token" {
 		req.Header.Set("Content-Type", "application/json")

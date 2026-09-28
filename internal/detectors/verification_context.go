@@ -41,6 +41,14 @@ var verificationContextAssignment = regexp.MustCompile(`(?m)^[ \t]*(?:export[ \t
 var verificationContextINISection = regexp.MustCompile(`^\[[A-Za-z0-9_. -]+\][ \t]*(?:\r?\n|$)`)
 
 var contextCredentialAssignments = map[string]struct{ selector, kind string }{
+	"pandadoc_api_key":        {"pandadoc_credential_type", "api_key"},
+	"pandadoc_access_token":   {"pandadoc_credential_type", "bearer"},
+	"pandadoc_client_secret":  {"pandadoc_credential_type", "client_secret"},
+	"flexport_api_key":        {"flexport_credential_type", "bearer"},
+	"flexport_access_token":   {"flexport_credential_type", "bearer"},
+	"flexport_client_secret":  {"flexport_credential_type", "client_secret"},
+	"gyazo_access_token":      {"gyazo_credential_type", "bearer"},
+	"gyazo_client_secret":     {"gyazo_credential_type", "client_secret"},
 	"airbyte_access_token":    {"airbyte_credential_type", "bearer"},
 	"access_token":            {"airbyte_credential_type", "bearer"},
 	"airbyte_client_secret":   {"airbyte_credential_type", "client_secret"},

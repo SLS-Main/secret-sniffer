@@ -510,15 +510,13 @@ func TestGrowthBookClientKeyDoesNotUseSecretAPI(t *testing.T) {
 	}
 }
 
-func TestConfigCatVerifierPreservesEmbeddedPathSegments(t *testing.T) {
+func TestConfigCatVerifierDoesNotDownloadConfiguration(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path != "/configuration-files/part-one/part-two/config_v6.json" {
-			t.Fatalf("unexpected path: %s", req.URL.Path)
-		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"f":{}}`)), Header: make(http.Header)}, nil
+		t.Fatal("SDK-key verification must not download metered configuration")
+		return nil, nil
 	})}
 	result := verifyConfigCat(WithVerificationHTTPClient(context.Background(), client), "part-one/part-two")
-	if result.Status != VerificationVerified {
+	if result.Status != VerificationUnknown || result.ErrorCategory != "verification_context" || result.Response != "" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -2293,8 +2291,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 38,
-		VerificationSafetyReadOnly:   346,
+		VerificationSafetyUnreviewed: 33,
+		VerificationSafetyReadOnly:   351,
 		VerificationSafetyAuthOnly:   84,
 		VerificationSafetyUnsafe:     99,
 	}
@@ -2307,7 +2305,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 529 || report.RequiresHardening != 0 || report.Blocked != 38 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 534 || report.RequiresHardening != 0 || report.Blocked != 33 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {
