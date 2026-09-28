@@ -14,6 +14,12 @@ type contextualProvider struct {
 }
 
 var contextualProviders = map[string]contextualProvider{
+	"salesblink-api-key":   {map[string]string{"salesblink_api_url": "endpoint"}, `key-[A-Za-z0-9]{64}`, []string{"salesblink_api_key"}},
+	"autoklose-api-key":    {map[string]string{"autoklose_api_url": "endpoint"}, `[A-Za-z0-9-]{32}`, []string{"autoklose_api_key", "autoklose_api_token"}},
+	"stormboard-api-key":   {map[string]string{"stormboard_api_url": "endpoint"}, `[A-Za-z0-9_-]{32,128}`, []string{"stormboard_api_key"}},
+	"teletype-api-key":     {map[string]string{"teletype_api_url": "endpoint"}, `[A-Za-z0-9-]{64}`, []string{"teletype_api_token", "teletype_api_key"}},
+	"clustdoc-api-key":     {map[string]string{"clustdoc_api_url": "endpoint"}, `[A-Za-z0-9_-]{32,128}`, []string{"clustdoc_api_token", "clustdoc_api_key"}},
+	"nozbeteams-api-token": {map[string]string{"nozbe_api_url": "endpoint"}, `[A-Za-z0-9]{16}_[A-Za-z0-9_-]{64}`, []string{"nozbe_api_token"}},
 	"mailmodo-api-key":     {map[string]string{"mailmodo_api_url": "endpoint"}, `[A-Z0-9]{7}(?:-[A-Z0-9]{7}){3}`, []string{"mailmodo_api_key"}},
 	"beebole-api-token":    {map[string]string{"beebole_api_url": "endpoint", "beebole_credential_type": "credential_type"}, `[A-Za-z0-9._~-]{20,256}`, []string{"beebole_api_key", "beebole_api_token"}},
 	"caflou-api-key":       {map[string]string{"caflou_api_url": "endpoint", "caflou_account_id": "account_id"}, `eyJhbGciOiJIUzI1NiJ9\.[A-Za-z0-9_-]{40,200}\.[A-Za-z0-9_-]{43}`, []string{"caflou_access_token"}},

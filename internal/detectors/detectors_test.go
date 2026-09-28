@@ -1296,7 +1296,7 @@ func TestTeletypeVerifierRejectsHTTP200InvalidKey(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
 	result := verifyTeletype(WithVerificationHTTPClient(context.Background(), client), "secret")
-	if result.Status != VerificationUnverified || result.Response != "" {
+	if result.Status != VerificationUnknown || result.Response != "" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -2266,9 +2266,9 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 22,
-		VerificationSafetyReadOnly:   362,
-		VerificationSafetyAuthOnly:   84,
+		VerificationSafetyUnreviewed: 16,
+		VerificationSafetyReadOnly:   367,
+		VerificationSafetyAuthOnly:   85,
 		VerificationSafetyUnsafe:     99,
 	}
 	for safety, want := range expected {
@@ -2280,7 +2280,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 545 || report.RequiresHardening != 0 || report.Blocked != 22 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 551 || report.RequiresHardening != 0 || report.Blocked != 16 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

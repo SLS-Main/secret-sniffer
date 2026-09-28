@@ -186,6 +186,8 @@ func TestStructuredFreightCredentialContext(t *testing.T) {
 
 func TestStructuredScopedMetadataContext(t *testing.T) {
 	for _, tc := range []struct{ id, assignment, key, field, part, value string }{
+		{"salesblink-api-key", "SALESBLINK_API_KEY", "key-" + strings.Repeat("aB3d", 16), "SALESBLINK_API_URL", "endpoint", "https://run.salesblink.io/api/public/v1.0.0"},
+		{"clustdoc-api-key", "CLUSTDOC_API_TOKEN", strings.Repeat("aB3d", 10), "CLUSTDOC_API_URL", "endpoint", "https://sandbox.clustdoc.com/api/v2"},
 		{"beebole-api-token", "BEEBOLE_API_KEY", strings.Repeat("aB3d", 10), "BEEBOLE_API_URL", "endpoint", "https://app.beebole.com/graphql"},
 		{"caflou-api-key", "CAFLOU_ACCESS_TOKEN", "eyJhbGciOiJIUzI1NiJ9." + strings.Repeat("aB3d", 10) + "." + strings.Repeat("B", 43), "CAFLOU_ACCOUNT_ID", "account_id", "42"},
 		{"worksnaps-api-key", "WORKSNAPS_API_TOKEN", strings.Repeat("aB3d", 10), "WORKSNAPS_PROJECT_ID", "project_id", "42"},

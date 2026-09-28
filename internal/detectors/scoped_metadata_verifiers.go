@@ -125,7 +125,7 @@ func verifyScopedMetadataProvider(ctx context.Context, c Candidate) Verification
 			return string(v["success"]) == "true" && !identityHasErrors(data) && identityStringEquals(data, "id", p["time_entry_type_id"]) && identityStrings(data, "name")
 		}
 	default:
-		return missingVerificationContext()
+		return verifyModernMetadataProvider(ctx, c)
 	}
 	if base == "" {
 		return missingVerificationContext()

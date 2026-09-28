@@ -24,8 +24,6 @@ func TestThirtyFourthBatchBlockedNoNetwork(t *testing.T) {
 		{"interseller-api-key", "interseller key=" + batch30UUID, "verification_context"},
 		{"autopilot-api-key", "autopilot key=" + strings.Repeat("a", 32), "verification_context"},
 		{"wit-ai-token", "wit.ai token=" + strings.Repeat("A", 32), "verification_context"},
-		{"clustdoc-api-key", "clustdoc key=" + strings.Repeat("A", 32), "verification_context"},
-		{"nozbeteams-api-token", "nozbeteams token=" + strings.Repeat("A", 16) + "_" + strings.Repeat("B", 64), "verification_context"},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			c := batch30Candidate(t, registry[tc.id], tc.input)

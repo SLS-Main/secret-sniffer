@@ -12,7 +12,9 @@ func withVerificationContext(detector Detector, verifier CompositeVerifier, fiel
 	d := detector.(RegexDetector)
 	d.ContextFields = fields
 	d.CompositeVerifier = verifier
-	d.VerificationSafety = VerificationSafetyReadOnly
+	if d.VerificationSafety != VerificationSafetyAuthOnly {
+		d.VerificationSafety = VerificationSafetyReadOnly
+	}
 	d.TrailingSecretChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-/+="
 	// Keep legacy detection while recognizing the providers' environment variables.
 	if len(assignments) > 0 {

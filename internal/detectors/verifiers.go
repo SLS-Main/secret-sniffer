@@ -4121,22 +4121,15 @@ func verifySupernotes(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyStormboard(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.stormboard.com/users/profile", nil)
-	req.Header.Set("X-API-Key", secret)
-	return verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusForbidden && containsAnyFold(string(body), "invalid api key") {
-			return invalidCredentialResult(), true
-		}
-		return VerificationResult{}, false
-	})
+	return verifyContextlessProvider(ctx, "stormboard-api-key", secret)
 }
 
 func verifyCloudplan(ctx context.Context, secret string) VerificationResult {
-	return unknownVerificationResult("provider_contract", "Cloudplan verification requires a documented current authentication contract")
+	return unknownVerificationResult("provider_contract", "Cloudplan V2 requires supported authentication-mode context; legacy single-key verification remains unsupported")
 }
 
 func verifyClustdoc(ctx context.Context, secret string) VerificationResult {
-	return unknownVerificationResult("verification_context", "Clustdoc's legacy users route returns a login page rather than a supported verification response")
+	return verifyContextlessProvider(ctx, "clustdoc-api-key", secret)
 }
 
 func verifyCheckly(ctx context.Context, secret string) VerificationResult {
@@ -4635,11 +4628,7 @@ func verifyMailmodo(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySalesblink(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://run.salesblink.io/api/public/lists", nil)
-	req.Header.Set("Authorization", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyCollectionResponse("unauthorized api key"))
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "salesblink-api-key", secret)
 }
 
 func verifyRoute4Me(ctx context.Context, secret string) VerificationResult {
@@ -5317,12 +5306,7 @@ func verifyAPITemplate(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyAutoklose(ctx context.Context, secret string) VerificationResult {
-	endpoint := "https://api.autoklose.com/api/me/?api_token=" + url.QueryEscape(secret)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	req.Header.Set("Accept", "application/json")
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"email"}, "api key is invalid"))
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "autoklose-api-key", secret)
 }
 
 func verifyTicketTailor(ctx context.Context, secret string) VerificationResult {
@@ -6166,7 +6150,7 @@ func verifyLoadmill(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyNozbeTeams(ctx context.Context, secret string) VerificationResult {
-	return unknownVerificationResult("verification_context", "Nozbe Teams private user-list authentication and response contract remain unresolved")
+	return verifyContextlessProvider(ctx, "nozbeteams-api-token", secret)
 }
 
 func verifyOverloop(ctx context.Context, secret string) VerificationResult {
@@ -6187,40 +6171,11 @@ func verifyStitchData(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyTeletype(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.teletype.app/public/api/v1/messages", nil)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Auth-Token", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		var response struct {
-			Success bool            `json:"success"`
-			Data    json.RawMessage `json:"data"`
-			Errors  []struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-			} `json:"errors"`
-		}
-		if json.Unmarshal(body, &response) != nil {
-			return unknownVerificationResult("provider_response", "provider returned malformed JSON"), true
-		}
-		if response.Success && len(response.Data) > 0 && string(response.Data) != "null" {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		if len(response.Errors) > 0 && response.Errors[0].Code == http.StatusUnauthorized && containsAnyFold(response.Errors[0].Message, "invalid credentials") {
-			return invalidCredentialResult(), true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-	})
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "teletype-api-key", secret)
 }
 
 func verifyUpwave(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.upwave.io/workspaces/", nil)
-	req.Header.Set("Authorization", "Token "+secret)
-	return verifyPrivateCollection(ctx, req, "invalid token")
+	return unknownVerificationResult("provider_contract", "Upwave verification requires a documented authenticated metadata contract")
 }
 
 func verifyWorksnaps(ctx context.Context, secret string) VerificationResult {
@@ -6606,20 +6561,7 @@ func verifyHybiscus(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyMailjetSMS(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.mailjet.com/v4/sms", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	req.Header.Set("Accept", "application/vnd.mailjetsms+json; version=3")
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "api key authentication/authorization failure") {
-			return invalidCredentialResult(), true
-		}
-		if statusCode >= 200 && statusCode < 300 && jsonObject(body) {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return VerificationResult{}, false
-	})
-	result.Response = ""
-	return result
+	return unknownVerificationResult("credential_type", "Mailjet SMS Bearer tokens lack a current verification contract; email API credential pairs are incompatible")
 }
 
 func verifyCalorieNinjas(ctx context.Context, secret string) VerificationResult {

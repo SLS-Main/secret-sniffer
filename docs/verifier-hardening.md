@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 34:
+After remediation batch 35:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 545 | The recorded verifier contract has been reviewed/hardened. |
+| Reviewed | 551 | The recorded verifier contract has been reviewed/hardened. |
 | Requires hardening | 0 | All actionable items in this audit queue have been addressed. |
-| Blocked | 22 | Required context or a reliable validation contract is unresolved. |
+| Blocked | 16 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 362
-`read_only`, 84 `auth_only`, 99 `unsafe`, and 22 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 367
+`read_only`, 85 `auth_only`, 99 `unsafe`, and 16 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -88,7 +88,7 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 ## Remaining contract and coverage work
 
 1. **Blocked contracts:** establish provider-owned authenticated schemas and
-   required context for the 22 blocked patterns. Cloudplan, Cloverly, generic
+   required context for the 16 blocked patterns. Cloudplan, Cloverly, generic
    Google keys, Abstract, APILayer, ConfigCat SDK keys and legacy Greenhouse
    Harvest keys return unknown without requests, including under explicit opt-in.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
@@ -325,6 +325,60 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 35: ten current-contract and authentication reviews
+
+Six providers are promoted: five `read_only` contracts and Stormboard's
+`auth_only` contract. Mailjet SMS and Upwave gain explicit no-network hooks;
+Cloudplan and Cloverly are re-reviewed and retain their no-network dispositions.
+Ordinary `--verify` now supports **452 patterns** (367 `read_only` + 85
+`auth_only`), with **16 blocked** patterns remaining. These are reviewed
+contracts, not live-key benchmarks or exhaustive credential-family coverage.
+
+| Provider | Supported context and disposition |
+| --- | --- |
+| SalesBlink | `SALESBLINK_API_KEY` plus explicit `SALESBLINK_API_URL=https://run.salesblink.io/api/public/v1.0.0`. Raw Authorization key, `GET /folders?limit=1&skip=0`. Requires success=true and typed data array with id/name; general folders may omit type. Replaces unversioned list probing. The account/verify operation has only a generic SuccessResponse schema, so the bounded folder schema provides stronger response evidence. |
+| Autoklose | `AUTOKLOSE_API_KEY` or `AUTOKLOSE_API_TOKEN`, optional `AUTOKLOSE_API_URL=https://api.autoklose.com/api`. `GET /me?api_token=<key>` uses the documented query authentication and canonical path without a trailing slash. Requires positive integer id and string email/role; optional profile fields can be empty or null. No email connection tests, sends or campaign reads. |
+| Stormboard | `STORMBOARD_API_KEY`, optional `STORMBOARD_API_URL=https://api.stormboard.com`. `X-API-Key` `GET /users/test` is explicitly documented as checking authentication. Requires HTTP 200, integer status=200 and exact message `Connected, w00t`. No profile/API-key retrieval or token issuance; runtime category is `auth_only`. |
+| Teletype | `TELETYPE_API_KEY` or `TELETYPE_API_TOKEN`, optional `TELETYPE_API_URL=https://api.teletype.app/public/api/v1`. `X-Auth-Token` `GET /project/details` reads the token's project, replacing message retrieval. Requires success=true, empty errors array, null errorsType and typed project id/owner_id/name/domain/url/createdAt. Response URL is never contacted. Public API must be enabled and included in the project plan; HTTP-200 auth, permission and throttling errors remain unknown. |
+| Clustdoc | `CLUSTDOC_API_KEY` or `CLUSTDOC_API_TOKEN` plus explicit `CLUSTDOC_API_URL=https://app.clustdoc.com/api/v2` or `https://sandbox.clustdoc.com/api/v2`. Bearer `GET /tags?per_page=1&page=1` requires typed data id/name and numeric pagination metadata, accepting empty tags and optional/null color. Provider explicitly confirms V2 shares existing tokens; team tokens need tags:read. No target-team switching or production/sandbox fallback. |
+| Nozbe Teams | `NOZBE_API_TOKEN`, optional `NOZBE_API_URL=https://api4.nozbe.com/v1/api`. Raw Authorization key, `GET /teams?limit=1&offset=0&fields=id,name`. Requires array of documented 16-character alphanumeric id and name, empty allowed. Uses documented field projection and pagination, replacing user-list probing. No inference of compatibility with Nozbe Classic. |
+| Mailjet SMS | Remains blocked/unreviewed. Current Mailjet reference describes Basic-auth email key/secret pairs and no SMS Bearer validation operation. Removed the generic v4/sms JSON-success probe. Unknown without requests, including under opt-in. |
+| Upwave | Remains blocked/unreviewed. Workspaces rejects credential-free requests, but an authoritative typed, bounded success contract was not established. Removed the generic collection probe. Unknown without requests, including under opt-in. |
+| Cloudplan | Remains blocked/unreviewed after finding current V2 documentation. Default authentication is AWS4-HMAC with key/secret; api-key header mode must be separately enabled in portal settings. The docs explicitly identify a new endpoint and different authentication. Legacy single-key detection does not establish the new credential family/mode. No signature guessing, session creation or header-mode fallback; unknown without requests. |
+| Cloverly | Remains blocked/unreviewed after rechecking the provider API page and documentation. Existing evidence establishes purchase-capable keys, not a reliable authenticated metadata success contract. No estimate, purchase or public-catalog fallback; unknown without requests. |
+
+Evidence checked 2026-09-28:
+
+- SalesBlink [provider API entry point](https://salesblink.io/api) and its [current OpenAPI](https://developer.salesblink.io/openapi.json) specify the production base, raw Authorization header, folder pagination/schema and generic account/verify response.
+- Autoklose [official API help article](https://help.autoklose.com/hc/en-us/articles/38956030013211-Does-Autoklose-have-a-public-API) links [current documentation](https://api.aklab.xyz/); [published Postman collection](https://api.aklab.xyz/api/collections/3342292/S1a62mib?segregateAuth=true&versionTag=latest) supplies canonical me path, query authentication and identity example. The collection's changelog includes 2025 updates.
+- Stormboard [authentication](https://api.stormboard.com/docs/auth), [reference](https://api.stormboard.com/docs) and its [provider-hosted JSON definitions](https://api.stormboard.com/json) document users/test independently of users/auth (which retrieves tokens) and users/profile (which includes an API key).
+- Teletype [current public API OpenAPI 1.3.2](https://teletype.app/help/api/) embeds ProjectPreview, authentication, error envelopes and throttling semantics. Some unrelated GET routes mutate state; only the documented project/details read is used.
+- Clustdoc [current help article](https://support.clustdoc.com/en/articles/10048690-where-to-find-the-clustdoc-api-documentation) links the [developer page](https://clustdoc.com/developers/), whose API link resolves to [V2 documentation](https://app.clustdoc.com/api-docs/v2/). Its [OpenAPI](https://app.clustdoc.com/api-docs/v2/clustdoc-v2-openapi.yaml) explicitly establishes shared V1/V2 tokens, sandbox/production bases, read scopes, tag schema and per_page/page parameters. This evidence supersedes batch 34's unresolved Clustdoc disposition.
+- Nozbe [integration page](https://nozbe.com/integrations/) links [current API help](https://nozbe.help/advancedfeatures/api/) and the [OpenAPI](https://api4.nozbe.com/v1/api/openapi.yaml). These establish the api4 base, raw Authorization header, teams schema, limit/offset and fields projection. This evidence supersedes batch 34's unresolved Nozbe disposition.
+- Mailjet [documentation index](https://dev.mailjet.com/llms.txt) and [current email OpenAPI](https://dev.mailjet.com/_bundle/openapi/openapi-mailjet.yaml) do not establish compatibility with legacy SMS Bearer tokens; [old SMS documentation](https://dev.mailjet.com/sms/) returns 404.
+- Upwave [workspaces endpoint](https://api.upwave.io/workspaces/) returned 403 without credentials; attempted help and API documentation URLs did not yield a supported success schema. Authentication rejection alone does not prove the former verifier correct.
+- Cloudplan [official API help](https://help.cloudplan.net/help/api/) links [current documentation](https://docs.cloudplan.net/) and [authentication details](https://docs.cloudplan.net/guides/getting_started.html). It requires user permissions and an active API license as well as the appropriate authentication mode. Modern key/secret family coverage remains deferred.
+- Cloverly [provider API page](https://cloverly.com/api) and [documentation entry point](https://docs.cloverly.com/) yielded no new supported metadata-validation contract in this review. Its prior purchase-capable key evidence does not justify a workload probe.
+
+Credential-free checks returned 401 for SalesBlink, Autoklose, Clustdoc and
+Nozbe; 403 for Stormboard. Teletype returned HTTP 200 with success=false,
+null data and an InvalidCredentialsException envelope. Supported successes are
+mock-tested; no customer credentials were used.
+
+Regression coverage checks all ten dispositions, runtime safety categories,
+exact requests, typed success and nested-error schemas, empty collections,
+optional fields, status/permission ambiguity, redirects, cancellation/timeouts,
+transport/read failures, response suppression and the shared 1 MiB cap. Context
+tests cover fixed bases, empty/conflicting assignments, whole-token boundaries,
+record isolation, cache identity and Clustdoc sandbox isolation. Scanner tests
+cover YAML scalar/base64 propagation of required SalesBlink/Clustdoc context.
+
+All 16 remaining blocked patterns now use explicit no-network hooks, including
+under opt-in. Further promotion requires new authoritative evidence or explicit
+credential-family support. Continue those reviews in ten-provider batches;
+controlled live benchmarks, broader modern credential formats and refreshed
+TruffleHog comparisons remain deferred.
 
 ## Remediation batch 34: ten legacy-provider dispositions
 
