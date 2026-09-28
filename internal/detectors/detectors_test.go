@@ -1301,29 +1301,14 @@ func TestTeletypeVerifierRejectsHTTP200InvalidKey(t *testing.T) {
 	}
 }
 
-func TestWorksnapsVerifierRequiresProjectsXML(t *testing.T) {
-	tests := []struct {
-		name   string
-		body   string
-		status VerificationStatus
-	}{
-		{name: "valid", body: `<?xml version="1.0"?><projects><project/></projects>`, status: VerificationVerified},
-		{name: "unexpected", body: `<html>login</html>`, status: VerificationUnknown},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				username, password, ok := req.BasicAuth()
-				if !ok || username != "secret" || password != "ignored" {
-					t.Fatalf("unexpected basic auth: username=%q password=%q ok=%v", username, password, ok)
-				}
-				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
-			})}
-			result := verifyWorksnaps(WithVerificationHTTPClient(context.Background(), client), "secret")
-			if result.Status != tt.status || result.Response != "" {
-				t.Fatalf("unexpected result: %#v", result)
-			}
-		})
+func TestWorksnapsVerifierRequiresProjectContext(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("missing project context must not fetch the project collection")
+		return nil, nil
+	})}
+	result := verifyWorksnaps(WithVerificationHTTPClient(context.Background(), client), "secret")
+	if result.Status != VerificationUnknown || result.ErrorCategory != "verification_context" || result.Response != "" {
+		t.Fatalf("unexpected result: %#v", result)
 	}
 }
 
@@ -1526,20 +1511,13 @@ func TestTeamworkVerifierUsesGlobalUserinfo(t *testing.T) {
 	}
 }
 
-func TestBeeboleVerifierUsesReadOnlyRPC(t *testing.T) {
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		username, password, ok := req.BasicAuth()
-		if !ok || username != "secret" || password != "x" {
-			t.Fatalf("unexpected basic auth: username=%q password=%q ok=%v", username, password, ok)
-		}
-		body, err := io.ReadAll(req.Body)
-		if err != nil || string(body) != `{"service":"custom_field.list"}` {
-			t.Fatalf("body=%q err=%v", body, err)
-		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":[]}`)), Header: make(http.Header)}, nil
+func TestBeeboleVerifierRequiresPlatformContext(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("ambiguous Beebole key must not call either platform")
+		return nil, nil
 	})}
 	result := verifyBeebole(WithVerificationHTTPClient(context.Background(), client), "secret")
-	if result.Status != VerificationVerified || result.Response != "" {
+	if result.Status != VerificationUnknown || result.ErrorCategory != "credential_type" || result.Response != "" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -2291,8 +2269,8 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 		}
 	}
 	expected := map[VerificationSafety]int{
-		VerificationSafetyUnreviewed: 33,
-		VerificationSafetyReadOnly:   351,
+		VerificationSafetyUnreviewed: 23,
+		VerificationSafetyReadOnly:   361,
 		VerificationSafetyAuthOnly:   84,
 		VerificationSafetyUnsafe:     99,
 	}
@@ -2305,7 +2283,7 @@ func TestRegistryReportsVerificationSafety(t *testing.T) {
 
 func TestVerificationAuditReportCoversRegistryAndSystematicBatches(t *testing.T) {
 	report := buildVerificationAuditReport(DefaultRegistry())
-	if report.Total != 1102 || report.Reviewed != 534 || report.RequiresHardening != 0 || report.Blocked != 33 || report.PendingReview != 0 || report.NoVerifier != 535 {
+	if report.Total != 1102 || report.Reviewed != 544 || report.RequiresHardening != 0 || report.Blocked != 23 || report.PendingReview != 0 || report.NoVerifier != 535 {
 		t.Fatalf("unexpected verification audit counts: %#v", report)
 	}
 	if report.Reviewed+report.RequiresHardening+report.Blocked+report.PendingReview+report.NoVerifier != report.Total {

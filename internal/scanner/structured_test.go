@@ -184,6 +184,59 @@ func TestStructuredFreightCredentialContext(t *testing.T) {
 	}
 }
 
+func TestStructuredScopedMetadataContext(t *testing.T) {
+	for _, tc := range []struct{ id, assignment, key, field, part, value string }{
+		{"beebole-api-token", "BEEBOLE_API_KEY", strings.Repeat("aB3d", 10), "BEEBOLE_API_URL", "endpoint", "https://app.beebole.com/graphql"},
+		{"caflou-api-key", "CAFLOU_ACCESS_TOKEN", "eyJhbGciOiJIUzI1NiJ9." + strings.Repeat("aB3d", 10) + "." + strings.Repeat("B", 43), "CAFLOU_ACCOUNT_ID", "account_id", "42"},
+		{"worksnaps-api-key", "WORKSNAPS_API_TOKEN", strings.Repeat("aB3d", 10), "WORKSNAPS_PROJECT_ID", "project_id", "42"},
+		{"apacta-api-key", "APACTA_ACCESS_TOKEN", "12345678-1234-1234-1234-123456789abc", "APACTA_TIME_ENTRY_TYPE_ID", "time_entry_type_id", "12345678-1234-1234-1234-123456789abc"},
+	} {
+		for _, isolated := range []bool{false, true} {
+			for _, encoded := range []bool{false, true} {
+				calls := 0
+				var registry []detectors.Detector
+				for _, d := range detectors.DefaultRegistry() {
+					if d.Info().ID != tc.id {
+						continue
+					}
+					r := d.(detectors.RegexDetector)
+					r.CompositeVerifier = func(_ context.Context, c detectors.Candidate) detectors.VerificationResult {
+						calls++
+						want := tc.value
+						if isolated {
+							want = ""
+						}
+						if c.Secret != tc.key || c.SecretParts[tc.part] != want {
+							t.Errorf("%s context mismatch: %v", tc.id, c.SecretParts)
+						}
+						if tc.id == "beebole-api-token" && c.SecretParts["credential_type"] != "graphql" {
+							t.Error("lost GraphQL key type")
+						}
+						if tc.id == "apacta-api-key" && c.SecretParts["credential_type"] != "bearer" {
+							t.Error("lost bearer type")
+						}
+						return detectors.VerificationResult{Status: detectors.VerificationUnknown}
+					}
+					registry = append(registry, r)
+				}
+				// YAML's folded scalar forces decoded provider extraction.
+				input := tc.assignment + ": >-\n  " + tc.key + "\n"
+				if isolated {
+					input += "---\n"
+				}
+				input += tc.field + ": " + tc.value
+				if encoded {
+					input = base64.StdEncoding.EncodeToString([]byte(input))
+				}
+				findings := New(Config{Verify: true}, registry).ScanContent(context.Background(), "context", []byte(input))
+				if len(findings) != 1 || calls != 1 {
+					t.Fatalf("%s isolated=%v encoded=%v calls=%d findings=%+v", tc.id, isolated, encoded, calls, findings)
+				}
+			}
+		}
+	}
+}
+
 func TestStructuredVerificationSafetyPolicy(t *testing.T) {
 	calls := 0
 	d := detectors.NewUnsafeRegex("unsafe-test", "Unsafe Test", "high", []string{"unsafe_"}, `\b(unsafe_[A-Za-z0-9]{16})\b`, 1, func(context.Context, string) detectors.VerificationResult {

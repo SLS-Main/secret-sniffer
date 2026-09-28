@@ -3760,7 +3760,7 @@ func verifyDetectify(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyMixmax(ctx context.Context, secret string) VerificationResult {
-	return verifyHeaderGET(ctx, secret, "https://api.mixmax.com/v1/users/me", "X-API-Token", "")
+	return verifyContextlessProvider(ctx, "mixmax-api-key", secret)
 }
 
 func verifyBunny(ctx context.Context, secret string) VerificationResult {
@@ -4668,11 +4668,7 @@ func verifyRAWG(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyMailmodo(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.mailmodo.com/api/v1/campaigns?type=CONTACT_LIST", nil)
-	req.Header.Set("mmApiKey", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, classifyReadOnlyAPI([]string{"data"}, "wrong api key", "unauthorized login"))
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "mailmodo-api-key", secret)
 }
 
 func verifySalesblink(ctx context.Context, secret string) VerificationResult {
@@ -5452,9 +5448,7 @@ func verifyPepipost(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySignable(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.signable.co.uk/v1/templates?offset=0&limit=1", nil)
-	req.SetBasicAuth(secret, "")
-	return verifyPrivateCollection(ctx, req, "authentication failed", `"code":10002`)
+	return verifyContextlessProvider(ctx, "signable-api-key", secret)
 }
 
 func verifySnipcart(ctx context.Context, secret string) VerificationResult {
@@ -5465,9 +5459,7 @@ func verifySnipcart(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifySimpleSat(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.simplesat.io/api/answers/?page_size=1", nil)
-	req.Header.Set("X-Simplesat-Token", secret)
-	return verifyPrivateCollection(ctx, req, "invalid token")
+	return verifyContextlessProvider(ctx, "simplesat-api-key", secret)
 }
 
 func verifySendbirdOrganization(ctx context.Context, secret string) VerificationResult {
@@ -5682,9 +5674,7 @@ func verifyTimeCamp(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyGoodDay(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.goodday.work/2.0/users", nil)
-	req.Header.Set("gd-api-token", secret)
-	return verifyPrivateCollection(ctx, req, "auth failed")
+	return verifyContextlessProvider(ctx, "goodday-api-key", secret)
 }
 
 func verifyParseur(ctx context.Context, secret string) VerificationResult {
@@ -6220,9 +6210,7 @@ func verifyNozbeTeams(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyOverloop(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.overloop.com/public/v1/users?page%5Bsize%5D=1", nil)
-	req.Header.Set("Authorization", secret)
-	return verifyPrivateCollection(ctx, req, "api key is wrong")
+	return verifyContextlessProvider(ctx, "overloop-api-key", secret)
 }
 
 func verifySkrapp(ctx context.Context, secret string) VerificationResult {
@@ -6276,22 +6264,7 @@ func verifyUpwave(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyWorksnaps(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.worksnaps.com/api/projects.xml", nil)
-	req.SetBasicAuth(secret, "ignored")
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-			return VerificationResult{}, false
-		}
-		if statusCode == http.StatusUnauthorized {
-			return invalidCredentialResult(), true
-		}
-		if statusCode >= 200 && statusCode < 300 && containsAnyFold(string(body), "<projects", "<project") {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous XML response"), true
-	})
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "worksnaps-api-key", secret)
 }
 
 func verifyAPIMatic(ctx context.Context, secret string) VerificationResult {
@@ -6777,16 +6750,7 @@ func verifyDandelion(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyApacta(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.apacta.com/api/v1/time_entries", nil)
-	req.Header.Set("Authorization", secret)
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, body []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized && containsAnyFold(string(body), "not authenticated", "set `authorization` http header") {
-			return invalidCredentialResult(), true
-		}
-		return classifyCollectionResponse()(statusCode, body)
-	})
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "apacta-api-key", secret)
 }
 
 func verifyLeadfeeder(ctx context.Context, secret string) VerificationResult {
@@ -6947,9 +6911,7 @@ func verifyBombBomb(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyCaflou(ctx context.Context, secret string) VerificationResult {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://app.caflou.com/api/v1/accounts", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	return verifyPrivateCollection(ctx, req, "signature verification failed")
+	return verifyContextlessProvider(ctx, "caflou-api-key", secret)
 }
 
 func verifyAutopilot(ctx context.Context, secret string) VerificationResult {
@@ -6961,21 +6923,7 @@ func verifyAutopilot(ctx context.Context, secret string) VerificationResult {
 }
 
 func verifyBeebole(ctx context.Context, secret string) VerificationResult {
-	body := `{"service":"custom_field.list"}`
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://beebole-apps.com/api/v2", strings.NewReader(body))
-	req.SetBasicAuth(secret, "x")
-	req.Header.Set("Content-Type", "application/json")
-	result := verifyHTTPRequestWithClassifier(ctx, req, func(statusCode int, responseBody []byte) (VerificationResult, bool) {
-		if statusCode == http.StatusUnauthorized {
-			return invalidCredentialResult(), true
-		}
-		if statusCode >= 200 && statusCode < 300 && (jsonArray(responseBody) || jsonHasAnyField(responseBody, "result", "data", "custom_fields")) && !jsonHasAnyField(responseBody, "error") {
-			return VerificationResult{Status: VerificationVerified}, true
-		}
-		return unknownVerificationResult("provider_response", "provider returned an ambiguous response"), true
-	})
-	result.Response = ""
-	return result
+	return verifyContextlessProvider(ctx, "beebole-api-token", secret)
 }
 
 func verifyRingover(ctx context.Context, secret string) VerificationResult {

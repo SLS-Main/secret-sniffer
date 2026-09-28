@@ -31,18 +31,18 @@ using live customer credentials.
 
 ## Current backlog
 
-After remediation batch 32:
+After remediation batch 33:
 
 | Internal audit status | Patterns | Meaning |
 | --- | ---: | --- |
-| Reviewed | 534 | The recorded verifier contract has been reviewed/hardened. |
+| Reviewed | 544 | The recorded verifier contract has been reviewed/hardened. |
 | Requires hardening | 0 | All actionable items in this audit queue have been addressed. |
-| Blocked | 33 | Required context or a reliable validation contract is unresolved. |
+| Blocked | 23 | Required context or a reliable validation contract is unresolved. |
 | Pending review | 0 | The systematic safety assessment is complete. |
 | No verifier | 535 | Detection exists without an online verifier. |
 
-These audit statuses are distinct from runtime safety categories: 351
-`read_only`, 84 `auth_only`, 99 `unsafe`, and 33 `unreviewed`. Ordinary `--verify`
+These audit statuses are distinct from runtime safety categories: 361
+`read_only`, 84 `auth_only`, 99 `unsafe`, and 23 `unreviewed`. Ordinary `--verify`
 permits only `read_only` and `auth_only`; unsafe and unreviewed hooks require their
 existing explicit opt-ins. The audit remains an internal engineering inventory.
 
@@ -88,7 +88,7 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
 ## Remaining contract and coverage work
 
 1. **Blocked contracts:** establish provider-owned authenticated schemas and
-   required context for the 33 blocked patterns. Cloudplan, Cloverly, generic
+   required context for the 23 blocked patterns. Cloudplan, Cloverly, generic
    Google keys, Abstract, APILayer, ConfigCat SDK keys and legacy Greenhouse
    Harvest keys return unknown without requests, including under explicit opt-in.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
@@ -325,6 +325,71 @@ Official evidence checked 2026-09-25:
 - [Aiven authenticated project-list example](https://aiven.io/docs/tools/api) and [API reference](https://api.aiven.io/doc/).
 - [SparkPost account schema](https://developers.sparkpost.com/api/account/).
 - [Miro access-token context](https://developers.miro.com/reference/get-access-token-context.md).
+
+## Remediation batch 33: ten scoped metadata contracts
+
+Ten previously blocked patterns now have reviewed `read_only` contracts. Ordinary
+`--verify` supports **445 patterns** (361 `read_only` + 84 `auth_only`), with 23
+blocked patterns remaining. Support is conditional on the documented credential
+family and context; it does not imply every detected key can be verified.
+
+| Provider | Context and authenticated read |
+| --- | --- |
+| Mailmodo | `MAILMODO_API_KEY`, optional `MAILMODO_API_URL=https://api.mailmodo.com/api/v1`. `mmApiKey` `GET /getAllContactLists` reads list metadata, not contacts or email bodies. Requires listDetails array with id/name/created_at; contacts_count is optional, as in the provider examples, and numeric when present. No pagination is documented, so one response is byte-capped and suppressed. Empty lists are accepted. |
+| Beebole | `BEEBOLE_API_KEY` infers `graphql` type; explicit `BEEBOLE_API_URL=https://app.beebole.com/graphql` is required. `BEEBOLE_CREDENTIAL_TYPE=graphql` can qualify legacy ambiguous labels but must agree with the assignment. Read-only POST body is exactly `{"query":"{ currentPerson { name email } }"}` with the raw key in `apikey`. Validates data.currentPerson name/email and rejects operation errors or nonempty/malformed permissionsErrors. `BEEBOLE_API_TOKEN` denotes incompatible legacy tokens; legacy and MCP families remain unknown without requests. |
+| Caflou | `CAFLOU_ACCESS_TOKEN` and positive numeric `CAFLOU_ACCOUNT_ID`; optional `CAFLOU_API_URL=https://app.caflou.com/api/v1`. Bearer `GET /{account_id}/account_users?per=1&page=1` uses the published AccountUser schema and pagination. Requires integer id, email and active boolean per item; empty collections and inactive members are accepted. Replaces untyped account discovery; no account hopping or login/token creation. |
+| Signable | `SIGNABLE_API_KEY`, optional `SIGNABLE_API_URL=https://api.signable.co.uk/v1`. Basic key:`x` `GET /settings` reads signing preferences. Requires integer http=200, setting_signature_more_info boolean and signature-format strings; false flags are valid. Error codes cannot coexist with accepted success data. No templates, envelopes, signing or notifications are created. |
+| Simplesat | `SIMPLESAT_API_KEY`, optional `SIMPLESAT_API_URL=https://api.simplesat.io/api/v1`. `X-Simplesat-Token` `GET /questions?page_size=1&page=1`, requiring integer count and question id/type/required boolean. Empty results and optional questions are accepted. Replaces answer retrieval; no customer responses, survey tokens or survey emails are requested. Missing `read questions` scope stays unknown. |
+| GoodDay | `GOODDAY_API_KEY` or `GOODDAY_API_TOKEN` and explicit `GOODDAY_API_URL=https://api.goodday.work/2.0`. `gd-api-token` `GET /skills` reads organization skill id/label metadata. Enterprise/other version bases are not guessed. No pagination is documented; one byte-capped array, empty allowed, is suppressed. |
+| Mixmax | `MIXMAX_API_KEY` or `MIXMAX_API_TOKEN`, optional `MIXMAX_API_URL=https://api.mixmax.com/v1`. `X-API-Token` `GET /tasks?limit=1` uses the current OpenAPI contract, replacing undocumented users/me. Requires results _id/type/status, total integer and hasNext/hasPrevious booleans; optional task details are not required. Managed keys need tasks:read; missing permission remains unknown. Cursor links are never followed, and task content is suppressed. |
+| Overloop | `OVERLOOP_API_KEY`, optional `OVERLOOP_API_URL=https://api.overloop.com/public/v1`. Raw Authorization key `GET /me`, JSON:API Accept/Content-Type. Requires data.id/type=users and attributes.name/email; nested errors are rejected. Optional profiles, disabled status and relationship links do not affect identity validation; no relationships are followed. |
+| Worksnaps | `WORKSNAPS_API_KEY` or `WORKSNAPS_API_TOKEN` plus `WORKSNAPS_PROJECT_ID` (positive signed-32-bit integer); optional `WORKSNAPS_API_URL=https://api.worksnaps.com/api`. Basic key:`ignored` `GET /projects/{id}.xml`, XML Accept/Content-Type. Requires one complete project document with matching id, name and active/archived status. No project-wide listing, user API-token retrieval, time records or reports. |
+| Apacta | `APACTA_ACCESS_TOKEN` infers Bearer; `APACTA_API_KEY` or legacy labels require explicit `APACTA_CREDENTIAL_TYPE=bearer`. UUID `APACTA_TIME_ENTRY_TYPE_ID` is required; optional `APACTA_API_URL=https://app.apacta.com/api/v1`. Bearer `GET /time_entry_types/{id}` requires success=true and matching data.id/name. Reads one type definition, not time records; no creation/update or unsupported page-size guesses. |
+
+Apacta's `/ping` is explicitly **not** used: despite the published description
+“Check if API is up and API key works,” the credential-free endpoint returned
+HTTP 200 with `{"status":"ok","database":true,"searchEngine":true}`. That
+response is not credential validation. The time-entry-type collection rejected
+a credential-free request with 401; the supported single-resource schema comes
+from the Partner OpenAPI.
+
+Worksnaps now parses the entire XML document instead of checking for a
+`<project` substring. Duplicate identity fields, extra roots, nested identity
+markup, namespaces, error elements, directives, malformed XML and trailing text
+are rejected. External entities are never fetched. Archived projects and normal
+XML whitespace, declarations and CDATA remain valid.
+
+Every request requires exact HTTP 200 and its typed success schema. Failures,
+permission ambiguity, invalid context and unsupported deployments remain
+`unknown`; responses are suppressed and capped at 1 MiB. No redirects or
+response-supplied links are followed. Mapping-local JSON/YAML and bounded env/INI
+context contribute to cache identity, including platform/credential type.
+
+Evidence checked 2026-09-28:
+
+- Mailmodo [provider-hosted developer entry point](https://www.mailmodo.com/developers/) embeds Stoplight project `cHJqOjczODk3`; [published contact-list operation, authentication and examples](https://api.stoplight.io/v1/projects/cHJqOjczODk3/nodes/b96e0fec94c2b-get-all-contact-lists). The operation has no pagination parameters; one documented example omits contacts_count.
+- Beebole [current GraphQL authentication, query, legacy incompatibility, errors and permissionsErrors](https://beebole.com/help/api/introduction). The provider explicitly distinguishes new-platform API keys, legacy Basic tokens and MCP Bearer tokens.
+- Caflou [provider documentation link](https://www.caflou.com/education/how-to-obtain-access-token-for-api-integromat-or-zapier), [published Postman documentation](https://documenter.getpostman.com/view/4786951/RWMFrTQC) and its linked [OpenAPI account_users schema, Bearer authentication and per/page parameters](https://app.caflou.com/api/v1/i/docs/openapi/v1/openapi.yaml).
+- Signable [archived official SDK directing users to the current portal](https://github.com/signable/signable-sdk-php/blob/master/README.md), [settings schema](https://developers.signable.app/openapi/settings/listsettings.md) and [current server/Basic authentication](https://developers.signable.app/openapi.md).
+- Simplesat [official help link](https://help.simplesat.io/en/articles/3457141-do-you-have-an-open-api) and [published V1 OpenAPI, question schema, scopes and pagination](https://developer.simplesat.io/api/Simplesat%20API%20(v1)%20OpenAPI.yaml).
+- GoodDay [API versions](https://www.goodday.work/developers/api-v2), [header authentication](https://www.goodday.work/developers/api-v2/connect), and [organization skills schema](https://www.goodday.work/developers/api-v2/system).
+- Mixmax [current task OpenAPI, read scope, schema and limit](https://developer.mixmax.com/reference/listtasks.md), updated 2026-09-24. The provider identifies its OpenAPI as the source of truth for this reference.
+- Overloop [authentication, current-user route and JSON:API user schema](https://apidoc.overloop.com/).
+- Worksnaps [provider-linked API overview, Basic authentication and read semantics](https://api.worksnaps.com/api_docs/api_overview.html), [HTTPS Swagger route and XML project example](https://api.worksnaps.com/api_docs/worksnaps.json). User details can include an API token, so that alternative was rejected.
+- Apacta [current Partner OpenAPI, Bearer authentication and single time-entry-type response](https://apidoc.apacta.com/partner.yaml). Public ping behavior was checked independently of the documentation.
+
+Credential-free checks returned 401 for Mailmodo, Caflou, Signable, Mixmax,
+Overloop and Worksnaps; 403 for Simplesat and GoodDay; Beebole returned HTTP 200
+with empty data, permissionsErrors and an InvalidCSRFToken error. These checks
+establish rejection boundaries, not live-key success rates.
+
+Mocked regression coverage includes all ten contracts, policy promotion, exact
+requests and credential placement, typed and nested-error schemas, legitimate
+empty/false/optional metadata, permission failures, transport/read failures,
+cancellation/timeouts, response caps, unsupported platforms/hosts, record
+isolation, cache identity and JSON/YAML/base64 scanner propagation. Live
+benchmarks, broader format coverage and a refreshed TruffleHog comparison remain
+deferred.
 
 ## Remediation batch 32: ten blocked-provider dispositions
 

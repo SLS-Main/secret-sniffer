@@ -174,7 +174,7 @@ func verifyMetadataContextProvider(ctx context.Context, c Candidate) Verificatio
 			return identityNonnegativeIntegers(v, "max_api_credit", "used_api_credit", "max_concurrency", "current_concurrency")
 		}
 	default:
-		return missingVerificationContext()
+		return verifyScopedMetadataProvider(ctx, c)
 	}
 	if base == "" {
 		return missingVerificationContext()

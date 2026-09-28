@@ -41,6 +41,9 @@ var verificationContextAssignment = regexp.MustCompile(`(?m)^[ \t]*(?:export[ \t
 var verificationContextINISection = regexp.MustCompile(`^\[[A-Za-z0-9_. -]+\][ \t]*(?:\r?\n|$)`)
 
 var contextCredentialAssignments = map[string]struct{ selector, kind string }{
+	"beebole_api_key":         {"beebole_credential_type", "graphql"},
+	"beebole_api_token":       {"beebole_credential_type", "legacy"},
+	"apacta_access_token":     {"apacta_credential_type", "bearer"},
 	"pandadoc_api_key":        {"pandadoc_credential_type", "api_key"},
 	"pandadoc_access_token":   {"pandadoc_credential_type", "bearer"},
 	"pandadoc_client_secret":  {"pandadoc_credential_type", "client_secret"},

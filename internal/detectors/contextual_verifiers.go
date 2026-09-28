@@ -14,6 +14,16 @@ type contextualProvider struct {
 }
 
 var contextualProviders = map[string]contextualProvider{
+	"mailmodo-api-key":     {map[string]string{"mailmodo_api_url": "endpoint"}, `[A-Z0-9]{7}(?:-[A-Z0-9]{7}){3}`, []string{"mailmodo_api_key"}},
+	"beebole-api-token":    {map[string]string{"beebole_api_url": "endpoint", "beebole_credential_type": "credential_type"}, `[A-Za-z0-9._~-]{20,256}`, []string{"beebole_api_key", "beebole_api_token"}},
+	"caflou-api-key":       {map[string]string{"caflou_api_url": "endpoint", "caflou_account_id": "account_id"}, `eyJhbGciOiJIUzI1NiJ9\.[A-Za-z0-9_-]{40,200}\.[A-Za-z0-9_-]{43}`, []string{"caflou_access_token"}},
+	"signable-api-key":     {map[string]string{"signable_api_url": "endpoint"}, `[A-Za-z0-9-]{32}`, []string{"signable_api_key"}},
+	"simplesat-api-key":    {map[string]string{"simplesat_api_url": "endpoint"}, `[a-z0-9]{40}`, []string{"simplesat_api_key"}},
+	"goodday-api-key":      {map[string]string{"goodday_api_url": "endpoint"}, `[a-z0-9]{32}`, []string{"goodday_api_key", "goodday_api_token"}},
+	"mixmax-api-key":       {map[string]string{"mixmax_api_url": "endpoint"}, `[A-Za-z0-9_-]{32,128}`, []string{"mixmax_api_key", "mixmax_api_token"}},
+	"overloop-api-key":     {map[string]string{"overloop_api_url": "endpoint"}, `[A-Za-z0-9_-]{50}`, []string{"overloop_api_key"}},
+	"worksnaps-api-key":    {map[string]string{"worksnaps_api_url": "endpoint", "worksnaps_project_id": "project_id"}, `[A-Za-z0-9]{40}`, []string{"worksnaps_api_key", "worksnaps_api_token"}},
+	"apacta-api-key":       {map[string]string{"apacta_api_url": "endpoint", "apacta_time_entry_type_id": "time_entry_type_id", "apacta_credential_type": "credential_type"}, `[A-Za-z0-9._~-]{32,1000}`, []string{"apacta_access_token", "apacta_api_key"}},
 	"pandadoc-api-key":     {map[string]string{"pandadoc_api_url": "endpoint", "pandadoc_credential_type": "credential_type"}, `[A-Za-z0-9_-]{32,128}`, []string{"pandadoc_api_key", "pandadoc_access_token", "pandadoc_client_secret"}},
 	"appointedd-api-key":   {map[string]string{"appointedd_api_url": "endpoint"}, `[A-Za-z0-9+/=]{88}`, []string{"appointedd_api_key"}},
 	"flexport-api-key":     {map[string]string{"flexport_api_url": "endpoint", "flexport_credential_type": "credential_type"}, `[A-Za-z0-9._~-]{32,1000}`, []string{"flexport_access_token", "flexport_api_key", "flexport_client_secret"}},
