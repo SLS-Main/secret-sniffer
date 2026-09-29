@@ -267,7 +267,7 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 		AllowObject: runner.AllowsRemotePath, SkipObjectReason: runner.RemotePathSkipReason,
 		ExactKeys: stringSet(opts.ExactKeys), RetryAttempts: opts.RetryAttempts, RetryBaseDelay: opts.RetryBaseDelay,
 		VersionPolicy: opts.VersionPolicy, DeleteMarkerPolicy: opts.DeleteMarkerPolicy, StorageClassPolicy: opts.StorageClassPolicy,
-		BucketRegions: regionalClient.regions, ScanObject: runner.ScanContent, CommitFindings: commit, Progress: opts.ScannerConfig.Progress,
+		BucketRegions: regionalClient.regions, ScanObjectWithError: runner.ScanContentWithError, CommitFindings: commit, Progress: opts.ScannerConfig.Progress,
 	})
 	if err != nil {
 		return 0, err
@@ -318,11 +318,17 @@ func runS3Scan(ctx context.Context, opts s3RunOptions) (int, error) {
 			return 0, err
 		}
 	}
-	fmt.Fprintf(os.Stdout, "S3 scan complete: buckets_completed=%d buckets_failed=%d objects_scanned=%d objects_skipped=%d findings=%d duration=%s", result.BucketsCompleted, result.BucketsFailed, result.ObjectsScanned, result.ObjectsSkipped, findingCount, time.Since(opts.StartedAt).Round(time.Millisecond))
-	if opts.OutputPath != "" {
-		fmt.Fprintf(os.Stdout, " output=%s", opts.OutputPath)
+	if _, err := fmt.Fprintf(os.Stdout, "S3 scan complete: buckets_completed=%d buckets_failed=%d objects_scanned=%d objects_skipped=%d findings=%d duration=%s", result.BucketsCompleted, result.BucketsFailed, result.ObjectsScanned, result.ObjectsSkipped, findingCount, time.Since(opts.StartedAt).Round(time.Millisecond)); err != nil {
+		return findingCount, err
 	}
-	fmt.Fprintln(os.Stdout)
+	if opts.OutputPath != "" {
+		if _, err := fmt.Fprintf(os.Stdout, " output=%s", opts.OutputPath); err != nil {
+			return findingCount, err
+		}
+	}
+	if _, err := fmt.Fprintln(os.Stdout); err != nil {
+		return findingCount, err
+	}
 	if result.BucketsFailed > 0 {
 		return findingCount, &s3ScanFailuresError{Failures: result.Failures}
 	}

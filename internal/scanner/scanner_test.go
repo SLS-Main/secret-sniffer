@@ -582,8 +582,8 @@ func TestVerificationServiceDeduplicatesAcrossConcurrentScanners(t *testing.T) {
 		}(candidates[i%len(candidates)])
 	}
 	wg.Wait()
-	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Fatalf("verifier calls=%d, want 1", got)
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("verifier calls=%d, want 2 (one per detector)", got)
 	}
 	transport, ok := service.client.Transport.(*http.Transport)
 	if !ok || transport.Proxy == nil {

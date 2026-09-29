@@ -39,7 +39,7 @@ func contextualRegistry(registry []Detector) []Detector {
 	return registry
 }
 
-var verificationContextAssignment = regexp.MustCompile(`(?m)^[ \t]*(?:export[ \t]+)?["']?([A-Za-z_][A-Za-z0-9_-]*)["']?[ \t]*[:=][ \t]*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s#;,]+))`)
+var verificationContextAssignment = regexp.MustCompile(`(?m)^[ \t]*(?:export[ \t]+)?["']?([A-Za-z_][A-Za-z0-9_-]*)["']?[ \t]*[:=][ \t]*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s#;,]*))`)
 var verificationContextINISection = regexp.MustCompile(`^\[[A-Za-z0-9_. -]+\][ \t]*(?:\r?\n|$)`)
 
 var contextCredentialAssignments = map[string]struct{ selector, kind string }{
@@ -64,6 +64,39 @@ var contextCredentialAssignments = map[string]struct{ selector, kind string }{
 	"convertapi_api_token":    {"convertapi_credential_type", "api"},
 }
 
+func addVerificationContext(parts, fields map[string]string, name, value string, invalid bool) {
+	name = strings.ToLower(name)
+	if kind, exists := contextCredentialAssignments[name]; exists {
+		if _, applies := fields[kind.selector]; applies {
+			name, value = kind.selector, kind.kind
+		}
+	}
+	if part, ok := fields[name]; ok {
+		if previous, exists := parts[part]; invalid || (exists && previous != value) {
+			parts["context_conflict"] = "true"
+		}
+		parts[part] = value
+	}
+}
+
+// WithStructuredContext replaces context inferred from a synthetic detection
+// view with the original mapping's fields. Structured scope has no env/INI
+// distance limit, and invalid fields must not disappear during reconstruction.
+func (d RegexDetector) WithStructuredContext(c Candidate, values []StructuredValue) Candidate {
+	if len(d.ContextFields) == 0 {
+		return c
+	}
+	parts := map[string]string{"credential": c.Secret}
+	for _, value := range values {
+		addVerificationContext(parts, d.ContextFields, value.Key, value.Value, value.Invalid)
+	}
+	c.SecretParts = nil
+	if len(parts) > 1 {
+		c.SecretParts = parts
+	}
+	return c
+}
+
 func attachVerificationContext(content string, candidates []Candidate, fields map[string]string) {
 	if len(candidates) == 0 {
 		return
@@ -73,23 +106,12 @@ func attachVerificationContext(content string, candidates []Candidate, fields ma
 		c := &candidates[i]
 		parts := map[string]string{"credential": c.Secret}
 		add := func(name, value string) {
-			name = strings.ToLower(name)
-			if kind, exists := contextCredentialAssignments[name]; exists {
-				if _, applies := fields[kind.selector]; applies {
-					name, value = kind.selector, kind.kind
-				}
-			}
-			if part, ok := fields[name]; ok {
-				if previous, exists := parts[part]; exists && previous != value {
-					parts["context_conflict"] = "true"
-				}
-				parts[part] = value
-			}
+			addVerificationContext(parts, fields, name, value, false)
 		}
 		if structured {
 			record := -1
 			for _, value := range values {
-				if c.Start >= value.Start && c.End <= value.End {
+				if !value.Invalid && c.Start >= value.Start && c.End <= value.End {
 					record = value.Record
 					break
 				}
@@ -97,7 +119,7 @@ func attachVerificationContext(content string, candidates []Candidate, fields ma
 			if record >= 0 {
 				for _, value := range values {
 					if value.Record == record {
-						add(value.Key, value.Value)
+						addVerificationContext(parts, fields, value.Key, value.Value, value.Invalid)
 					}
 				}
 			}

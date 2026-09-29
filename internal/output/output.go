@@ -57,10 +57,12 @@ func Write(w io.Writer, format string, findings []detectors.Finding, meta Meta, 
 		return writeSARIF(w, findings)
 	case "human", "":
 		for _, f := range findings {
-			fmt.Fprintf(w, "%s:%d:%d %s %s %s verification=%s\n", f.File, f.Line, f.Column, f.Severity, f.Name, f.Redacted, f.Verification.Status)
+			if _, err := fmt.Fprintf(w, "%s:%d:%d %s %s %s verification=%s\n", f.File, f.Line, f.Column, f.Severity, f.Name, f.Redacted, f.Verification.Status); err != nil {
+				return err
+			}
 		}
-		fmt.Fprintf(w, "scan complete: %d findings in %s\n", len(findings), meta.Duration.Round(time.Millisecond))
-		return nil
+		_, err := fmt.Fprintf(w, "scan complete: %d findings in %s\n", len(findings), meta.Duration.Round(time.Millisecond))
+		return err
 	default:
 		return fmt.Errorf("unsupported format %q", format)
 	}

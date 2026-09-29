@@ -276,7 +276,9 @@ Any nonzero policy exit leaves progress in the `failed` terminal phase. Signal c
 
 Machine findings include a structured `verification` object. Status is one of `verified`, `unverified`, `unknown`, `not_attempted`, or `unsupported`. Provider timeouts, transport failures, rate limits, server failures, and ambiguous authorization failures are `unknown`, not `unverified`. Unreviewed and unsafe verification that is not explicitly enabled is `not_attempted` with error category `unreviewed_verification_disabled` or `unsafe_verification_disabled`. The compatibility `verified` boolean remains and is true only for status `verified`. When an endpoint returns a body, a whitespace-normalized response excerpt is included as `response` and limited to 100 characters.
 
-Provider requests run through a bounded pool controlled by `--verification-workers`. All scanners in one invocation share an in-flight and completed-result cache keyed by the verifier and secret, so the same credential is contacted at most once per job even when it appears in many files, repositories, commits, archives, or cloud objects. Cancelled attempts may be retried; completed provider responses, including rate-limit and network outcomes, are reused for the remainder of the job.
+Provider requests run through a bounded pool controlled by `--verification-workers`. All scanners in one invocation share an in-flight and completed-result cache keyed by detector ID, verifier, primary credential, and any composite credential/context parts. Repeated occurrences with the same verification identity reuse one verification result across files, repositories, commits, archives, and cloud objects; different credentials or provider contexts are verified independently. Cancelled attempts may be retried; completed provider responses, including rate-limit and network outcomes, are reused for the remainder of the job.
+
+Provider-qualified verification context stays within its original JSON/YAML mapping or bounded environment/INI record. Explicitly empty, null, wrong-type, conflicting, or unsupported context blocks verification instead of silently falling back to a default endpoint.
 
 Verification HTTP requests honor Go's standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment settings. Cross-endpoint redirects are not followed, preventing credential-bearing headers from being forwarded to redirect targets.
 
@@ -405,6 +407,8 @@ Every normal scan gets a scan job ID, even when `--scan-job-id` is omitted. Gene
 
 The generated job ID and state file path are printed in the progress logs. Keep that ID if you may need to resume the scan later. On resume or retry, the logs show the discovered repo count, already-completed count, and selected repo count so it is clear how much prior work is being reused.
 
+Resume and retry require `--format jsonl`; JSON, SARIF, and human-output jobs must be started again rather than resumed. A saved configuration hash checks scan coverage, detector selection, verification options, custom detector and baseline contents, and scanner version before completed repositories can be skipped. Changing those settings, or using an older job without a configuration hash, requires a new job. Worker counts and progress-reporting options can change when resuming.
+
 ```bash
 ./secret-sniffer \
   --github-org ORG \
@@ -512,6 +516,8 @@ outer.zip!/inner.zip!/nested.env
 ```
 
 Archive contents are expanded in memory only. Entries with absolute paths or `../` traversal are ignored, symlinks and non-regular tar entries are skipped, and decompression is bounded by `--max-archive-depth`, `--max-archive-entries`, `--max-archive-bytes`, and `--max-expanded-file-bytes`.
+
+Malformed archives, decompression errors, and checksum failures are reported as scan failures while retaining findings collected before the failure. Use `--fail-on-scan-errors` to enforce failure exit status for incomplete scans. Intentional size, depth, and entry-limit exclusions remain skips. Output write failures are runtime errors and exit with status `1`.
 
 ## Large Server Usage
 

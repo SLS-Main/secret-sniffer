@@ -30,26 +30,27 @@ type S3API interface {
 }
 
 type Config struct {
-	Buckets            []string
-	Prefix             string
-	AllBuckets         bool
-	Resume             bool
-	BucketConcurrency  int
-	ObjectConcurrency  int
-	MaxObjectBytes     int64
-	Store              *Store
-	ScanObject         func(context.Context, string, []byte) []detectors.Finding
-	AllowObject        func(string) bool
-	SkipObjectReason   func(string) string
-	CommitFindings     func([]detectors.Finding) error
-	Progress           progress.ProgressReporter
-	ExactKeys          map[string]struct{}
-	RetryAttempts      int
-	RetryBaseDelay     time.Duration
-	BucketRegions      map[string]string
-	VersionPolicy      string
-	DeleteMarkerPolicy string
-	StorageClassPolicy string
+	Buckets             []string
+	Prefix              string
+	AllBuckets          bool
+	Resume              bool
+	BucketConcurrency   int
+	ObjectConcurrency   int
+	MaxObjectBytes      int64
+	Store               *Store
+	ScanObject          func(context.Context, string, []byte) []detectors.Finding
+	ScanObjectWithError func(context.Context, string, []byte) ([]detectors.Finding, error)
+	AllowObject         func(string) bool
+	SkipObjectReason    func(string) string
+	CommitFindings      func([]detectors.Finding) error
+	Progress            progress.ProgressReporter
+	ExactKeys           map[string]struct{}
+	RetryAttempts       int
+	RetryBaseDelay      time.Duration
+	BucketRegions       map[string]string
+	VersionPolicy       string
+	DeleteMarkerPolicy  string
+	StorageClassPolicy  string
 }
 
 type Result struct {
@@ -68,7 +69,7 @@ type Scanner struct {
 }
 
 func New(client S3API, cfg Config) (*Scanner, error) {
-	if client == nil || cfg.Store == nil || cfg.ScanObject == nil || cfg.CommitFindings == nil {
+	if client == nil || cfg.Store == nil || (cfg.ScanObject == nil && cfg.ScanObjectWithError == nil) || cfg.CommitFindings == nil {
 		return nil, errors.New("S3 scanner requires client, state store, object scanner, and finding committer")
 	}
 	if cfg.BucketConcurrency < 1 {
@@ -212,11 +213,12 @@ func (s *Scanner) scanBucket(ctx context.Context, bucket string) (bucketStats, e
 			objects = append(objects, objectRef{object: object})
 		}
 		pageStats, findings, err := s.scanPage(ctx, bucket, objects)
-		if err != nil {
-			return total, s.fail(bucket, err)
+		if commitErr := s.cfg.CommitFindings(findings); commitErr != nil {
+			return total, s.fail(bucket, fmt.Errorf("commit findings for s3://%s: %w", bucket, commitErr))
 		}
-		if err := s.cfg.CommitFindings(findings); err != nil {
-			return total, s.fail(bucket, fmt.Errorf("commit findings for s3://%s: %w", bucket, err))
+		if err != nil {
+			total.findings += pageStats.findings
+			return total, s.fail(bucket, err)
 		}
 		next := aws.ToString(page.NextContinuationToken)
 		if aws.ToBool(page.IsTruncated) && (next == "" || next == continuation) {
@@ -291,11 +293,12 @@ func (s *Scanner) scanVersionBucket(ctx context.Context, bucket string) (bucketS
 		}
 		pageStats, findings, err := s.scanPage(ctx, bucket, objects)
 		pageStats.skipped += markerSkips
-		if err != nil {
-			return total, s.fail(bucket, err)
+		if commitErr := s.cfg.CommitFindings(findings); commitErr != nil {
+			return total, s.fail(bucket, fmt.Errorf("commit findings for s3://%s: %w", bucket, commitErr))
 		}
-		if err := s.cfg.CommitFindings(findings); err != nil {
-			return total, s.fail(bucket, fmt.Errorf("commit findings for s3://%s: %w", bucket, err))
+		if err != nil {
+			total.findings += pageStats.findings
+			return total, s.fail(bucket, err)
 		}
 		nextKey, nextVersion := aws.ToString(page.NextKeyMarker), aws.ToString(page.NextVersionIdMarker)
 		if aws.ToBool(page.IsTruncated) && (nextKey == "" || nextKey == keyMarker && nextVersion == versionMarker) {
@@ -363,6 +366,8 @@ func (s *Scanner) scanPage(ctx context.Context, bucket string, objects []objectR
 	var findings []detectors.Finding
 	var pageErr error
 	for result := range results {
+		stats.findings += int64(len(result.findings))
+		findings = append(findings, result.findings...)
 		if result.err != nil {
 			pageErr = errors.Join(pageErr, result.err)
 			continue
@@ -372,8 +377,6 @@ func (s *Scanner) scanPage(ctx context.Context, bucket string, objects []objectR
 			continue
 		}
 		stats.scanned++
-		stats.findings += int64(len(result.findings))
-		findings = append(findings, result.findings...)
 	}
 	if ctx.Err() != nil {
 		pageErr = errors.Join(pageErr, ctx.Err())
@@ -479,9 +482,21 @@ func (s *Scanner) scanObjectVersion(ctx context.Context, slot, bucket string, ob
 		s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: totalRead, BytesTotal: int64(len(b))})
 		s.cfg.Progress.SetPhase(progress.PhaseScanning)
 	}
-	findings := s.cfg.ScanObject(progress.WithSlot(ctx, slot), virtualPath, b)
+	var findings []detectors.Finding
+	var scanErr error
+	if s.cfg.ScanObjectWithError != nil {
+		findings, scanErr = s.cfg.ScanObjectWithError(progress.WithSlot(ctx, slot), virtualPath, b)
+	} else {
+		findings = s.cfg.ScanObject(progress.WithSlot(ctx, slot), virtualPath, b)
+	}
 	for i := range findings {
 		findings[i] = detectors.SetS3Provenance(findings[i], bucket, key, versionID, aws.ToString(object.ETag), s.cfg.BucketRegions[bucket])
+	}
+	if scanErr != nil {
+		if s.cfg.Progress != nil {
+			s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "scan_error", Error: scanErr.Error()})
+		}
+		return objectResult{findings: findings, err: scanErr}
 	}
 	if s.cfg.Progress != nil {
 		s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: totalRead})

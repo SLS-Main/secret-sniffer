@@ -495,6 +495,9 @@ func main() {
 	if scanResume && scanRetryFailed {
 		fatal(fmt.Errorf("--scan-resume and --scan-retry-failed cannot be used together"))
 	}
+	if (scanResume || scanRetryFailed) && format != "jsonl" {
+		fatal(fmt.Errorf("resuming a scan job requires --format jsonl to preserve previous findings"))
+	}
 	if !summaryOnly && scanJobID == "" && !scanResume && !scanRetryFailed {
 		scanJobID, err = defaultScanJobID(scanJobPrefix(cfg.Target, repoListPath, githubOrgs, githubEnterprise, githubAccessible))
 		if err != nil {
@@ -508,6 +511,13 @@ func main() {
 		jobPath = scanJobStatePath(scanJobID, scanJobPath)
 		jobState, err = loadOrCreateScanJobState(jobPath, scanJobID, start)
 		if err != nil {
+			fatal(err)
+		}
+		scope, scopeErr := scanJobScope(flag.CommandLine, detectors.RegistryInfo(registry), customPath, baselinePath)
+		if scopeErr != nil {
+			fatal(scopeErr)
+		}
+		if err := jobState.validateScope(scope, scanResume || scanRetryFailed); err != nil {
 			fatal(err)
 		}
 		jobState.addTargets(targets)
@@ -840,9 +850,13 @@ func main() {
 		if err := outputFile.Sync(); err != nil {
 			fatal(err)
 		}
-		fmt.Fprintf(os.Stdout, "scan complete: %d findings in %s, output=%s\n", summary.FindingsAfterBaseline, time.Since(start).Round(time.Millisecond), outputPath)
+		if _, err := fmt.Fprintf(os.Stdout, "scan complete: %d findings in %s, output=%s\n", summary.FindingsAfterBaseline, time.Since(start).Round(time.Millisecond), outputPath); err != nil {
+			fatal(err)
+		}
 	} else {
-		fmt.Fprintf(os.Stdout, "scan complete: %d findings in %s, output=%s\n", summary.FindingsAfterBaseline, time.Since(start).Round(time.Millisecond), outputPath)
+		if _, err := fmt.Fprintf(os.Stdout, "scan complete: %d findings in %s, output=%s\n", summary.FindingsAfterBaseline, time.Since(start).Round(time.Millisecond), outputPath); err != nil {
+			fatal(err)
+		}
 	}
 	console.done(totalAfterBaseline, time.Since(start).Round(time.Millisecond))
 	exitCode := scanExitCode(failOnScanErrors && summary.FailedScans > 0, failOnFindings, totalAfterBaseline)
@@ -912,6 +926,7 @@ type orgSummary struct {
 }
 
 type scanJobState struct {
+	ScopeHash string                   `json:"scope_hash,omitempty"`
 	JobID     string                   `json:"job_id"`
 	CreatedAt time.Time                `json:"created_at"`
 	UpdatedAt time.Time                `json:"updated_at"`

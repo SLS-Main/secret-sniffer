@@ -157,6 +157,8 @@ func normalizedVerificationSafety(safety VerificationSafety, verifiable bool) Ve
 
 func (c Candidate) VerificationCacheKey() [32]byte {
 	h := sha256.New()
+	writeVerificationIdentityField(h, c.DetectorID)
+	writeVerificationIdentityField(h, c.Secret)
 	if c.CompositeVerifier != nil {
 		_, _ = h.Write([]byte{2})
 		writeVerificationIdentityField(h, fmt.Sprintf("%x", reflect.ValueOf(c.CompositeVerifier).Pointer()))
@@ -174,7 +176,6 @@ func (c Candidate) VerificationCacheKey() [32]byte {
 		if c.Verifier != nil {
 			writeVerificationIdentityField(h, fmt.Sprintf("%x", reflect.ValueOf(c.Verifier).Pointer()))
 		}
-		writeVerificationIdentityField(h, c.Secret)
 	}
 	var key [32]byte
 	copy(key[:], h.Sum(nil))

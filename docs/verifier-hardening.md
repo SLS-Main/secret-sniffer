@@ -91,6 +91,8 @@ and [error-code families](https://novita.ai/docs/api-reference/basic-error-code.
    required context for the 16 blocked patterns. Cloudplan, Cloverly, generic
    Google keys, Abstract, APILayer, ConfigCat SDK keys and legacy Greenhouse
    Harvest keys return unknown without requests, including under explicit opt-in.
+   The [remaining-provider inventory](verifier-blockers.md) records the specific
+   evidence or credential support needed for each of the 16 blocked patterns.
 2. **Credential-subtype routing:** remaining mixed API/webhook and OAuth detectors. Different
    key families require different verification operations; a rejection by the
    wrong API must not label the key invalid.
@@ -386,7 +388,7 @@ One supported contract is promoted and nine unproven probes are replaced with
 explicit no-network hooks. Ordinary `--verify` now supports **446 patterns**
 (362 `read_only` + 84 `auth_only`); 22 patterns remain blocked/unreviewed.
 Detection is retained for all ten. Blocked hooks return `unknown` even with
-`--verify-unreviewed` enabled; a retirement announcement or unavailable service
+`--allow-unreviewed-verification` enabled; a retirement announcement or unavailable service
 does not establish that a detected credential is invalid.
 
 | Provider | Disposition and evidence checked 2026-09-28 |

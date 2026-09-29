@@ -45,13 +45,15 @@ func (s *Scanner) detectStructuredCandidates(source []byte) ([]detectors.Candida
 		fields := records[record]
 		changed := false
 		for _, field := range fields {
-			if string(source[field.Start:field.End]) != field.Value {
+			if !field.Invalid && string(source[field.Start:field.End]) != field.Value {
 				changed = true
 			}
 		}
 		if changed {
 			for _, field := range fields {
-				replaced = append(replaced, structuredSpan{field.Start, field.End})
+				if !field.Invalid {
+					replaced = append(replaced, structuredSpan{field.Start, field.End})
+				}
 			}
 		}
 		var view strings.Builder
@@ -75,15 +77,18 @@ func (s *Scanner) detectStructuredCandidates(source []byte) ([]detectors.Candida
 		}
 		var mappings []mapping
 		for _, field := range fields {
+			if field.Invalid {
+				continue
+			}
 			value := strings.TrimRight(field.Value, "\r\n")
 			// Multiline/quoted values are scanned in isolation: inserting them
 			// into a record could manufacture assignments or provider context.
 			if strings.ContainsAny(value, "\r\n\"'\\") {
-				out = append(out, s.detectStructuredScalar(source, field)...)
+				out = append(out, s.detectStructuredScalar(source, field, fields)...)
 				continue
 			}
 			if field.Key != "" && !structuredFieldName.MatchString(field.Key) {
-				out = append(out, s.detectStructuredScalar(source, field)...)
+				out = append(out, s.detectStructuredScalar(source, field, fields)...)
 				continue
 			}
 			view.WriteString(field.Key)
@@ -99,6 +104,11 @@ func (s *Scanner) detectStructuredCandidates(source []byte) ([]detectors.Candida
 				continue
 			}
 			for _, candidate := range detectPlanned(detector, content) {
+				if contextual, ok := detector.detector.(interface {
+					WithStructuredContext(detectors.Candidate, []detectors.StructuredValue) detectors.Candidate
+				}); ok {
+					candidate = contextual.WithStructuredContext(candidate, fields)
+				}
 				for _, mapping := range mappings {
 					if candidate.Start < mapping.start || candidate.End > mapping.end {
 						continue
@@ -114,7 +124,7 @@ func (s *Scanner) detectStructuredCandidates(source []byte) ([]detectors.Candida
 	return out, replaced
 }
 
-func (s *Scanner) detectStructuredScalar(source []byte, field detectors.StructuredValue) []detectors.Candidate {
+func (s *Scanner) detectStructuredScalar(source []byte, field detectors.StructuredValue, fields []detectors.StructuredValue) []detectors.Candidate {
 	var out []detectors.Candidate
 	value := []byte(field.Value)
 	for _, detector := range s.plan.selectDetectors(value) {
@@ -122,6 +132,11 @@ func (s *Scanner) detectStructuredScalar(source []byte, field detectors.Structur
 			continue
 		}
 		for _, candidate := range detectPlanned(detector, value) {
+			if contextual, ok := detector.detector.(interface {
+				WithStructuredContext(detectors.Candidate, []detectors.StructuredValue) detectors.Candidate
+			}); ok {
+				candidate = contextual.WithStructuredContext(candidate, fields)
+			}
 			out = append(out, remapStructuredCandidate(source, candidate, field))
 		}
 	}

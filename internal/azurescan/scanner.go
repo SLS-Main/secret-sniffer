@@ -40,6 +40,7 @@ type Config struct {
 	BlobConcurrency      int
 	MaxObjectBytes       int64
 	ScanObject           func(context.Context, string, []byte) []detectors.Finding
+	ScanObjectWithError  func(context.Context, string, []byte) ([]detectors.Finding, error)
 	AllowObject          func(string) bool
 	SkipObjectReason     func(string) string
 	CommitFindings       func([]detectors.Finding) error
@@ -65,7 +66,7 @@ type Scanner struct {
 }
 
 func New(client Client, cfg Config) (*Scanner, error) {
-	if client == nil || cfg.ScanObject == nil || cfg.CommitFindings == nil {
+	if client == nil || (cfg.ScanObject == nil && cfg.ScanObjectWithError == nil) || cfg.CommitFindings == nil {
 		return nil, errors.New("Azure Blob scanner requires client, object scanner, and finding committer")
 	}
 	if cfg.ContainerConcurrency < 1 {
@@ -150,11 +151,11 @@ func (s *Scanner) scanContainer(ctx context.Context, container string) (containe
 				s.cfg.Progress.SetPhase(progress.PhaseDownloading)
 			}
 			stats, findings, err := s.scanBlobs(ctx, container, blobs)
+			if commitErr := s.cfg.CommitFindings(findings); commitErr != nil {
+				return fmt.Errorf("commit findings for azureblob://%s/%s: %w", s.cfg.Account, container, commitErr)
+			}
 			if err != nil {
 				return err
-			}
-			if err := s.cfg.CommitFindings(findings); err != nil {
-				return fmt.Errorf("commit findings for azureblob://%s/%s: %w", s.cfg.Account, container, err)
 			}
 			attemptTotal.scanned += stats.scanned
 			attemptTotal.skipped += stats.skipped
@@ -217,6 +218,8 @@ func (s *Scanner) scanBlobs(ctx context.Context, container string, blobs []Blob)
 	var findings []detectors.Finding
 	var pageErr error
 	for result := range results {
+		stats.findings += int64(len(result.findings))
+		findings = append(findings, result.findings...)
 		if result.err != nil {
 			pageErr = errors.Join(pageErr, result.err)
 			continue
@@ -226,8 +229,6 @@ func (s *Scanner) scanBlobs(ctx context.Context, container string, blobs []Blob)
 			continue
 		}
 		stats.scanned++
-		stats.findings += int64(len(result.findings))
-		findings = append(findings, result.findings...)
 	}
 	if ctx.Err() != nil {
 		pageErr = errors.Join(pageErr, ctx.Err())
@@ -310,9 +311,21 @@ func (s *Scanner) scanBlob(ctx context.Context, slot, container string, blob Blo
 		s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: totalRead, BytesTotal: int64(len(b))})
 		s.cfg.Progress.SetPhase(progress.PhaseScanning)
 	}
-	findings := s.cfg.ScanObject(progress.WithSlot(ctx, slot), virtualPath, b)
+	var findings []detectors.Finding
+	var scanErr error
+	if s.cfg.ScanObjectWithError != nil {
+		findings, scanErr = s.cfg.ScanObjectWithError(progress.WithSlot(ctx, slot), virtualPath, b)
+	} else {
+		findings = s.cfg.ScanObject(progress.WithSlot(ctx, slot), virtualPath, b)
+	}
 	for i := range findings {
 		findings[i] = detectors.SetAzureBlobProvenance(findings[i], s.cfg.Account, container, blob.Name, "", blob.ETag)
+	}
+	if scanErr != nil {
+		if s.cfg.Progress != nil {
+			s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "scan_error", Error: scanErr.Error()})
+		}
+		return blobResult{findings: findings, err: scanErr}
 	}
 	if s.cfg.Progress != nil {
 		s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: totalRead})

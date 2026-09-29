@@ -119,6 +119,25 @@ func TestScanBlobsRetriesTransientListAndDownloadErrors(t *testing.T) {
 	}
 }
 
+func TestExtractionFailurePreservesPartialAzureFindings(t *testing.T) {
+	client := &fakeAzureClient{blobs: map[string][]Blob{"configs": {{Name: "archive.zip"}}}, bodies: map[string]string{"configs/archive.zip": "data"}}
+	var committed []detectors.Finding
+	s, err := New(client, Config{
+		Account: "acct", Containers: []string{"configs"}, BlobConcurrency: 1,
+		ScanObjectWithError: func(_ context.Context, path string, _ []byte) ([]detectors.Finding, error) {
+			return []detectors.Finding{{DetectorID: "test", File: path, Secret: "partial"}}, errors.New("corrupt nested archive")
+		},
+		CommitFindings: func(fs []detectors.Finding) error { committed = append(committed, fs...); return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := s.Scan(context.Background())
+	if result.ContainersFailed != 1 || result.ContainersCompleted != 0 || len(committed) != 1 {
+		t.Fatalf("result=%+v committed=%d", result, len(committed))
+	}
+}
+
 func stringsHasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }

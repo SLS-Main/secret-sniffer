@@ -185,7 +185,14 @@ func newPathFilter(cfg Config) (*pathfilter.Filter, error) {
 
 // ScanContent applies the configured detector pipeline to content from a remote source.
 func (s *Scanner) ScanContent(ctx context.Context, name string, content []byte) []detectors.Finding {
-	return dedupe(s.scanBlob(ctx, name, "", content, 0))
+	findings, _ := s.ScanContentWithError(ctx, name, content)
+	return findings
+}
+
+// ScanContentWithError retains partial findings while reporting extraction failures.
+func (s *Scanner) ScanContentWithError(ctx context.Context, name string, content []byte) ([]detectors.Finding, error) {
+	findings, err := s.scanBlob(ctx, name, "", content, 0)
+	return dedupe(findings), err
 }
 
 // AllowsRemotePath reports whether a remote object key passes the configured path filters.
@@ -702,19 +709,20 @@ func (s *Scanner) scanFiles(ctx context.Context, files []string) ([]detectors.Fi
 				b, err := os.ReadFile(filePath)
 				if err == nil {
 					itemCtx := progress.WithSlot(scanCtx, slot)
-					findings := s.scanBlob(itemCtx, filePath, "", b, 0)
+					findings, extractErr := s.scanBlob(itemCtx, filePath, "", b, 0)
 					findings = s.reidentifyRemoteWorktree(findings, filePath)
 					retained, emitErr := s.processFindings(itemCtx, findings)
-					if s.cfg.Progress != nil && emitErr == nil {
+					itemErr := errors.Join(extractErr, emitErr)
+					if s.cfg.Progress != nil && itemErr == nil {
 						s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
 						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b))})
 					} else if s.cfg.Progress != nil {
-						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "output_error", Error: emitErr.Error()})
+						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "scan_error", Error: itemErr.Error()})
 					}
 					if emitErr != nil {
 						cancel()
 					}
-					out <- result{findings: retained, err: emitErr}
+					out <- result{findings: retained, err: itemErr}
 				} else {
 					if s.cfg.Progress != nil {
 						s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "read_error", Error: err.Error()})
@@ -1029,12 +1037,15 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 						cacheKey += "\x00" + archiveKind(f.path)
 					}
 					var findings []detectors.Finding
-					if s.scanOptions.RetainFindings {
+					var extractErr error
+					if s.scanOptions.RetainFindings && !(s.cfg.ScanArchives && archiveKind(f.path) != "") {
 						findings = cache.findings(scanCtx, cacheKey, f.path, f.commit, func() []detectors.Finding {
-							return s.scanBlob(progress.WithSlot(scanCtx, slot), f.path, f.commit, b, 0)
+							found, err := s.scanBlob(progress.WithSlot(scanCtx, slot), f.path, f.commit, b, 0)
+							extractErr = err
+							return found
 						})
 					} else {
-						findings = s.scanBlob(progress.WithSlot(scanCtx, slot), f.path, f.commit, b, 0)
+						findings, extractErr = s.scanBlob(progress.WithSlot(scanCtx, slot), f.path, f.commit, b, 0)
 					}
 					s.enrichGitCommitMetadata(repo, findings)
 					for i := range findings {
@@ -1044,15 +1055,16 @@ func (s *Scanner) scanGitHistory(ctx context.Context, repo string) ([]detectors.
 					if emitErr != nil {
 						cancel()
 					}
+					itemErr := errors.Join(extractErr, emitErr)
 					if s.cfg.Progress != nil {
-						if emitErr == nil {
+						if itemErr == nil {
 							s.cfg.Progress.UpdateItem(slot, progress.ItemUpdate{Stage: progress.StageScanning, ClearArchive: true, BytesRead: int64(len(b)), BytesTotal: int64(len(b))})
 							s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageCompleted, BytesRead: int64(len(b))})
 						} else {
-							s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "output_error", Error: emitErr.Error()})
+							s.cfg.Progress.CompleteItem(slot, progress.ItemResult{Stage: progress.StageFailed, Reason: "scan_error", Error: itemErr.Error()})
 						}
 					}
-					out <- result{findings: retained, err: emitErr}
+					out <- result{findings: retained, err: itemErr}
 				} else {
 					stage, reason := progress.StageFailed, "read_error"
 					if err.Error() == "blob too large" {
@@ -1413,23 +1425,23 @@ func (r *gitBatchReader) close() {
 	_ = r.cmd.Wait()
 }
 
-func (s *Scanner) scanBlob(ctx context.Context, file, commit string, b []byte, depth int) []detectors.Finding {
+func (s *Scanner) scanBlob(ctx context.Context, file, commit string, b []byte, depth int) ([]detectors.Finding, error) {
 	if ctx.Err() != nil {
-		return nil
+		return nil, ctx.Err()
 	}
 	if s.cfg.ScanArchives && depth <= s.maxArchiveDepth() && archiveKind(file) != "" {
 		return s.scanArchiveBytes(ctx, file, commit, b, depth)
 	}
 	if text, ok := extractDocumentText(file, b, s.maxExpandedFileBytes()); ok {
-		return s.scanBytes(ctx, file, commit, text)
+		return s.scanBytes(ctx, file, commit, text), nil
 	}
 	if isBinary(b) {
-		return nil
+		return nil, nil
 	}
-	return s.scanBytes(ctx, file, commit, b)
+	return s.scanBytes(ctx, file, commit, b), nil
 }
 
-func (s *Scanner) scanArchiveBytes(ctx context.Context, file, commit string, b []byte, depth int) []detectors.Finding {
+func (s *Scanner) scanArchiveBytes(ctx context.Context, file, commit string, b []byte, depth int) ([]detectors.Finding, error) {
 	switch archiveKind(file) {
 	case "zip":
 		return s.scanZip(ctx, file, commit, b, depth)
@@ -1438,14 +1450,14 @@ func (s *Scanner) scanArchiveBytes(ctx context.Context, file, commit string, b [
 	case "targz":
 		zr, err := gzip.NewReader(bytes.NewReader(b))
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("extract %s: %w", file, err)
 		}
 		defer zr.Close()
 		return s.scanTar(ctx, file, commit, zr, depth)
 	case "gz":
 		zr, err := gzip.NewReader(bytes.NewReader(b))
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("extract %s: %w", file, err)
 		}
 		defer zr.Close()
 		name := strings.TrimSuffix(file, ".gz")
@@ -1457,23 +1469,26 @@ func (s *Scanner) scanArchiveBytes(ctx context.Context, file, commit string, b [
 			name = file + "!/" + entryName
 		}
 		if !s.allowedArchivePath(name, entryName) {
-			return nil
+			return nil, nil
 		}
 		s.updateArchiveProgress(ctx, progress.StageExtracting, entryName, depth+1, 0)
 		limit := s.maxExpandedFileBytes()
 		if s.maxArchiveBytes() < limit {
 			limit = s.maxArchiveBytes()
 		}
-		entry, ok := readLimited(zr, limit)
+		entry, ok, err := readArchiveLimited(zr, limit)
+		if err != nil {
+			return nil, fmt.Errorf("extract %s: %w", file, err)
+		}
 		if !ok {
-			return nil
+			return nil, nil
 		}
 		s.updateArchiveProgress(ctx, progress.StageScanning, entryName, depth+1, int64(len(entry)))
 		return s.scanBlob(ctx, name, commit, entry, depth+1)
 	case "xz":
 		r, err := xz.NewReader(bytes.NewReader(b))
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("extract %s: %w", file, err)
 		}
 		return s.scanCompressed(ctx, file, commit, r, ".xz", depth)
 	case "bz2":
@@ -1481,32 +1496,35 @@ func (s *Scanner) scanArchiveBytes(ctx context.Context, file, commit string, b [
 	case "7z":
 		return s.scan7z(ctx, file, commit, b, depth)
 	}
-	return nil
+	return nil, nil
 }
 
-func (s *Scanner) scanCompressed(ctx context.Context, file, commit string, reader io.Reader, suffix string, depth int) []detectors.Finding {
+func (s *Scanner) scanCompressed(ctx context.Context, file, commit string, reader io.Reader, suffix string, depth int) ([]detectors.Finding, error) {
 	entryName := path.Base(strings.TrimSuffix(file, suffix))
 	name := file + "!/" + entryName
 	if !s.allowedArchivePath(name, entryName) {
-		return nil
+		return nil, nil
 	}
 	s.updateArchiveProgress(ctx, progress.StageExtracting, entryName, depth+1, 0)
 	limit := s.maxExpandedFileBytes()
 	if s.maxArchiveBytes() < limit {
 		limit = s.maxArchiveBytes()
 	}
-	entry, ok := readLimited(reader, limit)
+	entry, ok, err := readArchiveLimited(reader, limit)
+	if err != nil {
+		return nil, fmt.Errorf("extract %s: %w", file, err)
+	}
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	s.updateArchiveProgress(ctx, progress.StageScanning, entryName, depth+1, int64(len(entry)))
 	return s.scanBlob(ctx, name, commit, entry, depth+1)
 }
 
-func (s *Scanner) scan7z(ctx context.Context, file, commit string, b []byte, depth int) []detectors.Finding {
+func (s *Scanner) scan7z(ctx context.Context, file, commit string, b []byte, depth int) ([]detectors.Finding, error) {
 	reader, err := sevenzip.NewReader(bytes.NewReader(b), int64(len(b)))
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("extract %s: %w", file, err)
 	}
 	var findings []detectors.Finding
 	var expanded int64
@@ -1523,28 +1541,34 @@ func (s *Scanner) scan7z(ctx context.Context, file, commit string, b []byte, dep
 		s.updateArchiveProgress(ctx, progress.StageExtracting, name, depth+1, int64(entry.UncompressedSize))
 		r, err := entry.Open()
 		if err != nil {
-			continue
+			return findings, fmt.Errorf("extract %s!/%s: %w", file, name, err)
 		}
 		limit := s.maxExpandedFileBytes()
 		if remaining := s.maxArchiveBytes() - expanded; remaining < limit {
 			limit = remaining
 		}
-		content, ok := readLimited(r, limit)
-		_ = r.Close()
+		content, ok, readErr := readArchiveLimited(r, limit)
+		if err := errors.Join(readErr, r.Close()); err != nil {
+			return findings, fmt.Errorf("extract %s!/%s: %w", file, name, err)
+		}
 		if !ok || expanded+int64(len(content)) > s.maxArchiveBytes() {
 			continue
 		}
 		expanded += int64(len(content))
 		s.updateArchiveProgress(ctx, progress.StageScanning, name, depth+1, int64(len(content)))
-		findings = append(findings, s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)...)
+		found, err := s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)
+		findings = append(findings, found...)
+		if err != nil {
+			return findings, err
+		}
 	}
-	return findings
+	return findings, ctx.Err()
 }
 
-func (s *Scanner) scanZip(ctx context.Context, file, commit string, b []byte, depth int) []detectors.Finding {
+func (s *Scanner) scanZip(ctx context.Context, file, commit string, b []byte, depth int) ([]detectors.Finding, error) {
 	zr, err := zip.NewReader(bytes.NewReader(b), int64(len(b)))
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("extract %s: %w", file, err)
 	}
 	var findings []detectors.Finding
 	var expanded int64
@@ -1570,14 +1594,16 @@ func (s *Scanner) scanZip(ctx context.Context, file, commit string, b []byte, de
 		s.updateArchiveProgress(ctx, progress.StageExtracting, name, depth+1, int64(entry.UncompressedSize64))
 		r, err := entry.Open()
 		if err != nil {
-			continue
+			return findings, fmt.Errorf("extract %s!/%s: %w", file, name, err)
 		}
 		limit := s.maxExpandedFileBytes()
 		if remaining := s.maxArchiveBytes() - expanded; remaining < limit {
 			limit = remaining
 		}
-		content, ok := readLimited(r, limit)
-		_ = r.Close()
+		content, ok, readErr := readArchiveLimited(r, limit)
+		if err := errors.Join(readErr, r.Close()); err != nil {
+			return findings, fmt.Errorf("extract %s!/%s: %w", file, name, err)
+		}
 		if !ok {
 			continue
 		}
@@ -1586,12 +1612,16 @@ func (s *Scanner) scanZip(ctx context.Context, file, commit string, b []byte, de
 		}
 		expanded += int64(len(content))
 		s.updateArchiveProgress(ctx, progress.StageScanning, name, depth+1, int64(len(content)))
-		findings = append(findings, s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)...)
+		found, err := s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)
+		findings = append(findings, found...)
+		if err != nil {
+			return findings, err
+		}
 	}
-	return findings
+	return findings, ctx.Err()
 }
 
-func (s *Scanner) scanTar(ctx context.Context, file, commit string, r io.Reader, depth int) []detectors.Finding {
+func (s *Scanner) scanTar(ctx context.Context, file, commit string, r io.Reader, depth int) ([]detectors.Finding, error) {
 	tr := tar.NewReader(r)
 	var findings []detectors.Finding
 	var expanded int64
@@ -1602,10 +1632,16 @@ func (s *Scanner) scanTar(ctx context.Context, file, commit string, r io.Reader,
 		}
 		h, err := tr.Next()
 		if err == io.EOF {
+			// TAR's end markers may precede the compressor's checksum/trailer.
+			// Finish a bounded read so a corrupt gzip trailer is not hidden by
+			// archive/tar accepting the final full block alongside a read error.
+			if _, err := io.Copy(io.Discard, io.LimitReader(r, s.maxArchiveBytes()+1)); err != nil {
+				return findings, fmt.Errorf("extract %s: %w", file, err)
+			}
 			break
 		}
 		if err != nil {
-			break
+			return findings, fmt.Errorf("extract %s: %w", file, err)
 		}
 		entries++
 		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
@@ -1620,7 +1656,10 @@ func (s *Scanner) scanTar(ctx context.Context, file, commit string, r io.Reader,
 		if remaining := s.maxArchiveBytes() - expanded; remaining < limit {
 			limit = remaining
 		}
-		content, ok := readLimited(tr, limit)
+		content, ok, err := readArchiveLimited(tr, limit)
+		if err != nil {
+			return findings, fmt.Errorf("extract %s!/%s: %w", file, name, err)
+		}
 		if !ok {
 			continue
 		}
@@ -1629,9 +1668,18 @@ func (s *Scanner) scanTar(ctx context.Context, file, commit string, r io.Reader,
 		}
 		expanded += int64(len(content))
 		s.updateArchiveProgress(ctx, progress.StageScanning, name, depth+1, int64(len(content)))
-		findings = append(findings, s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)...)
+		found, err := s.scanBlob(ctx, file+"!/"+name, commit, content, depth+1)
+		findings = append(findings, found...)
+		if err != nil {
+			return findings, err
+		}
 	}
-	return findings
+	return findings, ctx.Err()
+}
+
+func readArchiveLimited(r io.Reader, limit int64) ([]byte, bool, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
+	return b, int64(len(b)) <= limit, err
 }
 
 func (s *Scanner) updateArchiveProgress(ctx context.Context, stage, entry string, depth int, size int64) {

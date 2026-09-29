@@ -27,6 +27,8 @@ type StructuredValue struct {
 	Context            []string
 	Literal            bool
 	Format             string
+	// Invalid fields retain their key for context validation, not detection.
+	Invalid bool
 }
 
 func (d AssignedSecretDetector) detectStructuredAssignments(b []byte) ([]Candidate, bool) {
@@ -39,6 +41,9 @@ func (d AssignedSecretDetector) detectStructuredAssignments(b []byte) ([]Candida
 	}
 	var out []Candidate
 	for _, value := range values {
+		if value.Invalid {
+			continue
+		}
 		secret := value.Value
 		if sensitiveField(value.Key) && len(secret) >= 16 && plausibleSecret(secret) && !looksLikeNamedResourceReference(secret) && !assignedNonSecret(secret) && !(resourceName.MatchString(secret) && referenceContainer(value.Parent)) && (value.Literal || !structuredExpression(secret)) {
 			info := d.Info()
@@ -120,6 +125,11 @@ func StructuredValues(b []byte) ([]StructuredValue, bool) {
 					if start >= 0 {
 						out = append(out, StructuredValue{Key: key.Value, Parent: current.parent, Value: secret, Start: start, End: end, Record: record, Context: current.context, Literal: literal, Format: "yaml"})
 					}
+				} else {
+					start, end := scalarSpan(content, lineStarts, value)
+					if start >= 0 {
+						out = append(out, StructuredValue{Key: key.Value, Parent: current.parent, Start: start, End: end, Record: record, Context: current.context, Format: "yaml", Invalid: true})
+					}
 				}
 				if value.Kind == yaml.ScalarNode {
 					continue
@@ -184,6 +194,9 @@ func jsonStructuredValues(b []byte) []StructuredValue {
 			}
 		}
 		if delimiter, ok := token.(json.Delim); ok {
+			if (delimiter == '{' || delimiter == '[') && len(stack) > 0 && stack[len(stack)-1].object {
+				out = append(out, StructuredValue{Key: key, Parent: parent, Start: end - 1, End: end, Record: currentRecord, Context: context, Format: "json", Invalid: true})
+			}
 			if len(stack) > 0 && !stack[len(stack)-1].object {
 				key = stack[len(stack)-1].parent
 			}
@@ -204,11 +217,10 @@ func jsonStructuredValues(b []byte) []StructuredValue {
 			continue
 		}
 		secret, quoted := token.(string)
+		invalid := !quoted
 		if number, ok := token.(json.Number); ok {
 			secret = number.String()
-		}
-		if secret == "" {
-			continue
+			invalid = false
 		}
 		if len(stack) == 0 || !stack[len(stack)-1].object {
 			record++
@@ -224,7 +236,7 @@ func jsonStructuredValues(b []byte) []StructuredValue {
 		} else {
 			start = end - len(secret)
 		}
-		out = append(out, StructuredValue{Key: key, Parent: parent, Value: secret, Start: start, End: end, Record: currentRecord, Context: context, Literal: quoted, Format: "json"})
+		out = append(out, StructuredValue{Key: key, Parent: parent, Value: secret, Start: start, End: end, Record: currentRecord, Context: context, Literal: quoted, Format: "json", Invalid: invalid})
 	}
 	return out
 }

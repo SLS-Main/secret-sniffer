@@ -193,7 +193,7 @@ func runAzureBlobScan(ctx context.Context, opts azureRunOptions) (int, error) {
 	azScanner, err := azurescan.New(client, azurescan.Config{
 		Account: opts.Account, Containers: opts.Containers, Prefix: opts.Prefix,
 		ContainerConcurrency: opts.ContainerConcurrency, BlobConcurrency: opts.BlobConcurrency,
-		MaxObjectBytes: opts.MaxObjectBytes, ScanObject: runner.ScanContent,
+		MaxObjectBytes: opts.MaxObjectBytes, ScanObjectWithError: runner.ScanContentWithError,
 		AllowObject: runner.AllowsRemotePath, SkipObjectReason: runner.RemotePathSkipReason,
 		CommitFindings: commit, Progress: opts.ScannerConfig.Progress, ExactBlobs: stringSet(opts.ExactBlobs),
 		RetryAttempts: opts.RetryAttempts, RetryBaseDelay: opts.RetryBaseDelay,
@@ -246,11 +246,17 @@ func runAzureBlobScan(ctx context.Context, opts azureRunOptions) (int, error) {
 			return 0, err
 		}
 	}
-	fmt.Fprintf(os.Stdout, "Azure Blob scan complete: containers_completed=%d containers_failed=%d objects_scanned=%d objects_skipped=%d findings=%d duration=%s", result.ContainersCompleted, result.ContainersFailed, result.ObjectsScanned, result.ObjectsSkipped, findingCount, time.Since(opts.StartedAt).Round(time.Millisecond))
-	if opts.OutputPath != "" {
-		fmt.Fprintf(os.Stdout, " output=%s", opts.OutputPath)
+	if _, err := fmt.Fprintf(os.Stdout, "Azure Blob scan complete: containers_completed=%d containers_failed=%d objects_scanned=%d objects_skipped=%d findings=%d duration=%s", result.ContainersCompleted, result.ContainersFailed, result.ObjectsScanned, result.ObjectsSkipped, findingCount, time.Since(opts.StartedAt).Round(time.Millisecond)); err != nil {
+		return findingCount, err
 	}
-	fmt.Fprintln(os.Stdout)
+	if opts.OutputPath != "" {
+		if _, err := fmt.Fprintf(os.Stdout, " output=%s", opts.OutputPath); err != nil {
+			return findingCount, err
+		}
+	}
+	if _, err := fmt.Fprintln(os.Stdout); err != nil {
+		return findingCount, err
+	}
 	if result.ContainersFailed > 0 {
 		return findingCount, &azureScanFailuresError{Failures: result.Failures}
 	}

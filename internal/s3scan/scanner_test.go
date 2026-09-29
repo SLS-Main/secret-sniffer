@@ -139,6 +139,37 @@ func TestS3VersionScanningUsesVersionIDsAndDistinctFingerprints(t *testing.T) {
 	}
 }
 
+func TestExtractionFailurePreservesPartialS3Findings(t *testing.T) {
+	for _, policy := range []string{"current", "all"} {
+		t.Run(policy, func(t *testing.T) {
+			client := &fakeS3{
+				objects:  map[string][]types.Object{"bucket": {{Key: aws.String("archive.zip")}}},
+				versions: map[string][]types.ObjectVersion{"bucket": {{Key: aws.String("archive.zip"), VersionId: aws.String("v1")}}},
+				bodies:   map[string]string{"archive.zip": "data"},
+			}
+			store, err := OpenStore(filepath.Join(t.TempDir(), "state.json"), "job", "scope", []string{"bucket"}, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var committed []detectors.Finding
+			s, err := New(client, Config{
+				Buckets: []string{"bucket"}, Store: store, VersionPolicy: policy,
+				ScanObjectWithError: func(_ context.Context, path string, _ []byte) ([]detectors.Finding, error) {
+					return []detectors.Finding{{DetectorID: "test", File: path, Secret: "partial"}}, errors.New("corrupt nested archive")
+				},
+				CommitFindings: func(fs []detectors.Finding) error { committed = append(committed, fs...); return nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := s.Scan(context.Background())
+			if result.BucketsFailed != 1 || result.BucketsCompleted != 0 || len(committed) != 1 {
+				t.Fatalf("result=%+v committed=%d", result, len(committed))
+			}
+		})
+	}
+}
+
 func TestTransientS3FailuresRetryWithoutDuplicateCommit(t *testing.T) {
 	client := &fakeS3{
 		objects: map[string][]types.Object{"bucket": {{Key: aws.String("config.env"), Size: aws.Int64(6)}}},
